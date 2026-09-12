@@ -1,0 +1,4 @@
+# L agent n utilise que la bibliotheque standard (ctypes, sqlite3, json, urllib, threading).
+# Les modules optionnels ci-dessous ne servent qu aux outils annexes (capture d ecran, manette virtuelle)
+# et ne sont PAS requis pour jouer.
+# dxcam ; opencv-python ; numpy ; vgamepad

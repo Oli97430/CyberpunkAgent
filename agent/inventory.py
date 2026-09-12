@@ -1,0 +1,172 @@
+"""
+inventory.py -- competence "gerer son equipement et son inventaire".
+
+Sans passer par le menu (plein ecran, sans blackboard) : le mod liste les objets par
+TransactionSystem, equipe par EquipmentSystem, demonte par ItemActionsHelper -- les memes
+operations que le menu, sans l interface.
+
+Politique v1, prudente :
+  - ARMES : equiper les 3 meilleures armes de MELEE par DPS (V joue melee, couteau Nehan).
+    Un objet iconique n est jamais demonte.
+  - DEMONTAGE : uniquement les objets de type camelote (Gen_Junk) et les armes communes
+    (qualite Common) en surnombre, jamais les objets de quete, jamais les iconiques.
+  - Tout est journalise ; aucune vente (necessite un marchand + menu).
+"""
+from __future__ import annotations
+
+import time
+
+from . import nav
+
+MELEE_TYPES = ('Wea_Knife', 'Wea_Katana', 'Wea_OneHandedClub', 'Wea_TwoHandedClub', 'Wea_Hammer',
+               'Wea_LongBlade', 'Wea_ShortBlade', 'Wea_Machete', 'Wea_Axe', 'Wea_Chainsword', 'Wea_Fists')
+JUNK_TYPES = ('Gen_Junk',)
+MAX_DISASSEMBLE = 12
+SELLABLE: list = []          # rempli par manage() ; consomme par sell_all() chez un marchand
+HEALS: int = 99              # soins en stock (MaxDoc + Bounce Back) a la derniere passe manage()
+
+
+def fetch() -> dict | None:
+    return nav._wait(nav._send({'cmd': 'inventory'}), timeout=6.0)
+
+
+def equip(index: int, slot: int) -> bool:
+    r = nav._wait(nav._send({'cmd': 'equip', 'x': index, 'y': slot}), timeout=4.0)
+    return bool(r and r.get('ok'))
+
+
+def disassemble(index: int, qty: int = 1) -> bool:
+    r = nav._wait(nav._send({'cmd': 'disassemble', 'x': index, 'y': qty}), timeout=4.0)
+    return bool(r and r.get('ok'))
+
+
+def sell_all(log=print) -> dict:
+    """Chez un marchand (< 6 m) : vend les objets marques a vendre, un par un (commande Lua sell)."""
+    global SELLABLE
+    total, n = 0, 0
+    inv = fetch()                      # indices frais
+    if not inv or not inv.get('ok'):
+        return {'ok': False}
+    fresh = {it.get('name'): it for it in (inv.get('items') or [])}
+    for it in list(SELLABLE):
+        cur = fresh.get(it.get('name'))
+        if not cur or cur.get('equipped') or cur.get('iconic'):
+            continue
+        r = nav._wait(nav._send({'cmd': 'sell', 'x': cur['i'], 'y': int(cur.get('qty') or 1)}), timeout=5.0)
+        if r and r.get('ok'):
+            total += int(r.get('total') or 0); n += 1
+            log(f"  [vente] « {cur.get('name')} » -> {r.get('total')} eddies")
+            inv = fetch(); fresh = {i2.get('name'): i2 for i2 in ((inv or {}).get('items') or [])}
+        else:
+            log(f"  [vente] echec : {(r or {}).get('reason')}"); break
+    SELLABLE = []
+    return {'ok': True, 'vendus': n, 'eddies': total}
+
+
+def manage(log=print) -> dict:
+    t0 = time.perf_counter()
+    inv = fetch()
+    if not inv or not inv.get('ok'):
+        log('  [inventaire] mod muet ou erreur : ' + str(inv and inv.get('reason')))
+        return {'ok': False}
+    items = inv.get('items') or []
+    log(f"  [inventaire] {len(items)} objets, {inv.get('money', '?')} eddies, poids {inv.get('weight', '?')}/{inv.get('carry', '?')}")
+    # 0. meilleur emplacement d arme (par DPS) -> c est celui que le combat degainera
+    slots = [s for s in (inv.get('slots') or []) if (s.get('dps') or 0) > 0]
+    if slots:
+        best = max(slots, key=lambda s: s.get('dps') or 0)
+        from . import combat
+        combat.MELEE_SLOT = str(best['slot'])
+        log(f"  [inventaire] emplacements : " + ' | '.join(f"{s['slot']}:{s.get('name', '?')} dps {s.get('dps', 0):.0f}" for s in slots)
+            + f"  -> le combat degainera le {best['slot']} ({best.get('name')})")
+
+    # 1. armes : 2 meilleures de MELEE (emplacements 1-2) + la meilleure A DISTANCE (emplacement 3)
+    #    pour les drones, tourelles et cibles hors de portee ; V reste melee par defaut.
+    melee = [it for it in items if (it.get('type') or '') in MELEE_TYPES and (it.get('dps') or 0) > 0]
+    melee.sort(key=lambda it: it.get('dps') or 0, reverse=True)
+    ranged = [it for it in items if (it.get('type') or '').startswith('Wea_') and (it.get('type') or '') not in MELEE_TYPES and (it.get('dps') or 0) > 0]
+    ranged.sort(key=lambda it: it.get('dps') or 0, reverse=True)
+    equipped = 0
+    if ranged:
+        r0 = ranged[0]
+        if not r0.get('equipped') and equip(r0['i'], 2):
+            equipped += 1
+            log(f"  [inventaire] arme a distance « {r0.get('name')} » ({r0.get('type')}, dps {r0.get('dps', 0):.0f}) -> emplacement 3")
+            time.sleep(0.3)
+        from . import combat
+        combat.RANGED_SLOT = '3'
+    for slot, it in enumerate(melee[:2]):
+        if it.get('equipped'):
+            continue
+        if equip(it['i'], slot):
+            equipped += 1
+            log(f"  [inventaire] equipe « {it.get('name')} » ({it.get('type')}, dps {it.get('dps', 0):.0f}) -> emplacement {slot + 1}")
+            time.sleep(0.3)
+    top_idx = {it['i'] for it in melee[:2]} | ({ranged[0]['i']} if ranged else set())
+
+    # 1b. vetements : dans chaque emplacement (tete, visage, torse int/ext, jambes, pieds), le meilleur
+    #     par armure puis qualite. Un objet iconique/de quete n est jamais demonte, juste compare.
+    QRANK = {'Legendary': 5, 'Epic': 4, 'Rare': 3, 'Uncommon': 2, 'Common': 1}
+    clo_types = sorted({it.get('type') for it in items if (it.get('type') or '').startswith('Clo_') and it.get('type') != 'Clo_Outfit'})
+    for ct in clo_types:
+        cands = [it for it in items if it.get('type') == ct]
+        cands.sort(key=lambda it: ((it.get('armor') or 0), QRANK.get(str(it.get('quality')), 0)), reverse=True)
+        best = cands[0]
+        if best.get('equipped'):
+            continue
+        cur = next((it for it in cands if it.get('equipped')), None)
+        if cur and (cur.get('armor') or 0) >= (best.get('armor') or 0) and QRANK.get(str(cur.get('quality')), 0) >= QRANK.get(str(best.get('quality')), 0):
+            continue
+        if equip(best['i'], 0):
+            equipped += 1
+            log(f"  [inventaire] vetement « {best.get('name')} » ({ct}, armure {best.get('armor') or 0:.0f}, {best.get('quality')}) equipe")
+            time.sleep(0.3)
+
+    # 2. demontage : camelote, armes de melee communes en surnombre, et armes-poubelle
+    #    (communes, non iconiques, non equipees, DPS < 60 : Unity/Liberty/Copperhead en double...)
+    #    Jamais un iconique, un objet de quete, un objet equipe.
+    junk = [it for it in items if (it.get('type') or '') in JUNK_TYPES and not it.get('quest')]
+    spare = [it for it in melee[2:] if (it.get('quality') or '') == 'Common' and not it.get('iconic')
+             and not it.get('quest') and not it.get('equipped') and it['i'] not in top_idx]
+    trash = [it for it in items if (it.get('type') or '').startswith('Wea_') and (it.get('type') or '') not in MELEE_TYPES
+             and (it.get('quality') or '') == 'Common' and not it.get('iconic') and not it.get('quest')
+             and not it.get('equipped') and 0 < (it.get('dps') or 0) < 60]
+    spare = spare + trash
+    w, cap = inv.get('weight') or 0, inv.get('carry') or 0
+    if cap and w > 0.9 * cap:
+        best_dps = max([it.get('dps') or 0 for it in items] or [1])
+        heavy = [it for it in items if (it.get('type') or '').startswith('Wea_') and not it.get('iconic') and not it.get('quest')
+                 and not it.get('equipped') and it['i'] not in top_idx and (it.get('dps') or 0) < 0.8 * best_dps]
+        spare = spare + [it for it in heavy if it not in spare]
+        log(f'  [inventaire] surcharge ({w:.0f}/{cap:.0f}) : demontage elargi')
+    dis = 0
+    for it in (junk + spare)[:MAX_DISASSEMBLE]:
+        if disassemble(it['i'], int(it.get('qty') or 1)):
+            dis += 1
+            log(f"  [inventaire] demonte « {it.get('name')} » x{int(it.get('qty') or 1)}")
+            time.sleep(0.2)
+    # 2b. objets A VENDRE : armes/vetements non iconiques, non equipes, hors quete, qualite <= Rare,
+    #     qui ne sont ni dans le top ni demontes. Vendus quand un marchand est a portee (brain).
+    QR = {'Legendary': 5, 'Epic': 4, 'Rare': 3, 'Uncommon': 2, 'Common': 1}
+    dis_idx = {it['i'] for it in (junk + spare)[:MAX_DISASSEMBLE]}
+    global SELLABLE
+    SELLABLE = [it for it in items if ((it.get('type') or '').startswith('Wea_') or (it.get('type') or '').startswith('Clo_'))
+                and not it.get('iconic') and not it.get('quest') and not it.get('equipped')
+                and it['i'] not in top_idx and it['i'] not in dis_idx and QR.get(str(it.get('quality')), 0) <= 3]
+    if SELLABLE:
+        log(f'  [inventaire] {len(SELLABLE)} objet(s) a vendre au prochain marchand')
+
+    # 3. craft : soins / grenades manquants (recettes connues et faisables)
+    crafted = 0
+    global HEALS
+    try:
+        from . import crafting
+        HEALS = crafting.heal_stock(items)
+        cr = crafting.manage(items, log=log)
+        crafted = cr.get('fabriques', 0)
+        if HEALS < 2:
+            log(f'  [inventaire] soins bas ({HEALS}) : achat au prochain marchand si le craft n a pas suffi')
+    except Exception as e:
+        log(f'  [craft] erreur : {e}')
+    # indices perimes apres demontage : la prochaine passe refait inventory
+    return {'ok': True, 'objets': len(items), 'equipes': equipped, 'demontes': dis, 'fabriques': crafted, 'seconds': time.perf_counter() - t0}

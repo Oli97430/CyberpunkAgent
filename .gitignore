@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.spec
+
+# fichiers produits par les sessions de jeu (journaux, résultats de tests)
+*_log.txt
+*.log
+*_result.json
+inventory_dump.json
+goto_result.json
+deaths.json
+config.json
+
+# hors sujet / tiers (Frame Generation, stash)
+cet_mod/
+fg_stash/
+archive/
