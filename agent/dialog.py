@@ -43,14 +43,10 @@ def llm_choice(title: str, choices: list[str], timeout: float = 6.0) -> int | No
     numbered = '\n'.join(f'{i}: {c}' for i, c in enumerate(choices))
     prompt = (f"{OBJECTIF}\n\nInterlocuteur : {title}\nChoix possibles :\n{numbered}\n\n"
               'Reponds UNIQUEMENT avec un JSON de la forme {"index": N} ou N est le numero du meilleur choix.')
-    body = {'model': MODEL, 'stream': False, 'keep_alive': KEEP_ALIVE, 'format': 'json',
-            'options': {'temperature': 0.1, 'num_predict': 20},
-            'messages': [{'role': 'user', 'content': prompt}]}
     try:
-        req = urllib.request.Request(OLLAMA_CHAT, json.dumps(body).encode(), {'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            out = json.loads(r.read())
-        txt = out['message']['content']
+        from . import llm_client
+        txt = llm_client.chat([{'role': 'user', 'content': prompt}], temperature=0.1, max_tokens=20,
+                              timeout=timeout, keep_alive=KEEP_ALIVE)
         m = re.search(r'"index"\s*:\s*(\d+)', txt)
         if m:
             i = int(m.group(1))
@@ -58,13 +54,15 @@ def llm_choice(title: str, choices: list[str], timeout: float = 6.0) -> int | No
                 return i
     except Exception as e:
         from . import llm
-        if 'refus' in str(e) or '10061' in str(e) or 'refused' in str(e):
+        if CFG.provider == 'ollama' and ('refus' in str(e) or '10061' in str(e) or 'refused' in str(e)):
             llm.ensure()
         print(f'  [dialog] modele indisponible ({str(e)[:60]}) -> regle')
     return None
 
 
 def unload_model() -> None:
+    if CFG.provider != 'ollama':
+        return
     try:
         body = {'model': MODEL, 'keep_alive': 0}
         req = urllib.request.Request(OLLAMA_GEN, json.dumps(body).encode(), {'Content-Type': 'application/json'})

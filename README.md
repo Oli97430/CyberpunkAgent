@@ -160,6 +160,24 @@ Fichier optionnel `config.json`, à côté de l'exe ou dans `%APPDATA%\Cyberpunk
 
 Tout est détecté automatiquement quand la clé est absente (Steam via le registre et `libraryfolders.vdf`, GOG et Epic aux emplacements habituels, Ollama dans le PATH).
 
+### Choisir le modèle de décision : Ollama, OpenAI ou Claude
+
+L'agent prend ses décisions ouvertes (parler ou non, secourir ou non, quel choix de dialogue) avec un modèle de langage. Trois fournisseurs, au choix de l'utilisateur (l'installateur le demande, ou `config.json`) :
+
+| `provider` | Coût | Confidentialité | Clés de config |
+|---|---|---|---|
+| `ollama` (défaut) | gratuit, 2 Go de VRAM partagés avec le jeu | rien ne sort du PC | `model` (défaut `llama3.2:latest`), `ollama_url` |
+| `openai` | payant à l'appel (quelques centimes par heure de jeu avec `gpt-4o-mini`) | les situations de jeu (texte, jamais d'image) sont envoyées à OpenAI | `api_key` ou variable `OPENAI_API_KEY`, `openai_model`, `openai_base_url` (API compatible) |
+| `anthropic` | payant à l'appel | idem, vers Anthropic | `api_key` ou variable `ANTHROPIC_API_KEY`, `anthropic_model` (défaut `claude-haiku-4-5-20251001`) |
+
+Exemple avec OpenAI :
+
+```json
+{ "provider": "openai", "api_key": "sk-...", "openai_model": "gpt-4o-mini" }
+```
+
+La clé est lue dans `config.json` ou dans la variable d'environnement ; elle n'est jamais écrite dans les journaux (`--config` l'affiche masquée). Les appels sont courts (quelques dizaines de jetons, réponse JSON), donc rapides même via internet ; en cas de panne réseau, l'agent retombe sur ses règles. Vérification : `CyberpunkAgent.exe --check` fait un appel de test au fournisseur choisi.
+
 Réglages de comportement (constantes en tête des modules, à ajuster si vous le souhaitez) :
 
 | Fichier | Constante | Rôle |

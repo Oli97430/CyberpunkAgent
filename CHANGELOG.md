@@ -23,6 +23,9 @@ Première version jouable de bout en bout : V joue seul plusieurs dizaines de mi
 - Progression : points d'attribut dépensés (build mêlée).
 - Touches lues dans les réglages du joueur (AZERTY, réassignations), F11 pause/reprise, F12 arrêt.
 
+### Modele de decision
+- Trois fournisseurs au choix : Ollama local (defaut), OpenAI (cle API, gpt-4o-mini) ou Anthropic/Claude (cle API) ; choix dans l installateur ou config.json, cle jamais journalisee, repli sur les regles si le fournisseur ne repond pas.
+
 ### Distribution
 - `run_agent.py` / `CyberpunkAgent.exe` : `--check`, `--config`, `--test keys|loot|drive|walk`, durée en minutes.
 - `CyberpunkAgent-Setup.exe` : détection du jeu, vérification de CET, copie du mod, installation du programme, téléchargement du modèle, config, raccourci.

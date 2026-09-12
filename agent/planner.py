@@ -162,15 +162,11 @@ def _decide_rescue(st: dict, extra: dict, n_aggr: int, near: float, timeout: flo
                  f"Ta vie : {hp:.0f} %. Ta quete en cours : {q}. Historique : {extra.get('history') or 'rien'}.\n"
                  'Interviens-tu pour secourir la victime ? Reponds UNIQUEMENT en JSON : '
                  '{"action": "secourir"} ou {"action": "objectif"}, avec "raison".')
-    body = {'model': MODEL, 'stream': False, 'keep_alive': KEEP_ALIVE, 'format': 'json',
-            'options': {'temperature': 0.4, 'num_predict': 50},
-            'messages': [{'role': 'system', 'content': PERSONA + ' Tu as le coeur sur la main mais tu n es pas suicidaire.'},
-                         {'role': 'user', 'content': situation}]}
+    msgs = [{'role': 'system', 'content': PERSONA + ' Tu as le coeur sur la main mais tu n es pas suicidaire.'},
+            {'role': 'user', 'content': situation}]
     try:
-        req = urllib.request.Request(OLLAMA_CHAT, json.dumps(body).encode(), {'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            out = json.loads(r.read())
-        txt = out['message']['content']
+        from . import llm_client
+        txt = llm_client.chat(msgs, temperature=0.4, max_tokens=50, timeout=timeout, keep_alive=KEEP_ALIVE)
         m = re.search(r'"action"\s*:\s*"([a-z_]+)"', txt)
         why = re.search(r'"raison"\s*:\s*"([^"]{0,120})"', txt)
         if m and m.group(1) in ('secourir', 'objectif'):
@@ -182,15 +178,11 @@ def _decide_rescue(st: dict, extra: dict, n_aggr: int, near: float, timeout: flo
 
 def _decide_llm(st: dict, extra: dict, timeout: float) -> tuple[str, str]:
     situation = _situation(st, extra)
-    body = {'model': MODEL, 'stream': False, 'keep_alive': KEEP_ALIVE, 'format': 'json',
-            'options': {'temperature': 0.2, 'num_predict': 60},
-            'messages': [{'role': 'system', 'content': PERSONA + '\n' + RULES},
-                         {'role': 'user', 'content': situation}]}
+    msgs = [{'role': 'system', 'content': PERSONA + '\n' + RULES},
+            {'role': 'user', 'content': situation}]
     try:
-        req = urllib.request.Request(OLLAMA_CHAT, json.dumps(body).encode(), {'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            out = json.loads(r.read())
-        txt = out['message']['content']
+        from . import llm_client
+        txt = llm_client.chat(msgs, temperature=0.2, max_tokens=60, timeout=timeout, keep_alive=KEEP_ALIVE)
         m = re.search(r'"action"\s*:\s*"([a-z_]+)"', txt)
         why = re.search(r'"raison"\s*:\s*"([^"]{0,120})"', txt)
         if m and m.group(1) in ACTIONS:

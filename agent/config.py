@@ -122,6 +122,12 @@ class Config:
         self.ollama_exe = user.get('ollama_exe') or detect_ollama()
         self.ollama_url = user.get('ollama_url', 'http://127.0.0.1:11434')
         self.model = user.get('model', 'llama3.2:latest')
+        # fournisseur du modele de decision : "ollama" (local, defaut), "openai" ou "anthropic" (cle API)
+        self.provider = (user.get('provider') or os.environ.get('CYBERPUNKAGENT_PROVIDER') or 'ollama').lower()
+        self.api_key = user.get('api_key') or None
+        self.openai_model = user.get('openai_model') or None
+        self.anthropic_model = user.get('anthropic_model') or None
+        self.openai_base_url = user.get('openai_base_url') or None
         self.language = user.get('language', 'fr')
         self.log_file = DATA_DIR / 'brain_log.txt'
         self.deaths_file = DATA_DIR / 'deaths.json'
@@ -132,7 +138,8 @@ class Config:
     def as_dict(self) -> dict:
         return {'game_dir': str(self.game_dir) if self.game_dir else None, 'mod_dir': str(self.mod_dir) if self.mod_dir else None,
                 'user_settings': str(self.user_settings), 'ollama_exe': self.ollama_exe, 'ollama_url': self.ollama_url,
-                'model': self.model, 'data_dir': str(DATA_DIR)}
+                'model': self.model, 'provider': self.provider, 'api_key': ('***' if self.api_key else None),
+                'openai_model': self.openai_model, 'anthropic_model': self.anthropic_model, 'data_dir': str(DATA_DIR)}
 
 
 CFG = Config()

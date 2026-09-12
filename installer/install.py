@@ -138,9 +138,40 @@ def ollama_exe() -> str | None:
     return None
 
 
-def step_ollama() -> str | None:
-    say('\n[5/6] Ollama (modele local de decision)')
+def step_provider() -> dict:
+    """Choix du fournisseur du modele de decision. La cle est saisie sans echo et ecrite dans
+    config.json (%APPDATA%/CyberpunkAgent) : elle ne quitte pas ce PC autrement que vers l API choisie."""
+    say('\n[5/6] Modele de decision')
+    say('      1. Ollama, modele local (gratuit, rien ne sort du PC, ~2 Go de VRAM)  [defaut]')
+    say('      2. OpenAI (cle API, gpt-4o-mini par defaut)')
+    say('      3. Anthropic / Claude (cle API)')
+    choice = ask('      choix', '1')
+    prov = {'2': 'openai', '3': 'anthropic'}.get(choice, 'ollama')
+    cfg = {'provider': prov}
+    if prov != 'ollama':
+        import getpass
+        env = 'OPENAI_API_KEY' if prov == 'openai' else 'ANTHROPIC_API_KEY'
+        if os.environ.get(env):
+            say(f'      variable {env} detectee : elle sera utilisee (rien a saisir).')
+        elif not SILENT:
+            try:
+                key = getpass.getpass(f'      cle API {prov} (saisie masquee, Entree pour la renseigner plus tard dans config.json) : ').strip()
+            except Exception:
+                key = ''
+            if key:
+                cfg['api_key'] = key
+        if prov == 'openai':
+            m = ask('      modele OpenAI', 'gpt-4o-mini'); cfg['openai_model'] = m
+        else:
+            m = ask('      modele Anthropic', 'claude-haiku-4-5-20251001'); cfg['anthropic_model'] = m
+    return cfg
+
+
+def step_ollama(prov: str) -> str | None:
+    say('\n[5/6] Ollama (modele local de decision)' if prov == 'ollama' else '\n      Ollama (optionnel : secours local)')
     exe = ollama_exe()
+    if prov != 'ollama':
+        return exe
     if not exe:
         say(f'      Ollama est absent : installe-le ({OLLAMA_URL}), puis `ollama pull {MODEL}`.')
         say('      L agent fonctionne sans, avec ses regles seules (dialogues moins pertinents).')
@@ -161,11 +192,12 @@ def step_ollama() -> str | None:
     return exe
 
 
-def step_config(game: Path, prog: Path, ollama: str | None) -> None:
+def step_config(game: Path, prog: Path, ollama: str | None, prov_cfg: dict | None = None) -> None:
     say('\n[6/6] Configuration et raccourci')
     data = Path(os.environ.get('APPDATA', str(Path.home()))) / APP
     data.mkdir(parents=True, exist_ok=True)
     cfg = {'game_dir': str(game), 'ollama_exe': ollama, 'model': MODEL, 'ollama_url': 'http://127.0.0.1:11434'}
+    cfg.update(prov_cfg or {})
     (data / 'config.json').write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding='utf-8')
     say(f'      config : {data / "config.json"}')
     # raccourci Bureau via PowerShell (pas de dependance COM cote Python)
@@ -187,8 +219,9 @@ def main() -> None:
     step_cet(game)
     step_mod(game)
     prog = step_program()
-    ollama = step_ollama()
-    step_config(game, prog, ollama)
+    prov_cfg = step_provider()
+    ollama = step_ollama(prov_cfg['provider'])
+    step_config(game, prog, ollama, prov_cfg)
     say('\nTermine. Pour jouer :')
     say('  1. lance Cyberpunk 2077, charge une partie, V a pied ;')
     say('  2. double-clique le raccourci CyberpunkAgent (ou CyberpunkAgent.exe 30 pour 30 minutes) ;')

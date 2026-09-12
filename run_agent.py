@@ -46,21 +46,27 @@ def check(verbose: bool = True) -> bool:
         lines.append(f'[OK]  reglages du joueur : {CFG.user_settings}')
     else:
         lines.append('[..]  UserSettings.json introuvable : touches par defaut (F interagir, E cyberware...)')
-    if llm.alive():
-        lines.append(f'[OK]  Ollama repond ({CFG.ollama_url})')
-        try:
-            import json, urllib.request
-            tags = json.loads(urllib.request.urlopen(CFG.ollama_url + '/api/tags', timeout=3).read())
-            names = [m.get('name') for m in tags.get('models', [])]
-            if any(n and n.split(':')[0] == CFG.model.split(':')[0] for n in names):
-                lines.append(f'[OK]  modele {CFG.model} disponible')
-            else:
-                lines.append(f'[!!]  modele {CFG.model} absent : `ollama pull {CFG.model}`'); ok = False
-        except Exception:
-            pass
+    from agent import llm_client
+    if llm_client.provider() == 'ollama':
+        if llm.alive():
+            lines.append(f'[OK]  Ollama repond ({CFG.ollama_url})')
+            try:
+                import json, urllib.request
+                tags = json.loads(urllib.request.urlopen(CFG.ollama_url + '/api/tags', timeout=3).read())
+                names = [m.get('name') for m in tags.get('models', [])]
+                if any(n and n.split(':')[0] == CFG.model.split(':')[0] for n in names):
+                    lines.append(f'[OK]  modele {CFG.model} disponible')
+                else:
+                    lines.append(f'[!!]  modele {CFG.model} absent : `ollama pull {CFG.model}`'); ok = False
+            except Exception:
+                pass
+        else:
+            lines.append('[!!]  Ollama ne repond pas' + (f' (exe : {CFG.ollama_exe})' if CFG.ollama_exe else ' (non installe ? https://ollama.com)'))
+            ok = False
     else:
-        lines.append('[!!]  Ollama ne repond pas' + (f' (exe : {CFG.ollama_exe})' if CFG.ollama_exe else ' (non installe ? https://ollama.com)'))
-        ok = False
+        good, msg = llm_client.check()
+        lines.append(('[OK]  ' if good else '[!!]  ') + 'modele de decision : ' + msg)
+        ok = ok and good
     lines.append(f'[..]  journaux : {DATA_DIR}')
     if verbose:
         print('\n'.join(lines))
