@@ -65,11 +65,16 @@ def summon_and_board(stop=None, log=print) -> bool:
         log('  [conduite] aucun vehicule du joueur arrive en 30 s (zone sans route proche ?)'); return False
     log(f"  [conduite] vehicule « {car.get('name', '?')} » a {car['d']:.0f} m")
     if car['d'] > 2.5:                                    # deja a portee sinon (les poses gerent 1-2 m)
-        old = motion.ARRIVE_M; motion.ARRIVE_M = 1.3      # une moto est fine : l invite « Enfourcher » exige ~1 m
-        try:
-            r = motion.walk_to(car['x'], car['y'], timeout=25.0, stop=stop)
-        finally:
-            motion.ARRIVE_M = old
+        # le vehicule arrive sur la ROUTE la plus proche : V y va par le maillage (nav.goto), puis tout droit
+        from . import nav
+        r = nav.goto(lambda: nav.request_path_to(car['x'], car['y'], car.get('z')), arrive_m=2.0, max_legs=4, timeout=40.0, stop=stop, log=log)
+        s1 = motion.read_state() or {}
+        if s1 and math.hypot(s1['x'] - car['x'], s1['y'] - car['y']) > 2.5:
+            old = motion.ARRIVE_M; motion.ARRIVE_M = 1.3  # une moto est fine : l invite « Enfourcher » exige ~1 m
+            try:
+                r = motion.walk_to(car['x'], car['y'], timeout=20.0, stop=stop)
+            finally:
+                motion.ARRIVE_M = old
         if not r.get('ok'):
             log(f"  [conduite] marche vers le vehicule : {r.get('reason')} (on tente les poses quand meme)")
     # Embarquement par POSES : face au centre du vehicule, regard en bas (la selle d une moto est
