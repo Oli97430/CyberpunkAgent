@@ -570,6 +570,8 @@ registerForEvent('onUpdate', function(dt)
         local defs = GetAllBlackboardDefs()
         -- vie (%) et combat (verifies par sonde)
         local hp = Game.GetStatPoolsSystem():GetStatPoolValue(id, gamedataStatPoolType.Health, true)
+        local playerLevel = nil
+        pcall(function() playerLevel = Game.GetStatsSystem():GetStatValue(id, gamedataStatType.Level) end)
         local psm = Game.GetBlackboardSystem():GetLocalInstanced(id, defs.PlayerStateMachine)
         local inCombat = psm and (psm:GetInt(defs.PlayerStateMachine.Combat) == EnumInt(gamePSMCombat.InCombat)) or false
         local inVehicle = false
@@ -630,6 +632,7 @@ registerForEvent('onUpdate', function(dt)
                           hash = jm:GetEntryHash(e),
                           hasMappin = m ~= nil,
                           mx = mp and mp.x or nil, my = mp and mp.y or nil, mz = mp and mp.z or nil }
+                pcall(function() quest.lvl = questLevelOf(jm, e, quest.hash) end)
             end
         end)
         -- ennemis hostiles (TargetTrackerComponent, sonde OK) : position, distance, cap,
@@ -1027,7 +1030,7 @@ registerForEvent('onUpdate', function(dt)
         if #bodies == 0 then bodies = nil end
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
-                 hp = hp, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
+                 hp = hp, level = playerLevel, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
                  lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs,
                  enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, seqEnd = seq }
     end)
@@ -1061,6 +1064,53 @@ local cmdAcc, lastCmdSeq = 0.0, -1
 local function writePath(resp)
     local f = io.open('path.json', 'w')
     if f then f:write(json.encode(resp)); f:flush(); f:close() end
+end
+
+
+-- NIVEAU RECOMMANDE d une quete : on remonte les parents de l entree de journal (objectif -> phase
+-- -> quete) jusqu a une entree qui expose GetRecommendedLevelID / GetRecommendedLevel. Chaque appel
+-- natif est journalise RUN/OK (un plantage designerait le coupable). Resultat mis en cache par hash.
+local questLvlCache = {}
+local function questLevelOf(jm, e, hash)
+    if hash and questLvlCache[hash] ~= nil then return questLvlCache[hash] or nil end
+    local lvl, raw = nil, nil
+    local cur = e
+    for depth = 1, 4 do
+        if not cur then break end
+        local okM, hasA, hasB = pcall(function() return cur.GetRecommendedLevelID ~= nil, cur.GetRecommendedLevel ~= nil end)
+        if okM and hasB then
+            journal('RUN  questLevel.GetRecommendedLevel d=' .. depth)
+            local okL, v = pcall(function() return cur:GetRecommendedLevel() end)
+            journal('OK   questLevel.GetRecommendedLevel -> ' .. tostring(v))
+            if okL and type(v) == 'number' and v > 0 then lvl = v; raw = tostring(v); break end
+        end
+        if okM and hasA then
+            journal('RUN  questLevel.GetRecommendedLevelID d=' .. depth)
+            local okI, id = pcall(function() return cur:GetRecommendedLevelID() end)
+            local s = nil
+            if okI and id then
+                pcall(function() s = TDBID.ToStringDEBUG(id) end)
+                if not s then pcall(function() s = tostring(id) end) end
+            end
+            journal('OK   questLevel.GetRecommendedLevelID -> ' .. tostring(s))
+            if s then
+                raw = s
+                local n = s:match('(%d+)')
+                if n then lvl = tonumber(n) end
+                if not lvl then
+                    pcall(function()
+                        local rec = TweakDBInterface.GetRecord(id)
+                        if rec then lvl = rec:Level() end
+                    end)
+                end
+                if lvl then break end
+            end
+        end
+        local okP, parent = pcall(function() return jm:GetParentEntry(cur) end)
+        cur = okP and parent or nil
+    end
+    if hash then questLvlCache[hash] = lvl or false end
+    return lvl, raw
 end
 
 local function questTarget()
@@ -1613,6 +1663,27 @@ local function handleCommand(player, cmd)
                     end)
                     -- pseudo-hash stable : position arrondie (sert de cle de blocage cote Python)
                     if rec.x then rec.hash = math.floor(rec.x) * 100000 + math.floor(rec.y) end
+                    -- niveau recommande : via l entree de journal du marqueur si une methode l expose
+                    if rec.hash and questLvlCache[rec.hash] ~= nil then
+                        rec.lvl = questLvlCache[rec.hash] or nil
+                    else
+                        local entry = nil
+                        for _, mn in ipairs({ 'GetJournalEntry', 'GetEntry', 'GetQuestEntry', 'GetObjective' }) do
+                            local okH, has = pcall(function() return m[mn] ~= nil end)
+                            if okH and has then
+                                journal('RUN  list_quests.mappin.' .. mn)
+                                local okE, en = pcall(function() return m[mn](m) end)
+                                journal('OK   list_quests.mappin.' .. mn .. ' -> ' .. tostring(okE and en ~= nil))
+                                if okE and en then entry = en; break end
+                            end
+                        end
+                        if entry then
+                            local okL, lv = pcall(function() return questLevelOf(jm, entry, rec.hash) end)
+                            if okL then rec.lvl = lv end
+                        else
+                            questLvlCache[rec.hash] = false
+                        end
+                    end
                     if rec.dist then out[#out + 1] = rec end
                 end
             end

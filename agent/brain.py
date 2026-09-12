@@ -75,6 +75,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     inventory_done_once = False
     last_levelup_t = -999.0
     last_sell_t = -999.0
+    last_overlevel_t = -999.0
+    vendor_fail_streak = 0
     last_drive_t = -999.0
     inter_tries: dict = {}          # (titre, choix, zone) -> (essais, ignore_jusqu_a)
     alt_target = None               # marqueur de quete choisi par V (x, y, texte, t0) quand l objectif suivi est bloque
@@ -162,6 +164,15 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         dead_since = None
 
         q = st.get('quest') or {}
+        if q.get('lvl') and st.get('level') and q['lvl'] > st['level'] + 3 and alt_target is None \
+                and time.perf_counter() - last_overlevel_t > 300.0:
+            last_overlevel_t = time.perf_counter()
+            _log(f"quete suivie « {q.get('text')} » de niveau {q['lvl']} pour V niveau {st['level']} : trop haute, on en cherche une de son niveau")
+            nxt = quests.switch(q.get('hash'), log=_log)
+            if nxt:
+                alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                stats['changements_quete'] = stats.get('changements_quete', 0) + 1
+                continue
         if q.get('text') and q['text'] != last_quest_text:
             last_quest_text = q['text']
             _log(f"objectif : {q['text']}  (marqueur : {'oui' if q.get('hasMappin') else 'non'})")
@@ -199,7 +210,9 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
 
         # 3. combat : melee + grenades + soin (agent/combat.py)
         if st.get('combat'):
-            buffs.apply(st, log=_log, in_combat=True)      # se buffer AVANT de frapper
+            _near_h = min([e['d'] for e in (st.get('enemies') or []) if not e.get('dead')] or [99.0])
+            if _near_h > 12.0 and (st.get('hp') or 100) >= 50:
+                buffs.apply(st, log=_log, in_combat=True)  # se buffer AVANT de frapper, seulement si on a 3 s devant soi
             _log(f"combat detecte : {len(st.get('enemies') or [])} hostile(s), vie {st.get('hp', 0):.0f} %")
             r = combat.fight(stop=stop, log=_log)
             stats['combats'] = stats.get('combats', 0) + 1
@@ -241,8 +254,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 tr = vendor.sell_trip(vend, stop=stop, log=_log)
                 if not tr.get('ok'):
                     _log(f"courses : marchand non atteint ({tr.get('reason')}) : ecarte 15 min, on essaiera un autre")
-                    vendor.mark_failed(vend); last_sell_t = time.perf_counter() - 480.0   # nouvel essai (autre marchand) dans 2 min
+                    vendor.mark_failed(vend); vendor_fail_streak += 1
+                    if vendor_fail_streak >= 3:                 # maillage local impraticable : on suspend les courses 30 min
+                        _log('courses : 3 marchands injoignables d affilee, courses suspendues 30 min')
+                        last_sell_t = time.perf_counter() + 1200.0; vendor_fail_streak = 0
+                    else:
+                        last_sell_t = time.perf_counter() - 480.0   # nouvel essai (autre marchand) dans 2 min
                 if tr.get('ok'):
+                    vendor_fail_streak = 0
                     sr = inventory.sell_all(log=_log)
                     _log(f"vente : {sr.get('vendus', 0)} objet(s) pour {sr.get('eddies', 0)} eddies")
                     stats['ventes'] = stats.get('ventes', 0) + sr.get('vendus', 0)

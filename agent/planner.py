@@ -36,7 +36,7 @@ def aggressors(st: dict) -> list:
     return out
 
 # PNJ qu on n aborde pas : passants generiques et forces de l ordre
-GENERIC_NAMES = ('resident', 'résident', 'passant', 'habitant', 'civil', 'citoyen', 'vagabond', 'fetard', 'fêtard',
+GENERIC_NAMES = ('police officer', 'officer', 'police', 'cop', 'resident', 'résident', 'passant', 'habitant', 'civil', 'citoyen', 'vagabond', 'fetard', 'fêtard',
                  'client', 'ouvrier', 'ouvrière', 'ouvriere', 'policier', 'ncpd', 'agent', 'garde', 'securite', 'sécurité',
                  'sans-abri', 'sdf', 'employe', 'employé', 'employée', 'serveur', 'serveuse', 'technicien', 'infirmier',
                  'medic', 'trauma', 'militech', 'arasaka', 'nomade', 'gangster', 'maelstrom', 'tyger', 'valentino',
@@ -129,7 +129,7 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
         spots = [(a['x'], a['y']) for a in aggr] + [(c['x'], c['y']) for c in crimes if c.get('x') is not None]
         if any(_q.near_danger(x, y) for x, y in spots):
             return 'objectif', 'regle : agression dans une zone deja jugee trop dangereuse -> on passe'
-        if n_aggr <= 3:
+        if n_aggr <= 3 and hp >= 80:                     # jamais de sauvetage affaibli : les renforts arrivent souvent
             return _decide_rescue(st, extra, n_aggr, near, timeout)
     if extra.get('dist_m') is None or extra['dist_m'] > 3000:
         return 'changer_quete', 'regle : objectif sans marqueur ou trop loin'

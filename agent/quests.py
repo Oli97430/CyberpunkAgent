@@ -64,8 +64,12 @@ def track(hash_: int) -> bool:
     return bool(resp and resp.get('ok'))
 
 
-def pick_next(quests: list[dict], current_hash: int | None = None) -> dict | None:
-    """Objectif le plus proche, avec marqueur, pas bloque, pas celui en cours."""
+LEVEL_MARGIN = 2                # une quete est « de son niveau » si niveau recommande <= niveau de V + 2
+
+
+def pick_next(quests: list[dict], current_hash: int | None = None, player_level: int | None = None) -> dict | None:
+    """Objectif de son NIVEAU d abord (niveau recommande connu et <= niveau de V + 2), puis le plus proche ;
+    avec marqueur, pas bloque, pas celui en cours, pas dans une zone dangereuse."""
     cands = [q for q in quests
              if q.get('hasMappin') and q.get('dist') is not None
              and int(q['hash']) not in _blocked and q['hash'] != current_hash
@@ -73,9 +77,13 @@ def pick_next(quests: list[dict], current_hash: int | None = None) -> dict | Non
              and not near_danger(q['x'], q['y'])]
     if not cands:
         return None
+    def over(q):                 # 0 = de son niveau (ou inconnu), 1 = trop haute
+        lv = q.get('lvl')
+        return 1 if (lv and player_level and lv > player_level + LEVEL_MARGIN) else 0
+    def known(q):
+        return 0 if (q.get('lvl') and player_level and q['lvl'] <= player_level + LEVEL_MARGIN) else 1
     # a pied, une quete a < 400 m est realiste ; au-dela, on n y va qu a defaut
-    near = [q for q in cands if q['dist'] < 400]
-    return min(near or cands, key=lambda q: q['dist'])
+    return min(cands, key=lambda q: (over(q), known(q), q['dist'] >= 400, q['dist']))
 
 
 def switch(current_hash: int | None, log=print) -> dict | None:
@@ -85,11 +93,14 @@ def switch(current_hash: int | None, log=print) -> dict | None:
         log('  [quetes] liste vide ou mod muet')
         return None
     log(f"  [quetes] {len(quests)} objectif(s) actifs, {sum(1 for q in quests if q.get('hasMappin'))} avec marqueur")
-    nxt = pick_next(quests, current_hash)
+    from . import motion as _m
+    _st = _m.read_state() or {}
+    nxt = pick_next(quests, current_hash, player_level=_st.get('level'))
     if not nxt:
         log('  [quetes] aucun autre objectif accessible')
         return None
     # JournalManager.GetQuests plante le jeu : on ne suit plus via le journal, on renvoie
     # la position du marqueur de quete choisi ; le cerveau y va directement.
-    log(f"  [quetes] nouvelle cible : marqueur « {nxt.get('text')} » a {nxt['dist']:.0f} m ({nxt['x']:.0f},{nxt['y']:.0f})")
+    log(f"  [quetes] nouvelle cible : marqueur « {nxt.get('text')} » a {nxt['dist']:.0f} m ({nxt['x']:.0f},{nxt['y']:.0f})"
+        + (f" niveau {nxt['lvl']} (V : {_st.get('level')})" if nxt.get('lvl') else ''))
     return nxt
