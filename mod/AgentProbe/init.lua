@@ -1228,6 +1228,27 @@ local function handleCommand(player, cmd)
             end
             resp.slots = slots
         end)
+        pcall(function()
+            local worn = {}
+            local wornIds = {}
+            for _, area in ipairs({ 'Head', 'Face', 'OuterChest', 'InnerChest', 'Legs', 'Feet', 'Outfit' }) do
+                local okA, wid = pcall(function() return edata:GetItemInEquipSlot(gamedataEquipmentArea[area], 0) end)
+                if okA and wid and ItemID.IsValid(wid) then
+                    local nm = nil
+                    pcall(function() nm = GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(wid)):DisplayName()) end)
+                    worn[area] = nm or tostring(ItemID.GetTDBID(wid))
+                    pcall(function() wornIds[tostring(ItemID.GetTDBID(wid))] = true end)
+                end
+            end
+            resp.worn = worn
+            for i = 1, #out do
+                local rec = out[i]
+                if rec.type and rec.type:sub(1, 4) == 'Clo_' and lastInventory[rec.i] then
+                    local okT, tid = pcall(function() return tostring(ItemID.GetTDBID(lastInventory[rec.i])) end)
+                    if okT and wornIds[tid] then rec.equipped = true end
+                end
+            end
+        end)
         pcall(function() resp.money = ts:GetItemQuantity(player, MarketSystem.Money()) end)
         pcall(function() resp.weight = Game.GetStatsSystem():GetStatValue(player:GetEntityID(), gamedataStatType.Weight) end)
         pcall(function() resp.carry = Game.GetStatsSystem():GetStatValue(player:GetEntityID(), gamedataStatType.CarryCapacity) end)
@@ -1239,9 +1260,34 @@ local function handleCommand(player, cmd)
         if not id then resp.reason = 'index inconnu (refaire inventory)'; return resp end
         journal(string.format('RUN  equip idx=%d slot=%d', cmd.x, cmd.y or 0))
         local es = Game.GetScriptableSystemsContainer():Get('EquipmentSystem')
-        es:GetPlayerData(player):EquipItem(id, cmd.y or 0)
-        resp.ok = true
-        journal('OK   equip')
+        local edata = es:GetPlayerData(player)
+        local isClo = false
+        pcall(function() isClo = tostring(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):ItemType():Type()):find('Clo_') ~= nil end)
+        local function isWorn()
+            local w = false
+            pcall(function() w = edata:IsEquipped(id) end)
+            if not w then
+                pcall(function()
+                    for _, area in ipairs({ 'Head', 'Face', 'OuterChest', 'InnerChest', 'Legs', 'Feet', 'Outfit' }) do
+                        local wid = edata:GetItemInEquipSlot(gamedataEquipmentArea[area], 0)
+                        if wid and ItemID.IsValid(wid) and tostring(ItemID.GetTDBID(wid)) == tostring(ItemID.GetTDBID(id)) then w = true end
+                    end
+                end)
+            end
+            return w
+        end
+        local used = 'EquipItem(id, slot)'
+        pcall(function() edata:EquipItem(id, cmd.y or 0) end)
+        if isClo and not isWorn() then
+            used = 'EquipItem(id)'
+            pcall(function() edata:EquipItem(id) end)
+        end
+        if isClo and not isWorn() then
+            used = 'EquipItem(id, false, false, false)'
+            pcall(function() edata:EquipItem(id, false, false, false) end)
+        end
+        resp.ok, resp.worn, resp.method = true, isWorn(), used
+        journal(string.format('OK   equip : %s -> porte=%s', used, tostring(resp.worn)))
         return resp
     elseif cmd.cmd == 'disassemble' then
         local id = lastInventory[cmd.x or -1]

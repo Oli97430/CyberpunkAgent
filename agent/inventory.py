@@ -22,6 +22,7 @@ MELEE_TYPES = ('Wea_Knife', 'Wea_Katana', 'Wea_OneHandedClub', 'Wea_TwoHandedClu
                'Wea_LongBlade', 'Wea_ShortBlade', 'Wea_Machete', 'Wea_Axe', 'Wea_Chainsword', 'Wea_Fists')
 JUNK_TYPES = ('Gen_Junk',)
 MAX_DISASSEMBLE = 12
+equip_attempts: dict = {}      # index d objet -> tentatives d equipement (evite de re-equiper en boucle)
 SELLABLE: list = []          # rempli par manage() ; consomme par sell_all() chez un marchand
 HEALS: int = 99              # soins en stock (MaxDoc + Bounce Back) a la derniere passe manage()
 
@@ -107,16 +108,25 @@ def manage(log=print) -> dict:
     # 1b. vetements : dans chaque emplacement (tete, visage, torse int/ext, jambes, pieds), le meilleur
     #     par armure puis qualite. Un objet iconique/de quete n est jamais demonte, juste compare.
     QRANK = {'Legendary': 5, 'Epic': 4, 'Rare': 3, 'Uncommon': 2, 'Common': 1}
+    worn = inv.get('worn') or {}
+    if worn:
+        log('  [inventaire] porte : ' + ', '.join(f'{k}={v}' for k, v in worn.items()))
+    for area in ('Feet', 'Legs', 'InnerChest', 'OuterChest', 'Head', 'Face'):
+        if isinstance(worn, dict) and worn and area not in worn:
+            log(f'  [inventaire] RIEN de porte en {area} (V est nu a cet endroit) : on habille')
     clo_types = sorted({it.get('type') for it in items if (it.get('type') or '').startswith('Clo_') and it.get('type') != 'Clo_Outfit'})
     for ct in clo_types:
         cands = [it for it in items if it.get('type') == ct]
-        cands.sort(key=lambda it: ((it.get('armor') or 0), QRANK.get(str(it.get('quality')), 0)), reverse=True)
+        cands.sort(key=lambda it: (QRANK.get(str(it.get('quality')), 0), (it.get('armor') or 0), (it.get('price') or 0)), reverse=True)
         best = cands[0]
         if best.get('equipped'):
             continue
         cur = next((it for it in cands if it.get('equipped')), None)
         if cur and (cur.get('armor') or 0) >= (best.get('armor') or 0) and QRANK.get(str(cur.get('quality')), 0) >= QRANK.get(str(best.get('quality')), 0):
             continue
+        if equip_attempts.get(best['i'], 0) >= 2:          # deja tente deux fois sans que le jeu le montre porte
+            continue
+        equip_attempts[best['i']] = equip_attempts.get(best['i'], 0) + 1
         if equip(best['i'], 0):
             equipped += 1
             log(f"  [inventaire] vetement « {best.get('name')} » ({ct}, armure {best.get('armor') or 0:.0f}, {best.get('quality')}) equipe")
