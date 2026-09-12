@@ -48,6 +48,9 @@ def check(verbose: bool = True) -> bool:
         lines.append('[..]  UserSettings.json introuvable : touches par defaut (F interagir, E cyberware...)')
     from agent import llm_client
     if llm_client.provider() == 'ollama':
+        if not llm.alive():
+            print('Ollama ne repond pas : demarrage de `ollama serve`...', flush=True)
+            llm.ensure(log=print, wait_s=40.0)
         if llm.alive():
             lines.append(f'[OK]  Ollama repond ({CFG.ollama_url})')
             try:
