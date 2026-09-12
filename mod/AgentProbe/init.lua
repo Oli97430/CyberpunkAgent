@@ -1077,38 +1077,37 @@ local function questLevelOf(jm, e, hash)
     local cur = e
     for depth = 1, 4 do
         if not cur then break end
-        local okM, hasA, hasB = pcall(function() return cur.GetRecommendedLevelID ~= nil, cur.GetRecommendedLevel ~= nil end)
-        if okM and hasB then
-            journal('RUN  questLevel.GetRecommendedLevel d=' .. depth)
-            local okL, v = pcall(function() return cur:GetRecommendedLevel() end)
-            journal('OK   questLevel.GetRecommendedLevel -> ' .. tostring(v))
-            if okL and type(v) == 'number' and v > 0 then lvl = v; raw = tostring(v); break end
+        local cls = '?'
+        pcall(function() cls = tostring(cur:GetClassName()) end)
+        -- on ESSAIE les methodes (une methode absente leve une erreur Lua, attrapee par pcall ; pas de plantage natif)
+        journal('RUN  questLevel d=' .. depth .. ' ' .. cls .. ' GetRecommendedLevel')
+        local okL, v = pcall(function() return cur:GetRecommendedLevel() end)
+        journal('OK   questLevel GetRecommendedLevel -> ' .. tostring(okL) .. '/' .. tostring(v))
+        if okL and type(v) == 'number' and v > 0 then lvl = v; raw = tostring(v); break end
+        journal('RUN  questLevel d=' .. depth .. ' ' .. cls .. ' GetRecommendedLevelID')
+        local okI, id = pcall(function() return cur:GetRecommendedLevelID() end)
+        local sid = nil
+        if okI and id then
+            pcall(function() sid = TDBID.ToStringDEBUG(id) end)
+            if not sid then pcall(function() sid = tostring(id) end) end
         end
-        if okM and hasA then
-            journal('RUN  questLevel.GetRecommendedLevelID d=' .. depth)
-            local okI, id = pcall(function() return cur:GetRecommendedLevelID() end)
-            local s = nil
-            if okI and id then
-                pcall(function() s = TDBID.ToStringDEBUG(id) end)
-                if not s then pcall(function() s = tostring(id) end) end
+        journal('OK   questLevel GetRecommendedLevelID -> ' .. tostring(okI) .. '/' .. tostring(sid))
+        if okI and sid then
+            raw = sid
+            local n = sid:match('(%d+)')
+            if n then lvl = tonumber(n) end
+            if not lvl then
+                pcall(function()
+                    local rec = TweakDBInterface.GetRecord(id)
+                    if rec then lvl = rec:Level() end
+                end)
             end
-            journal('OK   questLevel.GetRecommendedLevelID -> ' .. tostring(s))
-            if s then
-                raw = s
-                local n = s:match('(%d+)')
-                if n then lvl = tonumber(n) end
-                if not lvl then
-                    pcall(function()
-                        local rec = TweakDBInterface.GetRecord(id)
-                        if rec then lvl = rec:Level() end
-                    end)
-                end
-                if lvl then break end
-            end
+            if lvl then break end
         end
         local okP, parent = pcall(function() return jm:GetParentEntry(cur) end)
         cur = okP and parent or nil
     end
+    journal('OK   questLevel final -> ' .. tostring(lvl) .. ' (' .. tostring(raw) .. ')')
     if hash then questLvlCache[hash] = lvl or false end
     return lvl, raw
 end
