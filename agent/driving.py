@@ -59,11 +59,10 @@ def summon_and_board(stop=None, log=print) -> bool:
         mine = [v for v in vs if v.get('player')]
         if mine:
             car = mine[0]; break
-        if vs and time.perf_counter() - t0 > 12.0:
-            car = vs[0]; break
+        # (pas de repli sur une voiture garee d un inconnu : il faudrait la forcer, et c est long)
         time.sleep(0.5)
     if not car:
-        log('  [conduite] aucun vehicule arrive'); return False
+        log('  [conduite] aucun vehicule du joueur arrive en 30 s (zone sans route proche ?)'); return False
     log(f"  [conduite] vehicule « {car.get('name', '?')} » a {car['d']:.0f} m")
     if car['d'] > 2.5:                                    # deja a portee sinon (les poses gerent 1-2 m)
         old = motion.ARRIVE_M; motion.ARRIVE_M = 1.3      # une moto est fine : l invite « Enfourcher » exige ~1 m

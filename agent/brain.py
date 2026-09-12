@@ -76,6 +76,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_levelup_t = -999.0
     last_sell_t = -999.0
     last_overlevel_t = -999.0
+    mute_hostiles = {}
     last_ripper_t = -999.0
     money_start = None
     vendor_fail_streak = 0
@@ -426,10 +427,19 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
 
         if action == 'attaquer':
             hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('police')]
+            # hostiles « muets » : cibles qui n entrent jamais en combat (PNJ fuyards, tourelles hors portee...) ->
+            # ignorees 3 min apres un engagement sans combat, pour ne pas perdre 25 s a chaque fois
+            hostiles = [e for e in hostiles if time.perf_counter() - mute_hostiles.get((round(e['x']), round(e['y'])), -1e9) > 180.0]
             if hostiles:
                 _log(f"V engage le combat : {len(hostiles)} hostile(s), le plus proche a {hostiles[0]['d']:.0f} m")
                 plan.note('a engage un combat')
-                combat.engage(hostiles[0], stop=stop, log=_log)
+                engaged = combat.engage(hostiles[0], stop=stop, log=_log, max_s=14.0)
+                s_now = motion.read_state() or {}
+                if not engaged and not s_now.get('combat'):
+                    mute_hostiles[(round(hostiles[0]['x']), round(hostiles[0]['y']))] = time.perf_counter()
+                    _log('  cible sans reaction : ignoree 3 min')
+                    plan.last_t = -99.0; plan.action = 'objectif'
+                    continue
                 r = combat.fight(stop=stop, log=_log)
                 stats['combats'] = stats.get('combats', 0) + 1
                 if not r.get('mort'):
@@ -482,6 +492,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             r = driving.drive_to(q0.get('mx'), q0.get('my'), stop=stop, log=_log)
             stats['conduites'] = stats.get('conduites', 0) + 1
             _log(f"conduite : {'arrive' if r.get('ok') else r.get('reason')}")
+            if not r.get('ok') and r.get('reason') == 'embarquement echoue':
+                last_drive_t = time.perf_counter() + 360.0      # ici la moto ne vient pas / ne se monte pas : pas avant 10 min
             continue
 
         if dist is not None and dist > ARRIVE_M:
