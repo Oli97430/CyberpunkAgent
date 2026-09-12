@@ -184,6 +184,12 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
             break
         kbm.look(120, 0); time.sleep(0.15)
     if not opened:
+        # pas d invite lisible (charcudoc : c est une scene, pas un menu) : si le marchand est a portee du
+        # script (< 6 m), la transaction par script suffit, on n a pas besoin de son ecran
+        probe = vendor_stock()
+        if probe and probe.get('ok'):
+            log(f"  [vente] pas d invite, mais « {probe.get('vendor')} » est a portee ({len(probe.get('items') or [])} articles) : transactions par script")
+            return {'ok': True, 'seconds': time.perf_counter() - t0, 'script_only': True}
         return {'ok': False, 'reason': 'aucune invite de marchand', 'seconds': time.perf_counter() - t0}
     # l ecran du marchand s ouvre : on le referme aussitot (Echap), la vente est realisee par la
     # commande Lua `sell` (transaction au prix du jeu avec le marchand present)
