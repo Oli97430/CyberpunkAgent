@@ -112,8 +112,9 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
         return 'objectif', f"regle : police hostile a {police[0]['d']:.0f} m -> on ne provoque pas, on continue"
     hp0 = st.get('hp'); hp0 = 100.0 if hp0 is None else hp0
     near45 = [e for e in hostiles if e['d'] < 45]
-    if len(near45) >= 5 or (len(near45) >= 4 and hp0 < 70) or (len(near45) >= 3 and hp0 < 50):
-        # groupe trop fort en vue (deux morts le 12/09 face a 6) : on EVITE la zone, on change d objectif
+    # V n est pas un couard : il evite seulement les groupes vraiment trop gros pour un solo (ou quand il
+    # est deja bien entame). 2 a 5 hostiles = il se bat (il a gagne ces combats), 6+ = trop.
+    if len(near45) >= 6 or (len(near45) >= 5 and hp0 < 60) or (len(near45) >= 4 and hp0 < 35):
         return 'eviter', f'regle : {len(near45)} hostiles a < 45 m, vie {hp0:.0f} % -> zone trop dangereuse'
     if hostiles and hostiles[0]['d'] < 25:
         hp = st.get('hp'); hp = 100.0 if hp is None else hp
@@ -129,7 +130,7 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
         spots = [(a['x'], a['y']) for a in aggr] + [(c['x'], c['y']) for c in crimes if c.get('x') is not None]
         if any(_q.near_danger(x, y) for x, y in spots):
             return 'objectif', 'regle : agression dans une zone deja jugee trop dangereuse -> on passe'
-        if n_aggr <= 3 and hp >= 80:                     # jamais de sauvetage affaibli : les renforts arrivent souvent
+        if (n_aggr <= 3 and hp >= 60) or (n_aggr <= 4 and hp >= 90):   # sauvetage en forme ; les renforts arrivent souvent
             return _decide_rescue(st, extra, n_aggr, near, timeout)
     if extra.get('dist_m') is None or extra['dist_m'] > 3000:
         return 'changer_quete', 'regle : objectif sans marqueur ou trop loin'

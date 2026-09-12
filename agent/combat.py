@@ -302,7 +302,8 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             # -- FUITE : submerge (5+ hostiles, ou 4+ avec vie < 50 %, ou 3+ avec vie < 30 %) -> on decroche
             #    franchement : dos au groupe, sprint 8 s, soin, grenade derriere soi ; on recommence tant que
             #    le groupe suit. Mieux vaut perdre l engagement que la partie (mort 20:55 face a 6).
-            want_flee = len(alive) >= 5 or (len(alive) >= 4 and hp < 50) or (len(alive) >= 3 and hp < 30)
+            # fuite = vraiment submerge OU vie basse face a un groupe ; jamais sur le seul nombre (V n est pas un couard)
+            want_flee = (len(alive) >= 6 and hp < 70) or (len(alive) >= 4 and hp < 35) or (len(alive) >= 2 and hp < 22)
             if now < flee_until or (want_flee and now - last_flee_end > 4.0):
                 if now >= flee_until:
                     flee_until = now + 8.0; last_flee_end = flee_until; stats['fuites'] = stats.get('fuites', 0) + 1
