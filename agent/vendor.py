@@ -40,7 +40,7 @@ def mark_failed(v: dict) -> None:
 def pick_vendor(vendors: list[dict], prefer: str | None = None) -> dict | None:
     if not vendors:
         return None
-    near = [v for v in vendors if v.get('dist', 1e9) <= MAX_VENDOR_M and 'ripper' not in (v.get('variant') or '').lower()
+    near = [v for v in vendors if v.get('dist', 1e9) <= MAX_VENDOR_M and (prefer == 'ripper' or 'ripper' not in (v.get('variant') or '').lower())
             and time.perf_counter() - _failed.get((round(v.get('x', 0)), round(v.get('y', 0))), -1e9) > 900.0]
     if not near:
         return None
@@ -91,6 +91,67 @@ def buy_heals(have: int, log=print, want: int = HEAL_WANT) -> dict:
         if have + bought >= want:
             break
     return {'ok': True, 'achetes': bought, 'eddies': spent}
+
+
+CYBER_PRIORITY = ('arms', 'mantis', 'gorilla', 'strongarms', 'sandevistan', 'berserk', 'systemreplacement', 'os',
+                  'skeleton', 'musculoskeletal', 'integumentary', 'subdermal', 'nervous', 'kerenzikov', 'cardiovascular',
+                  'biomonitor', 'immune', 'legs', 'frontalcortex', 'hands', 'eyes', 'kiroshi')
+CYBER_RESERVE = 2000         # eddies que V garde apres le charcudoc
+QR = {'Legendary': 5, 'Epic': 4, 'Rare': 3, 'Uncommon': 2, 'Common': 1}
+
+
+def _cyber_score(it: dict) -> tuple:
+    t = (str(it.get('type') or '') + ' ' + str(it.get('name') or '')).lower().replace('_', '')
+    prio = next((len(CYBER_PRIORITY) - i for i, w in enumerate(CYBER_PRIORITY) if w in t), 0)
+    return (QR.get(str(it.get('quality')), 0), prio, -(int(it.get('price') or 0)))
+
+
+def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
+    """Chez le charcudoc present (< 6 m) : achete et POSE le meilleur cyberware abordable (qualite d abord,
+    puis priorite du build melee), en gardant CYBER_RESERVE eddies. Un implant qui ne se pose pas
+    (capacite insuffisante, emplacement incompatible) est revendu aussitot au meme prix."""
+    from . import inventory
+    stock = vendor_stock()
+    if not stock or not stock.get('ok'):
+        return {'ok': False, 'reason': (stock or {}).get('reason', 'stock illisible')}
+    money = int(stock.get('money') or 0)
+    cyber = [it for it in (stock.get('items') or [])
+             if (str(it.get('type') or '').startswith('Cyb') or 'cyberware' in str(it.get('type') or '').lower())]
+    if not cyber:
+        log(f"  [charcudoc] « {stock.get('vendor')} » : aucun cyberware en stock ({len(stock.get('items') or [])} articles)")
+        return {'ok': True, 'poses': 0}
+    cyber.sort(key=_cyber_score, reverse=True)
+    posed, spent, tried = 0, 0, 0
+    for it in cyber:
+        price = int(it.get('price') or 0)
+        if tried >= max_buys or posed >= 2:
+            break
+        if price <= 0 or money - price < CYBER_RESERVE:
+            continue
+        tried += 1
+        r = buy(it['i'], 1)
+        if not (r and r.get('ok')):
+            log(f"  [charcudoc] achat « {it.get('name')} » refuse : {(r or {}).get('reason')}")
+            continue
+        money -= int(r.get('total') or price)
+        # retrouver l implant dans l inventaire (liste fraiche) et le poser
+        inv = inventory.fetch() or {}
+        mine = next((x for x in (inv.get('items') or []) if str(x.get('name')) == str(it.get('name')) and not x.get('equipped')), None)
+        if not mine:
+            log(f"  [charcudoc] « {it.get('name')} » achete mais introuvable dans l inventaire"); continue
+        er = nav._wait(nav._send({'cmd': 'equip', 'x': mine['i'], 'y': 0}), timeout=6.0)
+        if er and er.get('ok') and er.get('worn'):
+            posed += 1; spent += int(r.get('total') or price)
+            log(f"  [charcudoc] POSE « {it.get('name')} » ({it.get('quality')}) pour {r.get('total')} eddies [{er.get('method')}]")
+        else:
+            # ne se pose pas : on le revend tout de suite (meme marchand, prix du jeu)
+            inv = inventory.fetch() or {}
+            mine = next((x for x in (inv.get('items') or []) if str(x.get('name')) == str(it.get('name')) and not x.get('equipped')), None)
+            sr = nav._wait(nav._send({'cmd': 'sell', 'x': mine['i'], 'y': 1}), timeout=6.0) if mine else None
+            log(f"  [charcudoc] « {it.get('name')} » ne se pose pas ({(er or {}).get('method')}) : revendu {((sr or {}).get('total') or 0)} eddies")
+            if sr and sr.get('ok'):
+                money += int(sr.get('total') or 0)
+    return {'ok': True, 'poses': posed, 'eddies': spent, 'reste': money}
 
 
 def sell_trip(vendor: dict, stop=None, log=print) -> dict:

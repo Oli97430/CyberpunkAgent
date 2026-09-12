@@ -24,6 +24,8 @@ JUNK_TYPES = ('Gen_Junk',)
 MAX_DISASSEMBLE = 12
 equip_attempts: dict = {}      # index d objet -> tentatives d equipement (evite de re-equiper en boucle)
 SELLABLE: list = []          # rempli par manage() ; consomme par sell_all() chez un marchand
+SELL_VALUE: int = 0          # estimation des eddies a encaisser
+MONEY: int = 0               # eddies a la derniere passe
 HEALS: int = 99              # soins en stock (MaxDoc + Bounce Back) a la derniere passe manage()
 
 
@@ -65,12 +67,14 @@ def sell_all(log=print) -> dict:
 
 
 def manage(log=print) -> dict:
+    global HEALS, SELL_VALUE, MONEY, SELLABLE
     t0 = time.perf_counter()
     inv = fetch()
     if not inv or not inv.get('ok'):
         log('  [inventaire] mod muet ou erreur : ' + str(inv and inv.get('reason')))
         return {'ok': False}
     items = inv.get('items') or []
+    MONEY = int(inv.get('money') or 0)
     log(f"  [inventaire] {len(items)} objets, {inv.get('money', '?')} eddies, poids {inv.get('weight', '?')}/{inv.get('carry', '?')}")
     # 0. meilleur emplacement d arme (par DPS) -> c est celui que le combat degainera
     slots = [s for s in (inv.get('slots') or []) if (s.get('dps') or 0) > 0]
@@ -160,15 +164,26 @@ def manage(log=print) -> dict:
     QR = {'Legendary': 5, 'Epic': 4, 'Rare': 3, 'Uncommon': 2, 'Common': 1}
     dis_idx = {it['i'] for it in (junk + spare)[:MAX_DISASSEMBLE]}
     global SELLABLE
-    SELLABLE = [it for it in items if ((it.get('type') or '').startswith('Wea_') or (it.get('type') or '').startswith('Clo_'))
+    # MAXIMUM DE FRIC : tout ce qui ne sert pas part a la vente, quelle que soit la qualite : armes hors top 3,
+    # vetements non portes hors meilleur par zone, mods d armes, babioles (Gen_Misc). Jamais un iconique, un
+    # objet de quete, un objet porte. La camelote (Gen_Junk) est demontee (composants pour le craft).
+    best_clo = set()
+    for ct in clo_types:
+        cc = sorted([it for it in items if it.get('type') == ct], key=lambda it: (QRANK.get(str(it.get('quality')), 0), it.get('price') or 0), reverse=True)
+        if cc:
+            best_clo.add(cc[0]['i'])
+    SELLABLE = [it for it in items if (((it.get('type') or '').startswith('Wea_') and it['i'] not in top_idx)
+                                       or ((it.get('type') or '').startswith('Clo_') and it['i'] not in best_clo)
+                                       or (it.get('type') or '').startswith('Prt_')
+                                       or (it.get('type') or '') == 'Gen_Misc')
                 and not it.get('iconic') and not it.get('quest') and not it.get('equipped')
-                and it['i'] not in top_idx and it['i'] not in dis_idx and QR.get(str(it.get('quality')), 0) <= 3]
+                and it['i'] not in dis_idx and (it.get('price') or 0) > 0]
+    SELL_VALUE = int(sum((it.get('price') or 0) * 0.15 * int(it.get('qty') or 1) for it in SELLABLE))
     if SELLABLE:
-        log(f'  [inventaire] {len(SELLABLE)} objet(s) a vendre au prochain marchand')
+        log(f'  [inventaire] {len(SELLABLE)} objet(s) a vendre au prochain marchand (~{SELL_VALUE} eddies)')
 
     # 3. craft : soins / grenades manquants (recettes connues et faisables)
     crafted = 0
-    global HEALS
     try:
         from . import crafting
         HEALS = crafting.heal_stock(items)

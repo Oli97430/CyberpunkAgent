@@ -76,6 +76,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_levelup_t = -999.0
     last_sell_t = -999.0
     last_overlevel_t = -999.0
+    last_ripper_t = -999.0
+    money_start = None
     vendor_fail_streak = 0
     last_drive_t = -999.0
     inter_tries: dict = {}          # (titre, choix, zone) -> (essais, ignore_jusqu_a)
@@ -231,6 +233,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             inventory_done_once = True
             ir = inventory.manage(log=_log); last_inventory_t = time.perf_counter()
             buffs.refresh()
+            if money_start is None:
+                money_start = inventory.MONEY
             stats['equipes'] = stats.get('equipes', 0) + ir.get('equipes', 0)
             stats['demontes'] = stats.get('demontes', 0) + ir.get('demontes', 0)
 
@@ -270,6 +274,22 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         inventory.HEALS += br['achetes']
                         _log(f"achat : {br['achetes']} soin(s) pour {br.get('eddies', 0)} eddies")
                         stats['achats'] = stats.get('achats', 0) + br['achetes']
+                continue
+
+        # 3a-quater. CHARCUDOC : assez d eddies -> V s optimise lui-meme (meilleur cyberware abordable, pose par script)
+        if inventory.MONEY >= 6000 and time.perf_counter() - last_ripper_t > 1800.0 and not st.get('combat'):
+            last_ripper_t = time.perf_counter()
+            vendor.MAX_VENDOR_M = 700.0
+            rip = vendor.pick_vendor(vendor.list_vendors(), prefer='ripper')
+            if rip and 'ripper' in (rip.get('variant') or '').lower():
+                _log(f"charcudoc : {inventory.MONEY} eddies, « {rip.get('variant')} » a {rip['dist']:.0f} m : V va s optimiser")
+                tr = vendor.sell_trip(rip, stop=stop, log=_log)
+                if tr.get('ok'):
+                    rr = vendor.ripperdoc_shop(log=_log)
+                    _log(f"charcudoc : {rr.get('poses', 0)} implant(s) pose(s) pour {rr.get('eddies', 0)} eddies ({rr.get('reason') or 'ok'})")
+                    stats['implants'] = stats.get('implants', 0) + rr.get('poses', 0)
+                else:
+                    _log(f"charcudoc : non atteint ({tr.get('reason')})"); vendor.mark_failed(rip)
                 continue
 
         # 3b. soin hors combat si la vie est basse
@@ -544,5 +564,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     kbm.release_all()
     dialog.unload_model()
     stats['seconds'] = time.perf_counter() - t0
+    if money_start is not None:
+        stats['eddies_gagnes'] = inventory.MONEY - money_start
     _log(f'=== fin : {stats} ===')
     return stats

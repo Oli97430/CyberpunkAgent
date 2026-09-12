@@ -1262,15 +1262,23 @@ local function handleCommand(player, cmd)
         local es = Game.GetScriptableSystemsContainer():Get('EquipmentSystem')
         local edata = es:GetPlayerData(player)
         local isClo = false
-        pcall(function() isClo = tostring(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):ItemType():Type()):find('Clo_') ~= nil end)
+        pcall(function()
+            local tt = tostring(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):ItemType():Type())
+            isClo = tt:find('Clo_') ~= nil or tt:find('Cyb') ~= nil or tt:find('Cyberware') ~= nil
+        end)
         local function isWorn()
             local w = false
             pcall(function() w = edata:IsEquipped(id) end)
             if not w then
                 pcall(function()
-                    for _, area in ipairs({ 'Head', 'Face', 'OuterChest', 'InnerChest', 'Legs', 'Feet', 'Outfit' }) do
-                        local wid = edata:GetItemInEquipSlot(gamedataEquipmentArea[area], 0)
-                        if wid and ItemID.IsValid(wid) and tostring(ItemID.GetTDBID(wid)) == tostring(ItemID.GetTDBID(id)) then w = true end
+                    local areas = { 'Head', 'Face', 'OuterChest', 'InnerChest', 'Legs', 'Feet', 'Outfit',
+                                    'SystemReplacementCW', 'ArmsCW', 'LegsCW', 'HandsCW', 'EyesCW', 'MusculoskeletalSystemCW',
+                                    'NervousSystemCW', 'CardiovascularSystemCW', 'ImmuneSystemCW', 'IntegumentarySystemCW', 'FrontalCortexCW' }
+                    for _, area in ipairs(areas) do
+                        for slot = 0, 3 do
+                            local okW, wid = pcall(function() return edata:GetItemInEquipSlot(gamedataEquipmentArea[area], slot) end)
+                            if okW and wid and ItemID.IsValid(wid) and tostring(ItemID.GetTDBID(wid)) == tostring(ItemID.GetTDBID(id)) then w = true end
+                        end
                     end
                 end)
             end
