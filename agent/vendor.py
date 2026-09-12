@@ -186,6 +186,15 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
     if not opened:
         # pas d invite lisible (charcudoc : c est une scene, pas un menu) : si le marchand est a portee du
         # script (< 6 m), la transaction par script suffit, on n a pas besoin de son ecran
+        st1 = motion.read_state() or {}
+        d1 = math.hypot(vendor['x'] - st1.get('x', 1e9), vendor['y'] - st1.get('y', 1e9)) if st1 else 1e9
+        if 6.0 < d1 < 40.0:                             # encore trop loin pour le script (6 m) : on s approche tout droit
+            log(f'  [vente] marchand a {d1:.0f} m : on s approche en ligne droite')
+            old_a = motion.ARRIVE_M; motion.ARRIVE_M = 2.5
+            try:
+                motion.walk_to(vendor['x'], vendor['y'], timeout=15.0, stop=stop)
+            finally:
+                motion.ARRIVE_M = old_a
         probe = vendor_stock()
         if probe and probe.get('ok'):
             log(f"  [vente] pas d invite, mais « {probe.get('vendor')} » est a portee ({len(probe.get('items') or [])} articles) : transactions par script")
