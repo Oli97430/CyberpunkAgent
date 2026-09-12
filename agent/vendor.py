@@ -163,8 +163,8 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
     if not r.get('ok'):
         st0 = motion.read_state() or {}
         d0 = math.hypot(vendor['x'] - st0.get('x', 1e9), vendor['y'] - st0.get('y', 1e9)) if st0 else 1e9
-        if d0 < 40.0:                                   # boutique hors maillage : on y va tout droit
-            log(f'  [vente] pas de chemin ({d0:.0f} m) : marche en ligne droite vers le marchand')
+        if d0 < 40.0:                                   # boutique hors maillage ou bloque pres du but : on y va tout droit
+            log(f"  [vente] {r.get('reason')} a {d0:.0f} m : marche en ligne droite vers le marchand")
             old = motion.ARRIVE_M; motion.ARRIVE_M = 2.5
             try:
                 r = motion.walk_to(vendor['x'], vendor['y'], timeout=30.0, stop=stop)
