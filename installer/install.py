@@ -28,7 +28,17 @@ MODEL = 'llama3.2:latest'
 CET_URL = 'https://www.nexusmods.com/cyberpunk2077/mods/107'
 OLLAMA_URL = 'https://ollama.com/download/windows'
 
-SILENT = any(a.lower() == '/s' for a in sys.argv[1:])
+SILENT = any(a.lower().rstrip('/\\') in ('/s', '-s', '--silent', 's:') for a in sys.argv[1:]) or not sys.stdin.isatty()
+
+
+def pause_exit(msg: str) -> None:
+    """Attend Entree seulement si une console interactive est la (sinon rien a lire)."""
+    if SILENT:
+        return
+    try:
+        input(msg)
+    except EOFError:
+        pass
 ARG_GAME = next((a.split('=', 1)[1].strip('"') for a in sys.argv[1:] if a.upper().startswith('/GAME=')), None)
 
 
@@ -89,8 +99,7 @@ def step_cet(game: Path) -> None:
         say('      present.'); return
     say(f'      ABSENT. Le mod tourne dans Cyber Engine Tweaks : installe-le d abord ({CET_URL}),')
     say('      lance le jeu une fois pour choisir la touche de la console, puis relance cet installateur.')
-    if not SILENT:
-        input('      Entree pour quitter...')
+    pause_exit('      Entree pour quitter...')
     sys.exit(3)
 
 
@@ -162,7 +171,7 @@ def step_config(game: Path, prog: Path, ollama: str | None) -> None:
     # raccourci Bureau via PowerShell (pas de dependance COM cote Python)
     exe = prog / 'CyberpunkAgent.exe'
     ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\\{APP}.lnk');"
-          f"$s.TargetPath='{exe}';$s.Arguments='20';$s.WorkingDirectory='{prog}';$s.Description='V joue seul (F11 = reprendre la main)';$s.Save()")
+          f"$s.TargetPath='{exe}';$s.Arguments='20';$s.WorkingDirectory='{prog}';$s.Description='V joue seul (F11 = pause/reprise, F12 = arret)';$s.Save()")
     try:
         subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps], capture_output=True, timeout=30)
         say('      raccourci « CyberpunkAgent » cree sur le Bureau.')
@@ -183,9 +192,8 @@ def main() -> None:
     say('\nTermine. Pour jouer :')
     say('  1. lance Cyberpunk 2077, charge une partie, V a pied ;')
     say('  2. double-clique le raccourci CyberpunkAgent (ou CyberpunkAgent.exe 30 pour 30 minutes) ;')
-    say('  3. reviens sur le jeu : V prend la main. F11 = reprendre la main a tout moment.')
-    if not SILENT:
-        input('\nEntree pour fermer...')
+    say('  3. reviens sur le jeu : V prend la main. F11 = pause / reprise, F12 = arret.')
+    pause_exit('\nEntree pour fermer...')
 
 
 if __name__ == '__main__':
