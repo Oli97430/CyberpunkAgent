@@ -66,6 +66,6 @@ qui accompagne ce document.
 ## 3. Vérifications à faire en jeu après « Reload all mods »
 1. `sell` et `buy` chez un marchand : journal `OK sell/buy` avec `qty` ; aucun `FAIL ... TransferItem refuse` inattendu.
 2. Voyage rapide borne → borne : `teleport` accepté quand V est à côté d'une borne, refusé sinon.
-3. Aucune ligne `STATE trop long` répétée ; si elle apparaît, porter `STATE_WIDTH` à 8000 (Lua **et** `motion.read_state`).
+3. Aucune ligne `STATE trop long` répétée ; si elle apparaît, porter `STATE_WIDTH` à 8000 dans `init.lua` (Python lit la ligne entière, rien à changer).
 4. Combat : plus de « rengainage » au début du combat (journal `arme tenue ... on degaine`).
 5. F12 pendant une session `--loop` : la boucle s'arrête.
