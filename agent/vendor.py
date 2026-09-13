@@ -169,6 +169,10 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
     """Va au marchand, ouvre la boutique (F maintenu), vend la camelote (G), valide (F), sort."""
     t0 = time.perf_counter()
     log(f"  [vente] direction marchand « {vendor.get('variant')} » a {vendor['dist']:.0f} m")
+    if vendor['dist'] > 300.0 and kbm.ACTIONS.get('autodrive'):
+        from . import driving
+        rd = driving.drive_to(vendor['x'], vendor['y'], stop=stop, log=log)
+        log(f"  [vente] en vehicule : {'arrive' if rd.get('ok') else rd.get('reason')}")
     r = nav.goto(lambda: nav.request_path_to(vendor['x'], vendor['y'], vendor.get('z')), arrive_m=2.5,
                  max_legs=8, timeout=240.0, stop=stop, log=log)
     if not r.get('ok'):

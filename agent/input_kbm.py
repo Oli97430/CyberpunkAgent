@@ -87,14 +87,14 @@ _DEFAULT_ACTIONS = {'interact': 'F', 'iconic': 'E', 'quickmelee': 'Q', 'dodge': 
                     'consumable': 'X', 'crouch': 'C', 'jump': 'SPACE', 'reload': 'R', 'holster': 'B',
                     'ui_confirm': 'F', 'scanner': 'TAB', 'forward': 'W', 'back': 'S', 'left': 'A', 'right': 'D',
                     'weapon1': '1', 'weapon2': '2', 'weapon3': '3', 'callvehicle': 'V', 'walktoggle': None, 'dropbody': None,
-                    'autodrive': None, 'exitvehicle': 'F'}
+                    'autodrive': None, 'exitvehicle': 'F', 'phone': 'T'}
 _SETTING_NAMES = {'interact': 'selectChoice', 'iconic': 'iconic', 'quickmelee': 'quickmelee', 'dodge': 'dodgeDash',
                   'sprint': 'sprintHold', 'consumable': 'useConsumable', 'crouch': 'crouchToggle', 'jump': 'jump',
                   'reload': 'reload', 'holster': 'holsterWeapon', 'ui_confirm': 'selectChoiceUI', 'scanner': 'visionHold',
                   'forward': 'forward', 'back': 'back', 'left': 'left', 'right': 'right',
                   'weapon1': 'weapon1', 'weapon2': 'weapon2', 'weapon3': 'weapon3', 'callvehicle': 'callVehicle',
                   'walktoggle': 'walkToggle', 'dropbody': 'dropCarriedObject',
-                  'autodrive': 'vehicleAutodrive', 'exitvehicle': 'exitVehicle'}
+                  'autodrive': 'vehicleAutodrive', 'exitvehicle': 'exitVehicle', 'phone': 'openPhone'}
 ACTIONS: dict[str, str | None] = dict(_DEFAULT_ACTIONS)
 
 

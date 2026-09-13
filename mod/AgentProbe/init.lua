@@ -518,6 +518,10 @@ addProbe('NIVEAU: PlayerDevelopmentSystem points attribut/perk + niveau', functi
     return a, p, lvl
 end)
 -- sondes BREACH PROTOCOL (piratage des terminaux) : structure des blackboards du mini-jeu
+addProbe('TELEPHONE: GameDump(UI_ComDevice def)', function()
+    local d = GetAllBlackboardDefs().UI_ComDevice
+    return d and GameDump(d):gsub('%s+', ' '):gsub('gamebbScriptID_', ''):gsub('%[ None:gamebbID%[ g:[%w_]+ %] %]', ''):sub(1, 900) or 'absent'
+end)
 addProbe('BREACH: GameDump(HackingMinigame def)', function()
     local d = GetAllBlackboardDefs().HackingMinigame
     return d and GameDump(d):gsub('%s+', ' '):gsub('gamebbScriptID_', ''):gsub('%[ None:gamebbID%[ g:[%w_]+ %] %]', ''):sub(1, 900) or 'absent'
@@ -930,6 +934,31 @@ registerForEvent('onUpdate', function(dt)
                 lastCrimes = (#out > 0) and out or nil
             end)
         end
+        -- TELEPHONE : appel entrant / en cours (UI_ComDevice.callInformation : callPhase, contactName)
+        local phone = nil
+        pcall(function()
+            local def = GetAllBlackboardDefs().UI_ComDevice
+            if not def then return end
+            local bb = Game.GetBlackboardSystem():Get(def)
+            if not bb then return end
+            local p = {}
+            pcall(function()
+                local ci = bb:GetVariant(def.callInformation)
+                if ci then
+                    local info = FromVariant(ci)
+                    if info then
+                        local ph = tostring(info.callPhase)
+                        p.phase = ph
+                        p.incoming = ph:find('Incoming') ~= nil
+                        p.active = ph:find('StartCall') ~= nil or ph:find('Start') ~= nil
+                        pcall(function() p.contact = GetLocalizedText(tostring(info.contactName)) end)
+                    end
+                end
+            end)
+            pcall(function() p.contacts = bb:GetBool(def.ContactsActive) end)
+            pcall(function() p.activeCall = bb:GetBool(def.PhoneCallActive) end)
+            if next(p) ~= nil then phone = p end
+        end)
         -- BUFFS actifs (StatusEffectSystem) : nourri (regen vie), hydrate (regen endurance), drogue de combat
         local buffs = nil
         pcall(function()
@@ -1084,7 +1113,7 @@ registerForEvent('onUpdate', function(dt)
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
                  hp = hp, level = playerLevel, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
-                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs,
+                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs, phone = phone,
                  enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)

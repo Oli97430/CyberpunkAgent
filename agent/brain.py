@@ -77,6 +77,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     inventory_done_once = False
     last_levelup_t = -999.0
     last_sell_t = -999.0
+    last_phone_t = -999.0
     last_overlevel_t = -999.0
     mute_hostiles = {}
     last_ripper_t = -999.0
@@ -155,6 +156,15 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             if not frozen_logged:
                 frozen_logged = True; _log('etat fige (pause, menu ou chargement) : attente')
             time.sleep(0.5); continue
+
+        # 0c. TELEPHONE : un appel entrant -> on repond (touche telephone maintenue), la conversation suit via le dialogue
+        ph = st.get('phone') or {}
+        if ph.get('incoming') and time.perf_counter() - last_phone_t > 8.0 and not st.get('combat'):
+            last_phone_t = time.perf_counter()
+            _log(f"TELEPHONE : appel entrant de « {ph.get('contact') or '?'} » -> V repond")
+            kbm.act('phone', 0.9)
+            stats['appels'] = stats.get('appels', 0) + 1
+            time.sleep(1.5); continue
 
         if st.get('carrying') and kbm.ACTIONS.get('dropbody'):
             _log('V porte un corps : il le lache (il ne peut ni courir ni se battre ainsi)')
@@ -266,9 +276,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
 
         # 3a-ter. COURSES : assez d objets a vendre OU soins bas (craft insuffisant) -> marchand a portee
         need_heals = inventory.HEALS < 2
-        if (len(inventory.SELLABLE) >= 8 or need_heals) and time.perf_counter() - last_sell_t > 600.0:
+        rich_sale = inventory.SELL_VALUE >= 1000          # assez a encaisser pour que le detour vaille le coup
+        if (len(inventory.SELLABLE) >= 8 or need_heals or rich_sale) and time.perf_counter() - last_sell_t > 600.0:
             last_sell_t = time.perf_counter()
-            vendor.MAX_VENDOR_M = 700.0 if (len(inventory.SELLABLE) >= 20 or need_heals) else 250.0   # urgent -> on accepte d aller plus loin
+            vendor.MAX_VENDOR_M = 700.0 if (len(inventory.SELLABLE) >= 20 or need_heals or rich_sale) else 250.0   # on accepte d aller plus loin
             vend = vendor.pick_vendor(vendor.list_vendors())
             if vend:
                 _log(f"courses : {len(inventory.SELLABLE)} objets a vendre, soins {inventory.HEALS}, marchand a {vend['dist']:.0f} m")
