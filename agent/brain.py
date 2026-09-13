@@ -97,6 +97,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     obj_inter_tries = {}
     unfocused = False
     frozen_seq, frozen_t, frozen_logged = None, 0.0, False
+    frozen_esc = 0
     dead_since = None
     last_block_pos = None
     last_heal_t = -99.0
@@ -184,7 +185,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         elif time.perf_counter() - frozen_t > 2.0:
             kbm.release_all()
             if not frozen_logged:
-                frozen_logged = True; _log('etat fige (pause, menu ou chargement) : attente')
+                frozen_logged = True; frozen_esc = 0; _log('etat fige (pause, menu ou chargement) : attente')
+            # un menu ouvert par accident (carte des voyages rapides, inventaire...) fige le jeu : apres 8 s, Echap,
+            # puis toutes les 20 s, 3 fois au plus (un chargement, lui, se termine tout seul)
+            if time.perf_counter() - frozen_t > 8.0 + 20.0 * frozen_esc and frozen_esc < 3:
+                frozen_esc += 1
+                _log(f'etat fige depuis {time.perf_counter() - frozen_t:.0f} s : Echap pour fermer un eventuel menu ({frozen_esc}/3)')
+                kbm.tap('ESC', 0.09)
             time.sleep(0.5); continue
 
         # 0c. TELEPHONE : un appel entrant -> on repond (touche telephone maintenue), la conversation suit via le dialogue
