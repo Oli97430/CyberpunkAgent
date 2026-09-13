@@ -1894,13 +1894,30 @@ local function handleCommand(player, cmd)
         if not p then resp.reason = 'index inconnu (refaire fast_travel_points)'; return resp end
         journal(string.format('RUN  fast_travel idx=%d', cmd.x))
         local fts = Game.GetScriptableSystemsContainer():Get('FastTravelSystem')
-        local did = {}
-        if pcall(function() fts:PerformFastTravel(p, player) end) then did[#did + 1] = 'PerformFastTravel(p, player)' else
-            if pcall(function() fts:PerformFastTravel(p) end) then did[#did + 1] = 'PerformFastTravel(p)' end
+        local did, errs = {}, {}
+        local tries = {
+            { 'PerformFastTravel(p, player)', function() fts:PerformFastTravel(p, player) end },
+            { 'PerformFastTravel(p)', function() fts:PerformFastTravel(p) end },
+            { 'FastTravel(p)', function() fts:FastTravel(p) end },
+            { 'PerformFastTravel(record, player)', function() fts:PerformFastTravel(p.pointRecord, player) end },
+        }
+        for _, t in ipairs(tries) do
+            local okX, err = pcall(t[2])
+            if okX then did[#did + 1] = t[1]; break else errs[#errs + 1] = t[1] .. ' -> ' .. tostring(err) end
         end
-        resp.ok, resp.methodes = (#did > 0), did
+        resp.ok, resp.methodes, resp.erreurs = (#did > 0), did, errs
         if #did == 0 then resp.reason = 'aucune methode de voyage acceptee' end
-        journal('OK   fast_travel : [' .. table.concat(did, ',') .. ']')
+        journal('OK   fast_travel : [' .. table.concat(did, ',') .. '] erreurs: ' .. table.concat(errs, ' | '):sub(1, 400))
+        return resp
+    elseif cmd.cmd == 'teleport' then
+        -- TELEPORTATION (TeleportationFacility) : reservee au voyage rapide borne -> borne quand l API du jeu refuse
+        journal(string.format('RUN  teleport (%.0f,%.0f,%.0f)', cmd.x or 0, cmd.y or 0, cmd.z or 0))
+        local okT, err = pcall(function()
+            Game.GetTeleportationFacility():Teleport(player, Vector4.new(cmd.x, cmd.y, (cmd.z or player:GetWorldPosition().z) + 0.5, 1.0), EulerAngles.new(0, 0, 0))
+        end)
+        resp.ok = okT
+        if not okT then resp.reason = 'Teleport : ' .. tostring(err) end
+        journal('OK   teleport : ' .. tostring(okT) .. (okT and '' or (' ' .. tostring(err))))
         return resp
     elseif cmd.cmd == 'vehicle_call' then
         -- APPEL D UN VEHICULE AU HASARD parmi ceux que V possede (VehicleSystem) : x = 0 hasard, 1 voiture, 2 moto.

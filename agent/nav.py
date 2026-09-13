@@ -136,7 +136,13 @@ def fast_travel_to(tx: float, ty: float, log=print, min_gain_m: float = 800.0) -
                 s4 = motion.read_state()
                 if not (s4 and math.hypot(s4['x'] - best['x'], s4['y'] - best['y']) < 60.0):
                     kbm.tap('ESC', 0.08)                              # refermer la carte si le voyage n a pas eu lieu
-                    log(f"  [voyage] borne {'activee' if used else 'non activee'}, voyage par script refuse : {(r2 or {}).get('reason') or (r2 or {}).get('methodes')}")
+                    log(f"  [voyage] borne {'activee' if used else 'non activee'}, voyage par script refuse : {(r2 or {}).get('reason') or (r2 or {}).get('erreurs')}")
+                    # dernier recours, aux memes conditions que le jeu (V est a la borne) : teleportation borne -> borne
+                    s5 = motion.read_state() or {}
+                    if s5 and math.hypot(s5['x'] - near['x'], s5['y'] - near['y']) < 6.0:
+                        log(f"  [voyage] teleportation de la borne « {near.get('name')} » vers « {best.get('name')} »")
+                        _wait(_send({'cmd': 'teleport', 'x': best['x'], 'y': best['y'], 'z': best.get('z')}), timeout=6.0)
+                        time.sleep(5.0)
     time.sleep(6.0)                                      # ecran de chargement
     for _ in range(40):
         s2 = motion.read_state()
