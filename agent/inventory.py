@@ -190,8 +190,13 @@ def manage(log=print) -> dict:
                                        or (it.get('type') or '').startswith('Prt_')
                                        or (it.get('type') or '') == 'Gen_Misc')
                 and not it.get('iconic') and not it.get('quest') and not it.get('equipped')
-                and it['i'] not in dis_idx and (it.get('price') or 0) > 0]
-    SELL_VALUE = int(sum((it.get('price') or 0) * 0.15 * int(it.get('qty') or 1) for it in SELLABLE))
+                and it['i'] not in dis_idx]
+    # valeur estimee : prix du jeu s il est connu (le stat Price est souvent nul), sinon par qualite
+    QVAL = {'Legendary': 2500, 'Epic': 1000, 'Rare': 400, 'Uncommon': 150, 'Common': 50}
+    def _val(it):
+        p = it.get('price') or 0
+        return (p * 0.15) if p > 0 else QVAL.get(str(it.get('quality')), 30) * (0.3 if (it.get('type') or '') in ('Gen_Misc', 'Prt_') else 1.0)
+    SELL_VALUE = int(sum(_val(it) * int(it.get('qty') or 1) for it in SELLABLE))
     if SELLABLE:
         log(f'  [inventaire] {len(SELLABLE)} objet(s) a vendre au prochain marchand (~{SELL_VALUE} eddies)')
 

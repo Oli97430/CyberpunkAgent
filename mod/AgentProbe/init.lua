@@ -1301,6 +1301,11 @@ local function handleCommand(player, cmd)
                 pcall(function() rec.armor = data:GetStatValueByType(gamedataStatType.Armor) end)
                 pcall(function() rec.weight = data:GetStatValueByType(gamedataStatType.Weight) end)
                 pcall(function() rec.price = data:GetStatValueByType(gamedataStatType.Price) end)
+                if not rec.price or rec.price <= 0 then
+                    -- le stat Price est nul pour la plupart des objets : prix de vente calcule par le jeu (V comme « marchand »)
+                    pcall(function() local p = RPGManager.CalculateSellPrice(player, player, id); if type(p) == 'number' and p > 0 then rec.price = p / 0.15 end end)
+                    if not rec.price or rec.price <= 0 then pcall(function() local p = RPGManager.CalculateSellPrice(player, id); if type(p) == 'number' and p > 0 then rec.price = p / 0.15 end end) end
+                end
                 pcall(function() rec.equipped = edata:IsEquipped(id) end)
                 pcall(function() rec.quest = data:HasTag('Quest') end)
                 out[#out + 1] = rec
