@@ -26,6 +26,15 @@ Première version jouable de bout en bout : V joue seul plusieurs dizaines de mi
 ### Modele de decision
 - Trois fournisseurs au choix : Ollama local (defaut), OpenAI (cle API, gpt-4o-mini) ou Anthropic/Claude (cle API) ; choix dans l installateur ou config.json, cle jamais journalisee, repli sur les regles si le fournisseur ne repond pas.
 
+### Ajouts du 13/09
+- Interfaces de configuration : panneau Windows (`CyberpunkAgent-Config.exe`) et fenetre in-game (overlay CET) ; comportements activables.
+- Telephone : reponse aux appels entrants. Radio : ecoute occasionnelle, station au hasard.
+- Vehicule au hasard parmi ceux de V ; voyage rapide quand l objectif est tres loin et qu aucun vehicule ne vient.
+- Mort : rechargement automatique de la derniere sauvegarde, lieu memorise, la session continue ; `--loop` enchaine les sessions (F12 arrete).
+- Combat : discretion (approche accroupie, elimination furtive), plus d esquives et dash, armes a feu des 9 m, armes contondantes preferees, fuite devant la police et face a 6 hostiles, combats steriles coupes.
+- Courses : vente plus volontaire (valeur a encaisser, vehicule si loin), achat de soins, grenades et munitions ; charcudoc par script ; lecture des eclats.
+- Quetes : priorite aux quetes du niveau de V (niveau recommande lu dans le journal du jeu).
+
 ### Distribution
 - `run_agent.py` / `CyberpunkAgent.exe` : `--check`, `--config`, `--test keys|loot|drive|walk`, durée en minutes.
 - `CyberpunkAgent-Setup.exe` : détection du jeu, vérification de CET, copie du mod, installation du programme, téléchargement du modèle, config, raccourci.
