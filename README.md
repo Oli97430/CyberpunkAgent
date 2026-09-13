@@ -1,8 +1,10 @@
 # CyberpunkAgent — V joue seul à Cyberpunk 2077
 
-Un agent autonome qui joue à **Cyberpunk 2077** à votre place, avec un **modèle de langage local** (Ollama, aucune donnée envoyée sur internet) : il suit les quêtes, se déplace, conduit, dialogue, se bat, se soigne, loote tout, gère son inventaire, craft, vend, achète, et reprend la main à la demande.
+**[English version](README.en.md)**
 
-> **État : version 0.1.0, expérimentale.** L'agent joue réellement plusieurs dizaines de minutes d'affilée, mais il reste imparfait : il meurt parfois, se coince dans certains intérieurs, et ne fait pas les courses de compétition. Chaque session est journalisée pour pouvoir améliorer les comportements.
+Un agent autonome qui joue à **Cyberpunk 2077** à votre place, avec un **modèle de langage local** (Ollama, aucune donnée envoyée sur internet) ou, si vous préférez, une clé API OpenAI ou Anthropic : il suit les quêtes, se déplace, conduit, dialogue, se bat, se soigne, loote tout, gère son inventaire, craft, vend, achète, répond au téléphone, écoute la radio, et rend la main à la demande.
+
+> **État : version 0.1.0, expérimentale.** L'agent joue réellement plusieurs dizaines de minutes d'affilée, mais il reste imparfait : il meurt parfois (et recharge alors lui-même la dernière sauvegarde), se coince dans certains intérieurs, et ne fait pas les courses de compétition. Chaque session est journalisée pour pouvoir améliorer les comportements.
 
 ---
 
@@ -29,18 +31,19 @@ Un agent autonome qui joue à **Cyberpunk 2077** à votre place, avec un **modè
 
 | Domaine | Comportement |
 |---|---|
-| **Quêtes** | Suit l'objectif actif, se rend au marqueur par le maillage de navigation du jeu, change de quête quand l'objectif est inaccessible ou trop loin, mémorise les marqueurs atteints. |
+| **Quêtes** | Suit l'objectif actif, se rend au marqueur par le maillage de navigation du jeu, change de quête quand l'objectif est inaccessible ou trop loin, mémorise les marqueurs atteints, **privilégie les quêtes de son niveau** (niveau recommandé lu dans le journal du jeu). |
 | **Déplacement** | Marche, sprint, esquive, saute, se débloque tout seul ; s'il est enfermé (pièce, toit), cherche une sortie : portes, invites « Ouvrir / Activer », sondes dans 8 directions. |
 | **Conduite** | Appelle sa voiture ou sa moto, monte dedans, enclenche l'**autodrive** vers l'objectif dès que celui-ci est à plus de 500 m, descend à l'arrivée. |
 | **Dialogues** | Lit les choix affichés, choisit avec le modèle local (cohérent avec le contexte de la quête), évite les boucles. |
-| **Combat** | Mêlée en priorité (meilleure arme au DPS), grenades sur les groupes, couteaux lancés, arme à distance sur les cibles hautes ou lointaines, **quickhacks** (le meilleur disponible), cyberware iconique, esquives, parades, replis, **fuite** quand il est submergé. |
+| **Combat** | Mêlée en priorité (meilleure arme de mêlée, contondantes favorisées), approche en **discrétion** avec élimination furtive, grenades sur les groupes, couteaux lancés, arme à feu au-delà de 12 m ou sur les cibles en hauteur, **quickhacks** (le meilleur disponible), cyberware iconique, esquives et dash fréquents, parades, replis, **fuite** à 6 hostiles ou face à la police, combats stériles coupés. |
 | **Survie** | Se soigne (inhalateurs), se **buffe** avant et pendant le combat (nourriture, boisson, boosters), évite les zones où il est mort, ne s'attaque **jamais à la police** sauf pour se défendre. |
 | **Sauvetage** | Quand une agression a lieu à proximité, décide lui-même d'intervenir ou non (modèle local + règles de prudence). |
 | **Loot** | Ramasse **tout** : conteneurs, objets au sol, corps, sans rien oublier, sans jamais porter un corps par erreur. |
 | **Inventaire** | Équipe automatiquement les meilleures armes (2 mêlée + 1 distance) et les meilleurs vêtements, démonte la camelote, garde le meilleur pour lui. |
 | **Craft** | Fabrique soins, grenades, munitions, puis tout l'équipement faisable à son niveau (Rare et mieux). |
-| **Courses** | Va vendre la camelote au marchand le plus proche (jamais un ripperdoc), achète des soins s'il n'en a plus assez. |
-| **Progression** | Dépense les points d'attribut (build mêlée : Corps, Réflexes, Sang-froid). |
+| **Courses** | Va vendre tout ce qui ne sert pas au marchand le plus proche (jamais un ripperdoc), achète soins, grenades et munitions, va chez le **charcudoc** poser du meilleur cyberware quand il est assez riche. |
+| **Progression** | Dépense les points d'attribut et de perk (build mêlée : Corps, Réflexes, Sang-froid). |
+| **Vie** | Répond aux **appels** entrants, écoute la **radio** de temps en temps (station au hasard), appelle au hasard l'un de ses véhicules, voyage rapide en dernier recours. |
 
 ---
 
