@@ -518,6 +518,19 @@ addProbe('NIVEAU: PlayerDevelopmentSystem points attribut/perk + niveau', functi
     return a, p, lvl
 end)
 -- sondes BREACH PROTOCOL (piratage des terminaux) : structure des blackboards du mini-jeu
+addProbe('SMS: methodes JournalManager (contacts, messages, choix)', function()
+    local jm = Game.GetJournalManager()
+    local found = {}
+    for _, n in ipairs({ 'GetContactList', 'GetContacts', 'GetMessages', 'GetPhoneMessages', 'GetFlattenedPhoneChoices', 'GetActivePhoneChoices',
+                         'GetConversations', 'GetContactDataArray', 'GetMessagesAndChoices', 'GetUnreadMessages', 'GetRecentMessages', 'GetTrackedEntry',
+                         'GetEntryState', 'ChangeEntryState', 'GetQuestObjectives', 'GetPhoneChoices', 'GetChildren' }) do
+        local ok, v = pcall(function() return jm[n] end)
+        if ok and v ~= nil then found[#found + 1] = n end
+    end
+    local okC, contacts = pcall(function() return jm:GetContactList() end)
+    local nC = (okC and type(contacts) == 'table') and #contacts or -1
+    return table.concat(found, ','), 'contacts=' .. tostring(nC) .. (okC and '' or (' err=' .. tostring(contacts)))
+end)
 addProbe('TELEPHONE: GameDump(UI_ComDevice def)', function()
     local d = GetAllBlackboardDefs().UI_ComDevice
     return d and GameDump(d):gsub('%s+', ' '):gsub('gamebbScriptID_', ''):gsub('%[ None:gamebbID%[ g:[%w_]+ %] %]', ''):sub(1, 900) or 'absent'
@@ -1705,10 +1718,40 @@ local function handleCommand(player, cmd)
         local pos = player:GetWorldPosition()
         local out = {}
         lastFastTravel = {}
+        local ftMappins = {}
+        pcall(function()
+            local mps = Game.GetMappinSystem():GetMappins(gamemappinsMappinTargetType.Minimap)
+            for k = 1, #mps do
+                local v = ''
+                pcall(function() v = tostring(mps[k]:GetVariant()) end)
+                if v:find('FastTravel') or v:find('Metro') then
+                    local w = mps[k]:GetWorldPosition()
+                    ftMappins[#ftMappins + 1] = { x = w.x, y = w.y, z = w.z, d = math.sqrt((w.x - pos.x) ^ 2 + (w.y - pos.y) ^ 2), variant = v:gsub('gamedataMappinVariant : ', ''):gsub(' %(%d+%)', '') }
+                end
+            end
+        end)
+        resp.ft_mappins = ftMappins
+        journal('OK   fast_travel_points : ' .. #ftMappins .. ' mappins de voyage rapide / metro')
         for i = 1, #pts do
             local p = pts[i]
             local rec = { i = i }
+            if i <= 3 then
+                -- sondes : quelles methodes/champs ce FastTravelPointData expose-t-il ?
+                for _, mn in ipairs({ 'GetPointDisplayName', 'GetDistrictDisplayName', 'GetMarkerPosition', 'GetMappinID', 'GetPointRecord', 'GetMarkerRef', 'IsEnabled', 'GetTrackingType' }) do
+                    local okM, v = pcall(function() return p[mn](p) end)
+                    journal(string.format('OK   ftpoint[%d].%s -> %s / %s', i, mn, tostring(okM), tostring(v)))
+                end
+                for _, fn in ipairs({ 'pointRecord', 'markerRef', 'districtRecord', 'mappinID', 'position', 'mappinPos' }) do
+                    local okF, v = pcall(function() return p[fn] end)
+                    if okF and v ~= nil then
+                        local sv = tostring(v)
+                        pcall(function() sv = TDBID.ToStringDEBUG(v) or sv end)
+                        journal(string.format('OK   ftpoint[%d].%s = %s', i, fn, sv))
+                    end
+                end
+            end
             pcall(function() rec.name = GetLocalizedText(tostring(p:GetPointDisplayName())) end)
+            pcall(function() rec.record = TDBID.ToStringDEBUG(p.pointRecord) end)
             pcall(function() rec.district = tostring(p:GetDistrictDisplayName()) end)
             pcall(function()
                 local w = p:GetMarkerPosition()
