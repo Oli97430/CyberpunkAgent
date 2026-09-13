@@ -125,6 +125,9 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
     hp = st.get('hp'); hp = 100.0 if hp is None else hp
     aggr = aggressors(st)
     crimes = st.get('crimes') or []
+    # un simple marqueur d agression a 60-80 m sans agresseur visible = souvent deja fini (2 x 1 min perdues le 13/09) :
+    # on n y va que si des agresseurs sont VISIBLES, ou si le marqueur est tout proche (< 35 m)
+    crimes = [c for c in crimes if (c.get('d') or 99) < 35] if not aggr else crimes
     if (aggr or crimes) and hp >= 60 and not st.get('combat') and extra.get('rescued', lambda k: False)(aggr, crimes) is False:
         n_aggr = len(aggr)
         near = min([a['d'] for a in aggr] + [c['d'] for c in crimes])
