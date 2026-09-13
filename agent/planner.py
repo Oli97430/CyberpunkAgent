@@ -87,7 +87,8 @@ RULES = (
 def _situation(st: dict, extra: dict) -> str:
     q = st.get('quest') or {}
     inter = st.get('interact') or {}
-    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')]
+    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
+                and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
     lines = [
         f"Vie : {st.get('hp', 0):.0f} %. En combat : {'oui' if st.get('combat') else 'non'}.",
         f"Quete suivie : {q.get('text') or 'aucune'}"
@@ -102,7 +103,8 @@ def _situation(st: dict, extra: dict) -> str:
 
 def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
     """Regles d abord pour les cas nets ; le modele n arbitre que le cas ouvert (parler ?)."""
-    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')]
+    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
+                and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
     if st.get('combat'):
         return 'attaquer', 'regle : deja en combat'
     # POLICE : jamais engagee de notre initiative (legitime defense seulement, geree en combat)
@@ -188,7 +190,8 @@ def _decide_llm(st: dict, extra: dict, timeout: float) -> tuple[str, str]:
         why = re.search(r'"raison"\s*:\s*"([^"]{0,120})"', txt)
         if m and m.group(1) in ACTIONS:
             act = m.group(1)
-            hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')]
+            hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
+                and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
             if act == 'attendre' and hostiles and hostiles[0]['d'] < 15:
                 return 'attaquer', 'garde-fou : hostiles proches'
             if act == 'attendre' and (st.get('hp') or 100) >= 40:
@@ -204,7 +207,8 @@ def _decide_llm(st: dict, extra: dict, timeout: float) -> tuple[str, str]:
 
 def fallback(st: dict, extra: dict) -> str:
     """Regle prudente si le modele ne repond pas."""
-    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')]
+    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
+                and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
     if st.get('combat'):
         return 'attaquer'
     if hostiles and hostiles[0]['d'] < 15 and not all(e.get('police') for e in hostiles):
@@ -231,7 +235,8 @@ class Planner:
     def maybe_decide(self, st: dict, extra: dict, log=print) -> str:
         """Redecide si PERIOD_S ecoulees ou si la situation a change de nature."""
         inter = st.get('interact') or {}
-        hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')]
+        hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
+                and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
         sig = (bool(inter), len(hostiles) > 0, bool(st.get('combat')), (st.get('quest') or {}).get('text'),
                (st.get('hp') or 100) < 40)
         now = time.perf_counter()

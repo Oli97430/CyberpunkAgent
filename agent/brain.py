@@ -39,7 +39,8 @@ def _threat_near(st: dict) -> bool:
     """Interrompt un trajet : combat, ou hostile vivant a moins de ENGAGE_M."""
     if st.get('combat'):
         return True
-    return any((not e.get('dead')) and (not e.get('police')) and e['d'] < ENGAGE_M for e in (st.get('enemies') or []))
+    return any((not e.get('dead')) and (not e.get('police')) and e['d'] < ENGAGE_M
+               and (e.get('z') is None or abs(e['z'] - st.get('z', e['z'])) < 3.5) for e in (st.get('enemies') or []))
 
 
 def _dist_to_mappin(st: dict) -> float | None:
@@ -153,8 +154,16 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             kbm.act('dropbody', 0.2); time.sleep(1.0); continue
 
         if st.get('vehicle'):
-            _log('V est dans un vehicule hors sequence de conduite : il descend')
-            driving.exit_vehicle(log=_log)
+            qv = st.get('quest') or {}
+            dv = math.hypot(st['x'] - qv['mx'], st['y'] - qv['my']) if qv.get('mx') is not None else None
+            if dv is not None and dv > 150.0 and kbm.ACTIONS.get('autodrive'):
+                _log(f'V est deja en vehicule et l objectif est a {dv:.0f} m : autodrive')
+                r = driving.autodrive_to(qv['mx'], qv['my'], stop=stop, log=_log)
+                _log(f"conduite : {'arrive' if r.get('ok') else r.get('reason')}")
+                driving.exit_vehicle(log=_log)
+            else:
+                _log('V est dans un vehicule et l objectif est proche : il descend')
+                driving.exit_vehicle(log=_log)
             continue
 
         hp_now = st.get('hp')
@@ -426,7 +435,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 action = 'objectif'
 
         if action == 'attaquer':
-            hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('police')]
+            hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('police')
+                        and (e.get('z') is None or abs(e['z'] - st.get('z', e['z'])) < 3.5)]
             # hostiles « muets » : cibles qui n entrent jamais en combat (PNJ fuyards, tourelles hors portee...) ->
             # ignorees 3 min apres un engagement sans combat, pour ne pas perdre 25 s a chaque fois
             hostiles = [e for e in hostiles if time.perf_counter() - mute_hostiles.get((round(e['x']), round(e['y'])), -1e9) > 180.0]
