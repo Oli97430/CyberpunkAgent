@@ -44,7 +44,7 @@ def nearest_apartment(log=print) -> dict | None:
 
 
 def visit_mirror(stop=None, log=print) -> dict:
-    _last['t'] = time.time(); _save()
+    _last['t'] = time.time()                     # pas d insistance dans la session ; enregistre 30 jours seulement en cas de succes
     apt = nearest_apartment(log)
     if not apt:
         return {'ok': False, 'reason': 'aucun appartement a moins de 150 m'}
@@ -75,6 +75,7 @@ def visit_mirror(stop=None, log=print) -> dict:
                 kbm.tap('ENTER', 0.08); time.sleep(2.0)
                 kbm.tap('ESC', 0.08); time.sleep(1.0)
                 log('  [apparence] nouveau look valide (au hasard)')
+                _save()
                 return {'ok': True}
             if ch and any(w in ch for w in ('ouvrir', 'entrer')):
                 kbm.act('interact', 0.15); time.sleep(2.0)               # porte de l appartement
