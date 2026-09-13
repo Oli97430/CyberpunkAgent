@@ -159,7 +159,7 @@ def single_instance() -> bool:
     try:
         import ctypes
         k32 = ctypes.windll.kernel32
-        h = k32.CreateMutexW(None, True, 'Local\CyberpunkAgent.single')
+        h = k32.CreateMutexW(None, True, 'CyberpunkAgent.single')
         if k32.GetLastError() == 183:          # ERROR_ALREADY_EXISTS
             return False
         globals()['_mutex'] = h
