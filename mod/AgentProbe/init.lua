@@ -971,6 +971,20 @@ registerForEvent('onUpdate', function(dt)
                 weapon = tostring(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(wid)):ItemType():Type()):gsub('gamedataItemType : ', ''):gsub(' %(%d+%)', '')
             end
         end)
+        -- BREACH PROTOCOL (mini-jeu de piratage d un terminal / point d acces) : State + temps restant, pour que V
+        -- ne reste pas devant la grille indefiniment (pas encore de resolveur : il en sort)
+        local breach = nil
+        pcall(function()
+            local def = GetAllBlackboardDefs().HackingMinigame
+            if not def then return end
+            local bb = Game.GetBlackboardSystem():Get(def)
+            if not bb then return end
+            local stt = bb:GetInt(def.State)
+            if stt and stt ~= 0 then
+                breach = { state = stt }
+                pcall(function() breach.timer = bb:GetFloat(def.TimerLeftPercent) end)
+            end
+        end)
         -- TELEPHONE : appel entrant / en cours (UI_ComDevice.callInformation : callPhase, contactName)
         local phone = nil
         pcall(function()
@@ -1158,7 +1172,7 @@ registerForEvent('onUpdate', function(dt)
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
                  hp = hp, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
-                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs, phone = phone, weapon = weapon,
+                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
                  enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)

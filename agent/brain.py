@@ -119,6 +119,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_levelup_t = -999.0
     last_sell_t = -999.0
     last_phone_t = -999.0
+    breach_t, breach_esc = None, 0
     last_close_t = -999.0
     last_ft_t = -999.0
     last_overlevel_t = -999.0
@@ -208,6 +209,23 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log(f'etat fige depuis {time.perf_counter() - frozen_t:.0f} s : Echap pour fermer un eventuel menu ({frozen_esc}/3)')
                         kbm.tap('ESC', 0.09)
                     time.sleep(0.5); continue
+
+                # 0b2. BREACH PROTOCOL ouvert (terminal / point d acces) : pas de resolveur pour l instant -> on attend 3 s
+                # (le jeu affiche la grille) puis Echap pour ne pas rester devant (3 Echap max, puis on laisse faire)
+                br = st.get('breach')
+                if br and int(br.get('state') or 0) in (1, 2):         # 1/2 = en cours (valeurs a confirmer dans le journal)
+                    if breach_t is None:
+                        breach_t = time.perf_counter(); kbm.release_all()
+                        _log(f"BREACH PROTOCOL ouvert (etat {br.get('state')}, timer {br.get('timer')}) : V ne sait pas encore le resoudre -> sortie")
+                        stats['breach'] = stats.get('breach', 0) + 1
+                    if time.perf_counter() - breach_t > 3.0 and breach_esc < 3:
+                        breach_esc += 1; kbm.tap('ESC', 0.09); breach_t = time.perf_counter() - 1.0
+                    time.sleep(0.4); continue
+                elif br:
+                    _log(f"breach : etat {br.get('state')} (inconnu) : ignore")
+                    breach_t = None
+                else:
+                    breach_t, breach_esc = None, 0
 
                 # 0c. TELEPHONE : un appel entrant -> on repond (touche telephone maintenue), la conversation suit via le dialogue
                 ph = st.get('phone') or {}
