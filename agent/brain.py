@@ -453,6 +453,9 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     continue
                 r = combat.fight(stop=stop, log=_log)
                 stats['combats'] = stats.get('combats', 0) + 1
+                if r.get('sterile'):
+                    for e in (motion.read_state() or {}).get('enemies') or []:
+                        mute_hostiles[(round(e['x']), round(e['y']))] = time.perf_counter()
                 if not r.get('mort'):
                     lr = combat.loot_around(stop=stop, log=_log, seen=looted)
                     _log(f"loot : {lr.get('ramasses', 0)}/{lr.get('objets', 0)} objets ramasses")

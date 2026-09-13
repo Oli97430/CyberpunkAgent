@@ -79,11 +79,14 @@ def manage(log=print) -> dict:
     # 0. meilleur emplacement d arme (par DPS) -> c est celui que le combat degainera
     slots = [s for s in (inv.get('slots') or []) if (s.get('dps') or 0) > 0]
     if slots:
-        best = max(slots, key=lambda s: s.get('dps') or 0)
         from . import combat
+        melee_slots = [s for s in slots if (s.get('type') or '') in MELEE_TYPES]
+        ranged_slots = [s for s in slots if (s.get('type') or '').startswith('Wea_') and (s.get('type') or '') not in MELEE_TYPES]
+        best = max(melee_slots or slots, key=lambda s: s.get('dps') or 0)
         combat.MELEE_SLOT = str(best['slot'])
+        combat.RANGED_SLOT = str(max(ranged_slots, key=lambda s: s.get('dps') or 0)['slot']) if ranged_slots else None
         log(f"  [inventaire] emplacements : " + ' | '.join(f"{s['slot']}:{s.get('name', '?')} dps {s.get('dps', 0):.0f}" for s in slots)
-            + f"  -> le combat degainera le {best['slot']} ({best.get('name')})")
+            + f"  -> melee au {best['slot']} ({best.get('name')})" + (f", distance au {combat.RANGED_SLOT}" if combat.RANGED_SLOT else ''))
 
     # 1. armes : 2 meilleures de MELEE (emplacements 1-2) + la meilleure A DISTANCE (emplacement 3)
     #    pour les drones, tourelles et cibles hors de portee ; V reste melee par defaut.
@@ -99,7 +102,8 @@ def manage(log=print) -> dict:
             log(f"  [inventaire] arme a distance « {r0.get('name')} » ({r0.get('type')}, dps {r0.get('dps', 0):.0f}) -> emplacement 3")
             time.sleep(0.3)
         from . import combat
-        combat.RANGED_SLOT = '3'
+        if combat.RANGED_SLOT is None:
+            combat.RANGED_SLOT = '3'
     for slot, it in enumerate(melee[:2]):
         if it.get('equipped'):
             continue

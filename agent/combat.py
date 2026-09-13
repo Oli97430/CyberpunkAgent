@@ -237,6 +237,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     retreat_until = 0.0
     flee_until, last_flee_end = 0.0, -999.0
     t_buff = -999.0
+    sterile_sig, sterile_t = None, time.perf_counter()
     last_retreat_end = -99.0
     no_target_logged = False
     police_logged = False
@@ -270,6 +271,14 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             alive = _alive(st.get('enemies'))
             if not st.get('combat'):
                 log('  [combat] fin : plus en combat'); break
+            # combat STERILE : rien ne change depuis 75 s (meme nombre d hostiles, vie intacte) -> cibles
+            # injoignables (vitre, autre etage, tourelle hors portee) : on arrete de taper dans le vide
+            sig = (len(alive), hp >= 90)
+            if sig != sterile_sig:
+                sterile_sig, sterile_t = sig, now
+            elif hp >= 90 and now - sterile_t > 75.0:
+                log(f'  [combat] combat sterile : {len(alive)} hostile(s) intouchable(s) depuis 75 s -> on laisse tomber')
+                stats['sterile'] = True; break
             if not alive:
                 kbm.release('W'); kbm.act_release('sprint')
                 if not no_target_logged:
