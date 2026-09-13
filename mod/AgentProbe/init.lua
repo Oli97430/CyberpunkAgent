@@ -1801,12 +1801,23 @@ local function handleCommand(player, cmd)
             resp.reason = 'entree de contact introuvable (' .. table.concat(tried, ' ; ') .. ')'
             journal('FAIL sms_read : ' .. resp.reason); return resp
         end
-        local okM, r1, r2, r3 = pcall(function() return jm:GetMessagesAndChoices(entry, JournalRequestStateFilter.Any) end)
-        if not okM then
-            okM, r1, r2, r3 = pcall(function() return jm:GetMessagesAndChoices(entry) end)
+        -- les messages vivent dans les CONVERSATIONS du contact : contact -> GetConversations -> GetMessagesAndChoices(conv)
+        local targets = {}
+        local okC, c1, c2 = pcall(function() return jm:GetConversations(entry) end)
+        local convs = (okC and type(c1) == 'table') and c1 or ((okC and type(c2) == 'table') and c2 or nil)
+        if convs and #convs > 0 then
+            for k = 1, #convs do targets[#targets + 1] = convs[k] end
+        else
+            targets[1] = entry
         end
-        journal(string.format('OK   sms_read : GetMessagesAndChoices -> %s / %s / %s / %s', tostring(okM), type(r1), type(r2), type(r3)))
+        journal(string.format('OK   sms_read : GetConversations -> %s, %d conversation(s)', tostring(okC), convs and #convs or 0))
         local msgs, choices = {}, {}
+        for _, tgt in ipairs(targets) do
+        local okM, r1, r2, r3 = pcall(function() return jm:GetMessagesAndChoices(tgt, JournalRequestStateFilter.Any) end)
+        if not okM then
+            okM, r1, r2, r3 = pcall(function() return jm:GetMessagesAndChoices(tgt) end)
+        end
+        journal(string.format('OK   sms_read : GetMessagesAndChoices -> %s / %s(%s) / %s(%s) / %s', tostring(okM), type(r1), type(r1) == 'table' and #r1 or '-', type(r2), type(r2) == 'table' and #r2 or '-', type(r3)))
         local function textOf(e)
             local t = nil
             pcall(function() t = GetLocalizedText(tostring(e:GetText())) end)
@@ -1829,6 +1840,7 @@ local function handleCommand(player, cmd)
                     end
                 end
             end
+        end
         end
         resp.ok, resp.messages, resp.choices = true, msgs, choices
         journal(string.format('OK   sms_read : %d messages, %d choix', #msgs, #choices))
