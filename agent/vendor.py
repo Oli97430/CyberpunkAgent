@@ -165,6 +165,37 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
     return {'ok': True, 'poses': posed, 'eddies': spent, 'reste': money}
 
 
+def buy_supplies(items: list[dict], log=print) -> dict:
+    """Chez le marchand present : grenades (jusqu a 4) et munitions de l arme a feu (jusqu a ~120 cartouches),
+    les moins cheres d abord, en gardant MONEY_RESERVE eddies."""
+    stock = vendor_stock()
+    if not stock or not stock.get('ok'):
+        return {'ok': False}
+    money = int(stock.get('money') or 0)
+    have_gren = sum(int(it.get('qty') or 1) for it in items if (it.get('type') or '') == 'Gad_Grenade')
+    have_ammo = sum(int(it.get('qty') or 1) for it in items if (it.get('type') or '') == 'Con_Ammo')
+    wants = []
+    if have_gren < 4:
+        wants.append(('Gad_Grenade', 4 - have_gren, 'grenade'))
+    if have_ammo < 120:
+        wants.append(('Con_Ammo', 2, 'munitions'))          # 2 lots
+    bought = []
+    for typ, n, label in wants:
+        cands = sorted([it for it in (stock.get('items') or []) if (it.get('type') or '') == typ], key=lambda it: int(it.get('price') or 1e9))
+        for it in cands:
+            if n <= 0:
+                break
+            price = max(1, int(it.get('price') or 0))
+            k = min(n, int(it.get('qty') or 1), (money - MONEY_RESERVE) // price)
+            if k <= 0:
+                continue
+            r = buy(it['i'], k)
+            if r and r.get('ok'):
+                n -= k; money -= int(r.get('total') or 0); bought.append(f"{k} x {it.get('name')}")
+                log(f"  [achat] {label} : {k} x « {it.get('name')} » pour {r.get('total')} eddies")
+    return {'ok': True, 'achats': bought, 'reste': money}
+
+
 def sell_trip(vendor: dict, stop=None, log=print) -> dict:
     """Va au marchand, ouvre la boutique (F maintenu), vend la camelote (G), valide (F), sort."""
     t0 = time.perf_counter()

@@ -95,6 +95,30 @@ def request_path_to(x: float, y: float, z: float | None = None) -> dict | None:
     return _wait(_send(c))
 
 
+def fast_travel_to(tx: float, ty: float, log=print, min_gain_m: float = 800.0) -> dict:
+    """Voyage rapide vers le point connu le plus proche de (tx,ty) si cela rapproche V d au moins min_gain_m.
+    Le jeu exige normalement d etre a une borne : on essaie, le resultat fait foi (position avant/apres)."""
+    r = _wait(_send({'cmd': 'fast_travel_points'}), timeout=6.0)
+    pts = [p for p in ((r or {}).get('points') or []) if p.get('x') is not None]
+    if not pts:
+        return {'ok': False, 'reason': (r or {}).get('reason', 'aucun point')}
+    st = motion.read_state() or {}
+    d_now = math.hypot(st.get('x', 0) - tx, st.get('y', 0) - ty)
+    best = min(pts, key=lambda p: math.hypot(p['x'] - tx, p['y'] - ty))
+    d_after = math.hypot(best['x'] - tx, best['y'] - ty)
+    if d_now - d_after < min_gain_m:
+        return {'ok': False, 'reason': f'pas de point utile (gain {d_now - d_after:.0f} m)'}
+    log(f"  [voyage] « {best.get('name')} » ({best.get('district')}) a {d_after:.0f} m de l objectif (gain {d_now - d_after:.0f} m)")
+    r2 = _wait(_send({'cmd': 'fast_travel', 'x': best['i']}), timeout=8.0)
+    time.sleep(6.0)                                      # ecran de chargement
+    for _ in range(40):
+        s2 = motion.read_state()
+        if s2 and math.hypot(s2['x'] - best['x'], s2['y'] - best['y']) < 60.0:
+            return {'ok': True, 'point': best.get('name'), 'methodes': (r2 or {}).get('methodes')}
+        time.sleep(0.5)
+    return {'ok': False, 'reason': f"voyage sans effet ({(r2 or {}).get('reason') or (r2 or {}).get('methodes')})"}
+
+
 def goto(request, arrive_m: float = 3.0, max_legs: int = 10, timeout: float = 180.0, stop=None, log=print, interrupt=None) -> dict:
     """Boucle troncon par troncon. `request` = fonction qui renvoie un path.json."""
     t0 = time.perf_counter()

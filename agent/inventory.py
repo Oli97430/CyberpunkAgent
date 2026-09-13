@@ -195,6 +195,15 @@ def manage(log=print) -> dict:
     if SELLABLE:
         log(f'  [inventaire] {len(SELLABLE)} objet(s) a vendre au prochain marchand (~{SELL_VALUE} eddies)')
 
+    # 2c. ECLATS et livres de competence : on les lit (XP, eddies, infos) -> commande use
+    readables = [it for it in items if (it.get('type') or '') in ('Con_Skillbook', 'Gen_Readable', 'Gen_Shard')
+                 or 'shard' in str(it.get('name') or '').lower() or 'éclat' in str(it.get('name') or '').lower() or 'eclat' in str(it.get('name') or '').lower()]
+    for it in readables[:6]:
+        r = nav._wait(nav._send({'cmd': 'use', 'x': it['i']}), timeout=3.0)
+        if r and r.get('ok'):
+            log(f"  [inventaire] lit « {it.get('name')} »")
+            time.sleep(0.3)
+
     # 3. craft : soins / grenades manquants (recettes connues et faisables)
     crafted = 0
     try:

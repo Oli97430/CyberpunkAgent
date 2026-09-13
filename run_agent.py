@@ -160,6 +160,7 @@ def main() -> None:
     ap.add_argument('--check', action='store_true', help='verifier l installation et quitter')
     ap.add_argument('--test', choices=['keys', 'loot', 'drive', 'walk'], help='lancer un test unitaire en jeu')
     ap.add_argument('--config', action='store_true', help='afficher la configuration detectee')
+    ap.add_argument('--loop', action='store_true', help='enchainer les sessions sans fin (F12 pour arreter)')
     a = ap.parse_args()
     if a.config:
         import json
@@ -173,7 +174,19 @@ def main() -> None:
         sys.exit(1)
     if a.test:
         run_test(a.test); return
-    play(a.minutes)
+    if a.loop:
+        from agent import input_kbm as kbm
+        n = 0
+        while True:
+            n += 1
+            print(f'\n===== session {n} =====', flush=True)
+            play(a.minutes)
+            import ctypes
+            if ctypes.windll.user32.GetAsyncKeyState(0x7B) & 0x8000:   # F12 enfonce : on s arrete
+                break
+            time.sleep(5.0)
+    else:
+        play(a.minutes)
     if getattr(sys, 'frozen', False):
         input('\nEntree pour fermer...')
 

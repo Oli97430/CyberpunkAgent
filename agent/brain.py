@@ -35,6 +35,29 @@ def _log(msg: str) -> None:
 ENGAGE_M = 25.0
 
 
+def _reload_last_save(log) -> bool:
+    """Ecran de mort : « Charger la derniere sauvegarde » est le choix par defaut. On attend l ecran (6 s),
+    on valide (touche UI puis Entree), puis on attend que V soit vivant et que l etat bouge (60 s max)."""
+    time.sleep(6.0)
+    for attempt in range(3):
+        kbm.act('ui_confirm', 0.1); time.sleep(0.4)
+        kbm.tap('ENTER', 0.1) if 'ENTER' in kbm.SC else None
+        t0 = time.perf_counter(); last_seq = None
+        while time.perf_counter() - t0 < 60.0:
+            s = motion.read_state()
+            if s and (s.get('hp') or 0) > 5 and s.get('seq') != last_seq:
+                last_seq = s.get('seq')
+                time.sleep(2.0)
+                s2 = motion.read_state()
+                if s2 and (s2.get('hp') or 0) > 5 and s2.get('seq') != last_seq:
+                    log(f'  sauvegarde rechargee (vie {s2.get("hp"):.0f} %), V reprend')
+                    time.sleep(20.0)                      # chauffe du mod apres chargement
+                    return True
+            time.sleep(0.5)
+        log(f'  rechargement : pas de signe de vie (essai {attempt + 1}/3)')
+    return False
+
+
 def _threat_near(st: dict) -> bool:
     """Interrompt un trajet : combat, ou hostile vivant a moins de ENGAGE_M."""
     if st.get('combat'):
@@ -78,6 +101,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_levelup_t = -999.0
     last_sell_t = -999.0
     last_phone_t = -999.0
+    last_ft_t = -999.0
     last_overlevel_t = -999.0
     mute_hostiles = {}
     last_ripper_t = -999.0
@@ -188,7 +212,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             dead_since = dead_since or time.perf_counter()
             if time.perf_counter() - dead_since > 4.0:  # 4 s a 0 sur un etat vivant (pas un chargement)
                 quests.mark_death(st['x'], st['y'])
-                _log('V EST MORT : arret (recharge une sauvegarde) ; lieu memorise, les objectifs a < 80 m seront evites'); break
+                _log('V EST MORT : lieu memorise (objectifs a < 80 m evites) ; rechargement de la derniere sauvegarde')
+                if _reload_last_save(_log):
+                    stats['morts'] = stats.get('morts', 0) + 1
+                    dead_since = None; plan.last_t = -99.0; alt_target = None; path_failures = 0
+                    time.sleep(3.0); continue
+                _log('rechargement impossible : arret'); break
             time.sleep(0.3); continue
         dead_since = None
 
@@ -304,6 +333,9 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     _log(f"vente : {sr.get('vendus', 0)} objet(s) pour {sr.get('eddies', 0)} eddies")
                     stats['ventes'] = stats.get('ventes', 0) + sr.get('vendus', 0)
                     br = vendor.buy_heals(inventory.HEALS, log=_log)
+                    sp = vendor.buy_supplies((inventory.fetch() or {}).get('items') or [], log=_log)
+                    if sp.get('achats'):
+                        _log(f"achat : {', '.join(sp['achats'])}")
                     if br.get('achetes'):
                         inventory.HEALS += br['achetes']
                         _log(f"achat : {br['achetes']} soin(s) pour {br.get('eddies', 0)} eddies")
@@ -533,6 +565,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             _log(f"conduite : {'arrive' if r.get('ok') else r.get('reason')}")
             if not r.get('ok') and r.get('reason') == 'embarquement echoue':
                 last_drive_t = time.perf_counter() + 360.0      # ici la moto ne vient pas / ne se monte pas : pas avant 10 min
+                if dist > 1500.0 and time.perf_counter() - last_ft_t > 600.0:
+                    last_ft_t = time.perf_counter()
+                    ft = nav.fast_travel_to(q0.get('mx'), q0.get('my'), log=_log)
+                    _log(f"voyage rapide : {('arrive a ' + str(ft.get('point'))) if ft.get('ok') else ft.get('reason')}")
+                    if ft.get('ok'):
+                        stats['voyages'] = stats.get('voyages', 0) + 1
             continue
 
         if dist is not None and dist > ARRIVE_M:

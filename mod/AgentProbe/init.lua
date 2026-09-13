@@ -1216,6 +1216,7 @@ local function computePath(player, target, avoid)
 end
 
 local lastDoors = {}                         -- entites porte/dispositif par index de la derniere liste `doors`
+local lastFastTravel = {}                    -- points de voyage rapide par index
 local lastVendorStock = {}                   -- ItemID par index de la derniere liste de stock marchand
 -- marchand PRESENT (< 6 m) : une entree par entite, priorite a IsVendor()
 local function findNearbyVendor(player)
@@ -1675,6 +1676,47 @@ local function handleCommand(player, cmd)
         end
         resp.ok, resp.cls, resp.transferes, resp.noms, resp.methodes, resp.total = true, bestCls, moved, names, methods, listed
         journal(string.format('OK   loot : %s (%.1f m du point) -> %d/%d objet(s) [%s] %s', bestCls, bestD, moved, listed, table.concat(methods, ','), table.concat(names, ' | '):sub(1, 160)))
+        return resp
+    elseif cmd.cmd == 'fast_travel_points' then
+        -- POINTS DE VOYAGE RAPIDE connus (FastTravelSystem est un ScriptableSystem, pas un membre de GameInstance)
+        journal('RUN  fast_travel_points')
+        local okS, fts = pcall(function() return Game.GetScriptableSystemsContainer():Get('FastTravelSystem') end)
+        if not okS or not fts then resp.reason = 'FastTravelSystem indisponible'; journal('FAIL fast_travel_points'); return resp end
+        local okP, pts = pcall(function() return fts:GetFastTravelPoints() end)
+        if not okP or type(pts) ~= 'table' then resp.reason = 'GetFastTravelPoints : ' .. tostring(pts); journal('FAIL fast_travel_points : ' .. resp.reason); return resp end
+        local pos = player:GetWorldPosition()
+        local out = {}
+        lastFastTravel = {}
+        for i = 1, #pts do
+            local p = pts[i]
+            local rec = { i = i }
+            pcall(function() rec.name = GetLocalizedText(tostring(p:GetPointDisplayName())) end)
+            pcall(function() rec.district = tostring(p:GetDistrictDisplayName()) end)
+            pcall(function()
+                local w = p:GetMarkerPosition()
+                if w then rec.x, rec.y, rec.z = w.x, w.y, w.z; rec.d = math.sqrt((w.x - pos.x) ^ 2 + (w.y - pos.y) ^ 2) end
+            end)
+            lastFastTravel[i] = p
+            out[#out + 1] = rec
+        end
+        local enabled = nil
+        pcall(function() enabled = fts:IsFastTravelEnabled() end)
+        resp.ok, resp.points, resp.enabled = true, out, enabled
+        journal(string.format('OK   fast_travel_points : %d points, enabled=%s', #out, tostring(enabled)))
+        return resp
+    elseif cmd.cmd == 'fast_travel' then
+        -- VOYAGE RAPIDE vers le point x (index de fast_travel_points) ; methodes essayees en pcall
+        local p = lastFastTravel[cmd.x or -1]
+        if not p then resp.reason = 'index inconnu (refaire fast_travel_points)'; return resp end
+        journal(string.format('RUN  fast_travel idx=%d', cmd.x))
+        local fts = Game.GetScriptableSystemsContainer():Get('FastTravelSystem')
+        local did = {}
+        if pcall(function() fts:PerformFastTravel(p, player) end) then did[#did + 1] = 'PerformFastTravel(p, player)' else
+            if pcall(function() fts:PerformFastTravel(p) end) then did[#did + 1] = 'PerformFastTravel(p)' end
+        end
+        resp.ok, resp.methodes = (#did > 0), did
+        if #did == 0 then resp.reason = 'aucune methode de voyage acceptee' end
+        journal('OK   fast_travel : [' .. table.concat(did, ',') .. ']')
         return resp
     elseif cmd.cmd == 'vehicle_call' then
         -- APPEL D UN VEHICULE AU HASARD parmi ceux que V possede (VehicleSystem) : x = 0 hasard, 1 voiture, 2 moto.
