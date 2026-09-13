@@ -99,6 +99,22 @@ def request_path_to(x: float, y: float, z: float | None = None) -> dict | None:
     return _wait(_send(c))
 
 
+def _menu_open(settle: float = 0.6) -> bool:
+    """Un menu plein ecran (carte des voyages rapides, menu pause) met le jeu en pause : le seq n avance plus."""
+    a = motion.read_state(); time.sleep(settle); b = motion.read_state()
+    return bool(a and b and a.get('seq') == b.get('seq'))
+
+
+def _close_menu(kbm, log, what: str) -> None:
+    """Echap SEULEMENT si un menu est ouvert (un Echap a l aveugle OUVRAIT le menu pause : Olivier devait le fermer
+    lui-meme apres chaque voyage rapide, 13/09). Verifie la fermeture, 2 essais max."""
+    for i in range(2):
+        if not _menu_open():
+            return
+        log(f'  [voyage] {what} : menu ouvert -> Echap ({i + 1}/2)')
+        kbm.tap('ESC', 0.08); time.sleep(0.9)
+
+
 def fast_travel_to(tx: float, ty: float, log=print, min_gain_m: float = 800.0) -> dict:
     """Voyage rapide vers le point connu le plus proche de (tx,ty) si cela rapproche V d au moins min_gain_m.
     Le jeu exige normalement d etre a une borne : on essaie, le resultat fait foi (position avant/apres)."""
@@ -135,11 +151,13 @@ def fast_travel_to(tx: float, ty: float, log=print, min_gain_m: float = 800.0) -
                 d3 = math.hypot(s3['x'] - near['x'], s3['y'] - near['y'])
                 used = motion.approach_machine(near['x'], near['y'], d3, log, None)
                 time.sleep(2.0 if used else 0.5)                      # la borne ouvre la carte des voyages rapides
+                map_open = _menu_open()
+                log(f"  [voyage] borne {'activee' if used else 'non activee'}, carte {'ouverte' if map_open else 'fermee'}")
                 r2 = _wait(_send({'cmd': 'fast_travel', 'x': best['i']}), timeout=8.0)
                 time.sleep(3.0)
                 s4 = motion.read_state()
                 if not (s4 and math.hypot(s4['x'] - best['x'], s4['y'] - best['y']) < 60.0):
-                    kbm.tap('ESC', 0.08)                              # refermer la carte si le voyage n a pas eu lieu
+                    _close_menu(kbm, log, 'carte des voyages')          # jamais d Echap a l aveugle (ouvrirait le menu pause)
                     log(f"  [voyage] borne {'activee' if used else 'non activee'}, voyage par script refuse : {(r2 or {}).get('reason') or (r2 or {}).get('erreurs')}")
                     # dernier recours, aux memes conditions que le jeu (V est a la borne) : teleportation borne -> borne
                     s5 = motion.read_state() or {}
@@ -148,6 +166,8 @@ def fast_travel_to(tx: float, ty: float, log=print, min_gain_m: float = 800.0) -
                         _wait(_send({'cmd': 'teleport', 'x': best['x'], 'y': best['y'], 'z': best.get('z')}), timeout=6.0)
                         time.sleep(5.0)
     time.sleep(6.0)                                      # ecran de chargement
+    from . import input_kbm as _kbm
+    _close_menu(_kbm, log, 'apres le voyage')            # un menu reste ouvert ? on le ferme tout de suite (pas 40 s plus tard)
     for _ in range(40):
         s2 = motion.read_state()
         if s2 and math.hypot(s2['x'] - best['x'], s2['y'] - best['y']) < 60.0:
