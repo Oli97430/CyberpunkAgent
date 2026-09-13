@@ -126,12 +126,17 @@ def fast_travel_to(tx: float, ty: float, log=print, min_gain_m: float = 800.0) -
                 finally:
                     motion.ARRIVE_M = old
             s3 = motion.read_state() or {}
-            if s3 and math.hypot(s3['x'] - near['x'], s3['y'] - near['y']) < 4.0:
-                motion.turn_to(motion.bearing_to(s3['x'], s3['y'], near['x'], near['y']), timeout=2.0)
-                kbm.act('interact', 0.2); time.sleep(2.5)            # la borne ouvre la carte des voyages rapides
+            if s3 and math.hypot(s3['x'] - near['x'], s3['y'] - near['y']) < 8.0:
+                # la BORNE exige d etre a ~1 m et de la regarder : approche fine + balayage + E (invite active)
+                d3 = math.hypot(s3['x'] - near['x'], s3['y'] - near['y'])
+                used = motion.approach_machine(near['x'], near['y'], d3, log, None)
+                time.sleep(2.0 if used else 0.5)                      # la borne ouvre la carte des voyages rapides
                 r2 = _wait(_send({'cmd': 'fast_travel', 'x': best['i']}), timeout=8.0)
-                time.sleep(2.0)
-                kbm.tap('ESC', 0.08)                                  # refermer la carte si le voyage n a pas eu lieu
+                time.sleep(3.0)
+                s4 = motion.read_state()
+                if not (s4 and math.hypot(s4['x'] - best['x'], s4['y'] - best['y']) < 60.0):
+                    kbm.tap('ESC', 0.08)                              # refermer la carte si le voyage n a pas eu lieu
+                    log(f"  [voyage] borne {'activee' if used else 'non activee'}, voyage par script refuse : {(r2 or {}).get('reason') or (r2 or {}).get('methodes')}")
     time.sleep(6.0)                                      # ecran de chargement
     for _ in range(40):
         s2 = motion.read_state()

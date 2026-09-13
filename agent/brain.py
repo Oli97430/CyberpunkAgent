@@ -59,46 +59,7 @@ def _reload_last_save(log) -> bool:
 
 
 def _approach_machine(tx: float, ty: float, dist: float, log, stop) -> bool:
-    """Au marqueur sans invite active : V avance jusqu a ~1 m du point exact, le regarde (regard un peu baisse),
-    balaie a gauche/droite et appuie des que l invite de la machine devient active (E court puis E long).
-    Lecon du 13/09 (Olivier) : « il s avance encore d un metre et c est bon »."""
-    log(f'au marqueur ({dist:.1f} m) sans invite : V s approche a 1 m et cherche la machine')
-    old_a = motion.ARRIVE_M; motion.ARRIVE_M = 0.9
-    try:
-        r = motion.walk_to(tx, ty, timeout=8.0, stop=stop)
-    finally:
-        motion.ARRIVE_M = old_a
-    s_c = motion.read_state() or {}
-    if not s_c:
-        return False
-    if not r.get('ok') and math.hypot(s_c['x'] - tx, s_c['y'] - ty) > 2.5:
-        # bloque a plus de 2,5 m : contourner (pas de cote) puis re-essayer une fois
-        for side in ('A', 'D'):
-            kbm.hold(side); time.sleep(0.6); kbm.release(side)
-            motion.walk_to(tx, ty, timeout=5.0, stop=stop)
-            s_c = motion.read_state() or s_c
-            if math.hypot(s_c['x'] - tx, s_c['y'] - ty) <= 2.5:
-                break
-    motion.turn_to(motion.bearing_to(s_c['x'], s_c['y'], tx, ty), timeout=2.0, stop=stop)
-    for dyaw, dpitch in ((0, 150), (-25, 0), (50, 0), (-25, -250), (0, 100), (0, 150)):
-        if dyaw:
-            motion.turn_by(dyaw, timeout=1.2, stop=stop)
-        if dpitch:
-            for _ in range(abs(dpitch) // 50):
-                kbm.look(0, 50 if dpitch > 0 else -50); time.sleep(0.02)
-        time.sleep(0.45)
-        s_p = motion.read_state() or {}
-        ip = s_p.get('interact') or {}
-        chp = str((ip.get('choices') or [''])[0]).lower()
-        if chp and not any(w in chp for w in ('saisir', 'porter', 'prendre le contr', 'enfourcher')):
-            log(f"  machine trouvee : « {ip['choices'][0]} » -> E")
-            kbm.act('interact', 0.15); time.sleep(1.0)
-            s_q = motion.read_state() or {}
-            if (s_q.get('interact') or {}).get('choices'):
-                kbm.act('interact', 1.0)
-            return True
-    log('  rien a activer ici : on continue')
-    return False
+    return motion.approach_machine(tx, ty, dist, log, stop)
 
 
 def _threat_near(st: dict) -> bool:
