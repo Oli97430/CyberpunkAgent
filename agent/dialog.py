@@ -143,7 +143,22 @@ def answer_once(stop=None, log=print) -> dict | None:
         kbm.tap('ESC', 0.09); time.sleep(0.5)
         kbm.hold('S'); time.sleep(1.2); kbm.release('S')
         return {'title': title, 'choices': choices, 'index': -1, 'source': 'stand ignore'}
-    inactive = d.get('inactive') or [0] * len(choices)
+    inactive = list(d.get('inactive') or [0] * len(choices))
+    # ARGENT : un choix qui fait payer plus que ce que V possede (ou plus de la moitie de sa fortune) est ecarte
+    # (llama3.2 a paye 21 000 eddies a Viktor le 13/09 avec 31 000 en poche)
+    try:
+        from . import inventory as _inv
+        money = int(getattr(_inv, 'MONEY', 0) or 0)
+        for i, c in enumerate(choices):
+            lc = c.lower()
+            amounts = [int(a.replace(' ', '').replace(' ', '').replace('.', '')) for a in re.findall(r'(\d[\d\s .]{2,})', c)]
+            pays = any(w in lc for w in ('payer', 'paye', 'eddies', '€$', 'eurodollar', 'donner', 'verser', 'rembourser'))
+            if amounts and pays and money and (max(amounts) > money or max(amounts) > money * 0.5):
+                if not inactive[i] and sum(1 for x in inactive if not x) > 1:
+                    inactive[i] = 1
+                    print(f'  [dialog] choix ecarte (trop cher : {max(amounts)} eddies, V en a {money}) : {c[:60]}')
+    except Exception:
+        pass
     sig = hub_signature(d)
     tried = _tried.setdefault(sig, set())
     allowed = [i for i in range(len(choices)) if not inactive[i] and i not in tried]
