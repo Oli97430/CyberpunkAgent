@@ -127,6 +127,7 @@ def walk_to(x: float, y: float, timeout: float = 20.0, stop=None, interrupt=None
     prev = st
     kbm.hold('W')
     sprinting = False
+    door_tries = 0
     if sprint:                       # follow_path : le chemin restant est long -> on court des le depart
         kbm.act_hold('sprint'); sprinting = True
     try:
@@ -157,12 +158,53 @@ def walk_to(x: float, y: float, timeout: float = 20.0, stop=None, interrupt=None
             now = time.perf_counter()
             if now - last_check_t > STUCK_WINDOW_S:
                 if dist2d(st, last_check_pos) < STUCK_MIN_M:
+                    # une PORTE ? (invite « Ouvrir » active, ou porte a < 3,5 m ouvrable par script) -> on l ouvre et on repart
+                    if door_tries < 2 and try_door(st):
+                        door_tries += 1
+                        kbm.hold('W')
+                        if sprinting:
+                            kbm.act_hold('sprint')
+                        seq = None
+                        last_check_t, last_check_pos = time.perf_counter(), st
+                        continue
                     return {'ok': False, 'reason': 'bloque', 'final_dist': d, 'seconds': now - t0,
                             'moved_m': dist2d(st, last_check_pos), 'pos': (round(st['x']), round(st['y']))}
                 last_check_t, last_check_pos = now, st
         return {'ok': False, 'reason': 'timeout', 'final_dist': dist2d(prev, target), 'seconds': time.perf_counter() - t0}
     finally:
         kbm.release('W'); kbm.act_release('sprint')
+
+
+DOOR_WORDS = ('ouvrir', 'activer', 'utiliser', 'forcer', 'open', 'use', 'appeler')
+NO_DOOR = ('saisir', 'porter', 'contr', 'enfourcher', 'pirater')
+
+
+def try_door(st: dict) -> bool:
+    """V est bloque : s il regarde une invite « Ouvrir / Activer » (hub ACTIF), il appuie dessus ; sinon, si
+    une porte est a moins de 3,5 m (mod : `doors`), il se tourne vers elle, appuie, et demande au mod
+    de l ouvrir par script. Renvoie True si quelque chose a ete tente (on reprend la marche ensuite).
+    Lecon du 13/09 : chez Viktor, c etait le joueur qui devait ouvrir les portes."""
+    inter = st.get('interact') or {}
+    ch = str((inter.get('choices') or [''])[0]).lower()
+    if ch and any(w in ch for w in DOOR_WORDS) and not any(w in ch for w in NO_DOOR):
+        kbm.release('W'); kbm.act_release('sprint')
+        kbm.act('interact', 0.15); time.sleep(1.2)
+        return True
+    try:
+        from . import nav
+        r = nav._wait(nav._send({'cmd': 'doors'}), timeout=3.0)
+        ds = [d for d in ((r or {}).get('doors') or []) if (d.get('d') or 99) < 3.5 and d.get('kind') == 'Door']
+        if ds:
+            kbm.release('W'); kbm.act_release('sprint')
+            turn_to(bearing_to(st['x'], st['y'], ds[0]['x'], ds[0]['y']), timeout=1.5)
+            time.sleep(0.3)
+            kbm.act('interact', 0.15); time.sleep(0.8)
+            nav._wait(nav._send({'cmd': 'door_open', 'x': ds[0]['i']}), timeout=3.0)
+            time.sleep(0.8)
+            return True
+    except Exception:
+        pass
+    return False
 
 
 _unstick_n = [0]
