@@ -1178,6 +1178,51 @@ local function computePath(player, target, avoid)
     return path, nil, partial
 end
 
+local lastDoors = {}                         -- entites porte/dispositif par index de la derniere liste `doors`
+local lastVendorStock = {}                   -- ItemID par index de la derniere liste de stock marchand
+-- marchand PRESENT (< 6 m) : une entree par entite, priorite a IsVendor()
+local function findNearbyVendor(player)
+    local q = Game['TSQ_NPC;']()
+    q.maxDistance = 6.0
+    q.filterObjectByDistance = true
+    pcall(function() q.testedSet = TargetingSet.Complete end)
+    local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
+    local vendor = nil
+    if okT and parts then
+        local seenEnt = {}
+        for i = 1, #parts do
+            local comp = TS_TargetPartInfo.GetComponent(parts[i])
+            local ent = comp and comp:GetEntity() or nil
+            if ent then
+                local okH, h = pcall(function() return ent:GetEntityID().hash end)
+                local key = okH and tostring(h) or tostring(ent)
+                if seenEnt[key] then ent = nil else seenEnt[key] = true end
+            end
+            if ent then
+                local isV = false
+                pcall(function() isV = ent:IsVendor() end)
+                if isV then return ent end
+                if not vendor then vendor = ent end
+            end
+        end
+    end
+    return vendor
+end
+-- prix d achat d un objet chez ce marchand : RPGManager.CalculateBuyPrice (signatures variables), sinon Price x1
+local function buyPrice(vendor, player, id)
+    local price = nil
+    local okA, a = pcall(function() return RPGManager.CalculateBuyPrice(vendor, player, id, 1.0) end)
+    if okA and type(a) == 'number' and a > 0 then price = a end
+    if not price then
+        local okB, b = pcall(function() return RPGManager.CalculateBuyPrice(vendor, id) end)
+        if okB and type(b) == 'number' and b > 0 then price = b end
+    end
+    if not price then
+        pcall(function() price = math.floor(Game.GetTransactionSystem():GetItemData(vendor, id):GetStatValueByType(gamedataStatType.Price)) end)
+    end
+    return price or 0
+end
+
 local function handleCommand(player, cmd)
     local resp = { seq = cmd.seq, ok = false, seqEnd = cmd.seq }
     local target, err
@@ -1837,51 +1882,6 @@ local function readCommandFromFile()
     f:close()
     if not body or #body == 0 then return nil end
     return body
-end
-
-local lastDoors = {}                         -- entites porte/dispositif par index de la derniere liste `doors`
-local lastVendorStock = {}                   -- ItemID par index de la derniere liste de stock marchand
--- marchand PRESENT (< 6 m) : une entree par entite, priorite a IsVendor()
-local function findNearbyVendor(player)
-    local q = Game['TSQ_NPC;']()
-    q.maxDistance = 6.0
-    q.filterObjectByDistance = true
-    pcall(function() q.testedSet = TargetingSet.Complete end)
-    local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
-    local vendor = nil
-    if okT and parts then
-        local seenEnt = {}
-        for i = 1, #parts do
-            local comp = TS_TargetPartInfo.GetComponent(parts[i])
-            local ent = comp and comp:GetEntity() or nil
-            if ent then
-                local okH, h = pcall(function() return ent:GetEntityID().hash end)
-                local key = okH and tostring(h) or tostring(ent)
-                if seenEnt[key] then ent = nil else seenEnt[key] = true end
-            end
-            if ent then
-                local isV = false
-                pcall(function() isV = ent:IsVendor() end)
-                if isV then return ent end
-                if not vendor then vendor = ent end
-            end
-        end
-    end
-    return vendor
-end
--- prix d achat d un objet chez ce marchand : RPGManager.CalculateBuyPrice (signatures variables), sinon Price x1
-local function buyPrice(vendor, player, id)
-    local price = nil
-    local okA, a = pcall(function() return RPGManager.CalculateBuyPrice(vendor, player, id, 1.0) end)
-    if okA and type(a) == 'number' and a > 0 then price = a end
-    if not price then
-        local okB, b = pcall(function() return RPGManager.CalculateBuyPrice(vendor, id) end)
-        if okB and type(b) == 'number' and b > 0 then price = b end
-    end
-    if not price then
-        pcall(function() price = math.floor(Game.GetTransactionSystem():GetItemData(vendor, id):GetStatValueByType(gamedataStatType.Price)) end)
-    end
-    return price or 0
 end
 
 pollCommands = function(player, dt)
