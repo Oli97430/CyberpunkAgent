@@ -1778,11 +1778,15 @@ local function handleCommand(player, cmd)
         pcall(function() entry = c.contactEntry end)
         -- c.id est l identifiant du contact dans le journal (ex. « coach », « viktor ») : chemin « contacts/<id> »
         local tried = {}
-        for _, path in ipairs({ 'contacts/' .. tostring(c.id), tostring(c.id), 'contacts/' .. tostring(c.contactId) }) do
+        -- GetEntryByString(path, context) : 2 parametres (sonde du 13/09 14:43) ; contextes essayes : '' puis 'contacts'
+        for _, path in ipairs({ 'contacts/' .. tostring(c.id), tostring(c.id) }) do
+            for _, ctx in ipairs({ '', 'contacts', 'gameJournalContact' }) do
+                if entry then break end
+                local okE, e = pcall(function() return jm:GetEntryByString(path, ctx) end)
+                tried[#tried + 1] = path .. '[' .. ctx .. ']=' .. tostring(okE and e ~= nil) .. (okE and '' or (' err:' .. tostring(e)))
+                if okE and e then entry = e end
+            end
             if entry then break end
-            local okE, e = pcall(function() return jm:GetEntryByString(path) end)
-            tried[#tried + 1] = path .. '=' .. tostring(okE and e ~= nil) .. (okE and '' or (' err:' .. tostring(e)))
-            if okE and e then entry = e end
         end
         if not entry then
             resp.reason = 'entree de contact introuvable (' .. table.concat(tried, ' ; ') .. ')'
