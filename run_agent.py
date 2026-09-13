@@ -154,7 +154,26 @@ def run_test(name: str) -> None:
     kbm.release_all()
 
 
+def single_instance() -> bool:
+    """Un seul agent a la fois : deux instances enverraient des touches en meme temps (vu le 13/09)."""
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.CreateMutexW(None, True, 'Local\CyberpunkAgent.single')
+        if k32.GetLastError() == 183:          # ERROR_ALREADY_EXISTS
+            return False
+        globals()['_mutex'] = h
+    except Exception:
+        pass
+    return True
+
+
 def main() -> None:
+    if not single_instance():
+        print('Un agent CyberpunkAgent tourne deja (F12 pour l arreter). Cette instance se ferme.')
+        if getattr(sys, 'frozen', False):
+            time.sleep(4)
+        return
     ap = argparse.ArgumentParser(description='Agent IA autonome pour Cyberpunk 2077 (V joue seul).')
     ap.add_argument('minutes', nargs='?', type=float, default=20.0, help='duree de jeu en minutes (defaut 20)')
     ap.add_argument('--check', action='store_true', help='verifier l installation et quitter')
