@@ -953,7 +953,7 @@ registerForEvent('onUpdate', function(dt)
             if not bb then return end
             local p = {}
             pcall(function()
-                local ci = bb:GetVariant(def.callInformation)
+                local ci = bb:GetVariant(def.PhoneCallInformation)     -- nom exact d apres GameDump(UI_ComDevice)
                 if ci then
                     local info = FromVariant(ci)
                     if info then
@@ -966,7 +966,10 @@ registerForEvent('onUpdate', function(dt)
                 end
             end)
             pcall(function() p.contacts = bb:GetBool(def.ContactsActive) end)
-            pcall(function() p.activeCall = bb:GetBool(def.PhoneCallActive) end)
+            pcall(function() p.sms_open = bb:GetBool(def.SmsMessengerActive) end)
+            pcall(function() p.msg_shown = bb:GetBool(def.isDisplayingMessage) end)
+            pcall(function() p.msg_hash = bb:GetInt(def.MessageToOpenHash) end)       -- change quand un SMS arrive
+            pcall(function() p.enabled = bb:GetBool(def.PhoneEnabled) end)
             if next(p) ~= nil then phone = p end
         end)
         -- BUFFS actifs (StatusEffectSystem) : nourri (regen vie), hydrate (regen endurance), drogue de combat
