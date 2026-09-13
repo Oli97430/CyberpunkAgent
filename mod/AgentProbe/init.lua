@@ -37,6 +37,29 @@ local lastInventory = {}                    -- ItemID par index de la derniere l
 local qhListLogged = false                  -- structure de la liste des hacks journalisee une fois
 local lastRecipes = {}                       -- TweakDBID par index de la derniere liste de recettes
 local craftDiagDone = false
+
+
+local lootClassesLogged = false             -- classes d objets lootables vues, journalisees une fois
+local lookatLogged = false
+local crimeAcc, lastCrimes = 0.0, nil
+local lastDialogSig = ''
+local attachedFor = 0.0         -- temps cumule avec un joueur attache
+local probes, probeIdx = {}, 0
+local probesDone = false
+
+local function pad(s, n)
+    if #s >= n then return s:sub(1, n) end
+    return s .. string.rep(' ', n - #s)
+end
+
+-- Journal durable : ouvert, ecrit, flushe, ferme a chaque ligne. Survit a un crash.
+local function journal(line)
+    local f = io.open('probe_progress.txt', 'a')
+    if f then f:write(line .. '\n'); f:flush(); f:close() end
+end
+
+local function addProbe(name, fn) probes[#probes + 1] = { name = name, fn = fn } end
+
 -- NIVEAU RECOMMANDE d une quete : on remonte les parents de l entree de journal (objectif -> phase
 -- -> quete) jusqu a une entree qui expose GetRecommendedLevelID / GetRecommendedLevel. Chaque appel
 -- natif est journalise RUN/OK (un plantage designerait le coupable). Resultat mis en cache par hash.
@@ -82,27 +105,6 @@ local function questLevelOf(jm, e, hash)
     return lvl, raw
 end
 
-
-local lootClassesLogged = false             -- classes d objets lootables vues, journalisees une fois
-local lookatLogged = false
-local crimeAcc, lastCrimes = 0.0, nil
-local lastDialogSig = ''
-local attachedFor = 0.0         -- temps cumule avec un joueur attache
-local probes, probeIdx = {}, 0
-local probesDone = false
-
-local function pad(s, n)
-    if #s >= n then return s:sub(1, n) end
-    return s .. string.rep(' ', n - #s)
-end
-
--- Journal durable : ouvert, ecrit, flushe, ferme a chaque ligne. Survit a un crash.
-local function journal(line)
-    local f = io.open('probe_progress.txt', 'a')
-    if f then f:write(line .. '\n'); f:flush(); f:close() end
-end
-
-local function addProbe(name, fn) probes[#probes + 1] = { name = name, fn = fn } end
 
 -- ---- sondes, de la plus anodine a la plus risquee ------------------------------
 addProbe('player:GetWorldPosition()', function()
