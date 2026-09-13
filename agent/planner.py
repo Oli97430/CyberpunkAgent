@@ -36,7 +36,7 @@ def aggressors(st: dict) -> list:
     return out
 
 # PNJ qu on n aborde pas : passants generiques et forces de l ordre
-GENERIC_NAMES = ('police officer', 'officer', 'police', 'cop', 'resident', 'résident', 'passant', 'habitant', 'civil', 'citoyen', 'vagabond', 'fetard', 'fêtard',
+GENERIC_NAMES = ('vendeur', 'vendor', 'marchand', 'police officer', 'officer', 'police', 'cop', 'resident', 'résident', 'passant', 'habitant', 'civil', 'citoyen', 'vagabond', 'fetard', 'fêtard',
                  'client', 'ouvrier', 'ouvrière', 'ouvriere', 'policier', 'ncpd', 'agent', 'garde', 'securite', 'sécurité',
                  'sans-abri', 'sdf', 'employe', 'employé', 'employée', 'serveur', 'serveuse', 'technicien', 'infirmier',
                  'medic', 'trauma', 'militech', 'arasaka', 'nomade', 'gangster', 'maelstrom', 'tyger', 'valentino',

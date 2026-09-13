@@ -64,6 +64,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     same_hub, last_hub_sig = 0, None
     no_mappin_since = None
     path_failures = 0
+    rot_failures = 0
     straight_tried = False
     obj_inter_tries = {}
     unfocused = False
@@ -527,6 +528,20 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 last_block_pos = here
             else:
                 last_block_pos = None
+            if 'rotation initiale' in str(r.get('reason') or ''):
+                rot_failures += 1
+                if rot_failures >= 2:
+                    _log('la souris est sans effet depuis 2 trajets : V est sans doute dans une scene (assis, stand) -> on en sort')
+                    kbm.tap('ESC', 0.09); time.sleep(0.8)
+                    s_e = motion.read_state() or {}
+                    if s_e.get('seq') == st.get('seq'):            # menu pause ouvert par Echap -> on le referme
+                        kbm.tap('ESC', 0.09); time.sleep(0.6)
+                    kbm.hold('S'); time.sleep(1.5); kbm.release('S')
+                    kbm.act('jump', 0.1); time.sleep(0.8)
+                    rot_failures = 0
+                    continue
+            else:
+                rot_failures = 0
             if r.get('ok') or r.get('legs', 0) > 0:
                 path_failures = 0; straight_tried = False
             else:

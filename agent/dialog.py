@@ -135,6 +135,14 @@ def answer_once(stop=None, log=print) -> dict | None:
     if not d or not d.get('choices'):
         return None
     title, choices = d.get('title', '?'), d['choices']
+    low_t = str(title).lower(); low_c = ' '.join(choices).lower()
+    is_stand = any(w in low_t for w in ('vendeur', 'vendor', 'marchand', 'stand'))
+    buy_words = ('apporte-moi', 'a boire', 'à boire', 'a manger', 'à manger', 'commander', 'un verre')
+    if is_stand or all(any(w in c.lower() for w in buy_words) for c in choices):
+        log(f'  [dialog] stand « {title} » : on ne commande rien, on recule')
+        kbm.tap('ESC', 0.09); time.sleep(0.5)
+        kbm.hold('S'); time.sleep(1.2); kbm.release('S')
+        return {'title': title, 'choices': choices, 'index': -1, 'source': 'stand ignore'}
     inactive = d.get('inactive') or [0] * len(choices)
     sig = hub_signature(d)
     tried = _tried.setdefault(sig, set())
