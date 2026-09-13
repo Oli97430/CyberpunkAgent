@@ -35,6 +35,14 @@ Première version jouable de bout en bout : V joue seul plusieurs dizaines de mi
 - Courses : vente plus volontaire (valeur a encaisser, vehicule si loin), achat de soins, grenades et munitions ; charcudoc par script ; lecture des eclats.
 - Quetes : priorite aux quetes du niveau de V (niveau recommande lu dans le journal du jeu).
 
+### Apres-midi du 13/09
+- Temperament reglable (courage, style, agressivite), quete suivie prioritaire, options discretion / voyage rapide / appels / SMS / apparence / plans.
+- Nage sans noyade, bornes de voyage rapide (approche a 1 m, activation, teleportation borne a borne en secours), vehicule au hasard suivi jusqu a 150 m.
+- SMS : lecture des contacts et reponses via le journal ; telephone : reponse aux appels.
+- Machines a quetes et donneurs de quete : approche a 1 m ; sans quete suivie, V va voir un donneur de quete de son niveau.
+- Dialogue : choix trop chers ecartes ; menus ouverts par accident refermes ; une seule instance de l agent.
+- Banc de modeles (bench_llm.py).
+
 ### Distribution
 - `run_agent.py` / `CyberpunkAgent.exe` : `--check`, `--config`, `--test keys|loot|drive|walk`, durée en minutes.
 - `CyberpunkAgent-Setup.exe` : détection du jeu, vérification de CET, copie du mod, installation du programme, téléchargement du modèle, config, raccourci.

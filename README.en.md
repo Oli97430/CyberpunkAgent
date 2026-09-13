@@ -43,7 +43,8 @@ An autonomous agent that plays **Cyberpunk 2077** for you, driven by a **local l
 | **Crafting** | Crafts heals, grenades, ammo, then any gear it can make at its level (Rare and better). |
 | **Errands** | Sells anything useless to the nearest vendor (never a ripperdoc), buys heals, grenades and ammo, visits the **ripperdoc** to install better cyberware when rich enough. |
 | **Progression** | Spends attribute and perk points (melee build: Body, Reflexes, Cool). |
-| **Life** | Answers incoming **phone calls**, listens to the **radio** now and then (random station). |
+| **Life** | Answers **phone calls**, reads and answers **text messages**, listens to the **radio** now and then (random station), summons one of V's vehicles at random, uses **fast-travel terminals**, **swims** without drowning, visits the mirror once a month, buys and learns **crafting specs**. |
+| **Temperament** | Configurable: courage (cautious / balanced / bold), combat style (melee / mixed / ranged), aggressiveness (defensive / normal / hunter). The quest **tracked by the player** takes priority over everything else. |
 
 ---
 
@@ -184,6 +185,8 @@ Optional `config.json`, next to the exe or in `%APPDATA%\CyberpunkAgent\`:
 
 Everything is auto-detected when a key is missing (Steam through the registry and `libraryfolders.vdf`, GOG and Epic at their usual locations, Ollama on the PATH). The key is never written to the logs (`--config` shows it masked). Calls are short (a few dozen tokens, JSON answers); if the provider is down, the agent falls back to its rules.
 
+`bench_llm.py` compares models on the game's own decision prompts: gpt-4o-mini 9/11 (1.6 s), llama3.2 8/11 (0.3 s), qwen2.5:14b 7/11 (0.6 s). A bigger model does not help much: the rules do most of the work, llama3.2 is enough.
+
 Behaviour tuning (constants at the top of the modules):
 
 | File | Constant | Role |
@@ -212,7 +215,6 @@ Attach these three files to any bug report.
 
 - **Races** (Beat on the Brat by car, street races): autodrive does not race.
 - **Breach Protocol**: terminals are detected, the mini-game is not solved yet.
-- **Text messages (SMS)**: detected, not answered yet.
 - **Complex interiors** (elevators, locked doors): the escape routine often works, not always.
 - **High-level areas**: V flees and avoids the area afterwards, but can die when caught between several groups.
 - **Language**: prompt keywords are French. Other languages need `DOOR_WORDS`, `NO_GRAB`, `HEAL_WORDS`, `ALCOHOL` adjusted.

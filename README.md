@@ -43,7 +43,8 @@ Un agent autonome qui joue à **Cyberpunk 2077** à votre place, avec un **modè
 | **Craft** | Fabrique soins, grenades, munitions, puis tout l'équipement faisable à son niveau (Rare et mieux). |
 | **Courses** | Va vendre tout ce qui ne sert pas au marchand le plus proche (jamais un ripperdoc), achète soins, grenades et munitions, va chez le **charcudoc** poser du meilleur cyberware quand il est assez riche. |
 | **Progression** | Dépense les points d'attribut et de perk (build mêlée : Corps, Réflexes, Sang-froid). |
-| **Vie** | Répond aux **appels** entrants, écoute la **radio** de temps en temps (station au hasard), appelle au hasard l'un de ses véhicules, voyage rapide en dernier recours. |
+| **Vie** | Répond aux **appels**, lit et répond aux **SMS**, écoute la **radio** de temps en temps (station au hasard), appelle au hasard l'un de ses véhicules, utilise les **bornes de voyage rapide**, **nage** sans se noyer, passe au miroir une fois par mois, achète et apprend des **plans de craft**. |
+| **Tempérament** | Réglable : courage (prudent / équilibré / téméraire), style de combat (mêlée / mixte / distance), agressivité (défensif / normal / chasseur). La **quête suivie** par le joueur est prioritaire sur tout le reste. |
 
 ---
 
@@ -187,6 +188,8 @@ Exemple avec OpenAI :
 ```
 
 La clé est lue dans `config.json` ou dans la variable d'environnement ; elle n'est jamais écrite dans les journaux (`--config` l'affiche masquée). Les appels sont courts (quelques dizaines de jetons, réponse JSON), donc rapides même via internet ; en cas de panne réseau, l'agent retombe sur ses règles. Vérification : `CyberpunkAgent.exe --check` fait un appel de test au fournisseur choisi.
+
+Le banc `bench_llm.py` compare des modèles sur les décisions du jeu : gpt-4o-mini 9/11 (1,6 s), llama3.2 8/11 (0,3 s), qwen2.5:14b 7/11 (0,6 s). Un modèle plus gros n'apporte pas grand-chose : les règles font l'essentiel, llama3.2 suffit.
 
 Réglages de comportement (constantes en tête des modules, à ajuster si vous le souhaitez) :
 
