@@ -216,6 +216,12 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
                 r = motion.walk_to(vendor['x'], vendor['y'], timeout=30.0, stop=stop)
             finally:
                 motion.ARRIVE_M = old
+        if not r.get('ok') and d0 >= 40.0:
+            # quartier sans maillage (Kabuki : 12 h d echecs) : voyage rapide vers le point le plus proche du marchand
+            ft = nav.fast_travel_to(vendor['x'], vendor['y'], log=log, min_gain_m=300.0)
+            log(f"  [vente] voyage rapide : {('arrive a ' + str(ft.get('point'))) if ft.get('ok') else ft.get('reason')}")
+            if ft.get('ok'):
+                r = nav.goto(lambda: nav.request_path_to(vendor['x'], vendor['y'], vendor.get('z')), arrive_m=2.5, max_legs=8, timeout=180.0, stop=stop, log=log)
         if not r.get('ok'):
             return {'ok': False, 'reason': f"marchand non atteint ({r.get('reason')})", 'seconds': time.perf_counter() - t0}
     # trouver l invite du marchand : petit balayage du regard
