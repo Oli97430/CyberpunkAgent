@@ -1767,8 +1767,18 @@ local function handleCommand(player, cmd)
         local jm = Game.GetJournalManager()
         local entry = nil
         pcall(function() entry = c.contactEntry end)
-        if not entry then pcall(function() entry = jm:GetEntry(c.id) end) end
-        if not entry then resp.reason = 'entree de contact introuvable'; journal('FAIL sms_read : ' .. resp.reason); return resp end
+        -- c.id est l identifiant du contact dans le journal (ex. « coach », « viktor ») : chemin « contacts/<id> »
+        local tried = {}
+        for _, path in ipairs({ 'contacts/' .. tostring(c.id), tostring(c.id), 'contacts/' .. tostring(c.contactId) }) do
+            if entry then break end
+            local okE, e = pcall(function() return jm:GetEntryByString(path) end)
+            tried[#tried + 1] = path .. '=' .. tostring(okE and e ~= nil) .. (okE and '' or (' err:' .. tostring(e)))
+            if okE and e then entry = e end
+        end
+        if not entry then
+            resp.reason = 'entree de contact introuvable (' .. table.concat(tried, ' ; ') .. ')'
+            journal('FAIL sms_read : ' .. resp.reason); return resp
+        end
         local okM, r1, r2, r3 = pcall(function() return jm:GetMessagesAndChoices(entry, JournalRequestStateFilter.Any) end)
         if not okM then
             okM, r1, r2, r3 = pcall(function() return jm:GetMessagesAndChoices(entry) end)
