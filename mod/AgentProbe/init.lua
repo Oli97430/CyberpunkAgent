@@ -1730,8 +1730,23 @@ local function handleCommand(player, cmd)
             local c = data[i]
             local rec = { i = i }
             pcall(function() rec.name = GetLocalizedText(tostring(c.localizedName)) end)
-            pcall(function() rec.unread = c.unreadMessages end)
-            pcall(function() rec.count = c.messagesCount end)
+            pcall(function()
+                local u = c.unreadMessages
+                if type(u) == 'table' then u = #u end
+                rec.unread = tonumber(u) or 0
+            end)
+            pcall(function()
+                local n = c.messagesCount
+                if type(n) == 'table' then n = #n end
+                rec.count = tonumber(n) or 0
+            end)
+            if i == 1 then
+                -- sonde (une fois) : champs disponibles sur ContactData
+                for _, fn in ipairs({ 'contactId', 'localizedName', 'unreadMessages', 'messagesCount', 'playerCanReply', 'hasMessages', 'lastMesssagePreview', 'activeReplyOptions', 'contactEntry', 'id', 'timeStamp', 'isCallable' }) do
+                    local okF, v = pcall(function() return c[fn] end)
+                    journal(string.format('OK   contact[1].%s -> %s / %s (%s)', fn, tostring(okF), tostring(v), type(v)))
+                end
+            end
             pcall(function() rec.can_reply = c.playerCanReply end)
             pcall(function() rec.preview = GetLocalizedText(tostring(c.lastMesssagePreview)) end)
             pcall(function() rec.has_replies = (type(c.activeReplyOptions) == 'table') and #c.activeReplyOptions or nil end)
@@ -1739,7 +1754,9 @@ local function handleCommand(player, cmd)
             out[#out + 1] = rec
         end
         resp.ok, resp.contacts = true, out
-        journal(string.format('OK   sms_list : %d contacts, %d non lus', #out, (function() local n = 0; for _, r in ipairs(out) do n = n + (r.unread or 0) end; return n end)()))
+        local nUnread = 0
+        for _, r in ipairs(out) do nUnread = nUnread + (tonumber(r.unread) or 0) end
+        journal(string.format('OK   sms_list : %d contacts, %d non lus', #out, nUnread))
         return resp
     elseif cmd.cmd == 'sms_read' then
         -- messages et choix de reponse d un contact (index de sms_list) : GetMessagesAndChoices(contactEntry, filter)
@@ -1840,6 +1857,7 @@ local function handleCommand(player, cmd)
             pcall(function() rec.name = GetLocalizedTextByKey(p:GetPointDisplayName()) end)
             if not rec.name or rec.name == '' then pcall(function() rec.name = GetLocalizedText(tostring(p:GetPointDisplayName())) end) end
             pcall(function() rec.district = GetLocalizedTextByKey(p:GetDistrictDisplayName()) end)
+            if rec.district and rec.district:find('LocKey') then pcall(function() rec.district = GetLocalizedText(tostring(p:GetDistrictDisplayName())) end) end
             pcall(function() rec.record = TDBID.ToStringDEBUG(p.pointRecord) end)
             -- POSITION : via le mappin du point (champ mappinID, sonde du 13/09)
             pcall(function()
