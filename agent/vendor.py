@@ -52,7 +52,18 @@ def pick_vendor(vendors: list[dict], prefer: str | None = None) -> dict | None:
 
 
 def vendor_stock() -> dict | None:
-    return nav._wait(nav._send({'cmd': 'vendor_stock'}), timeout=6.0)
+    """Stock du marchand present. Garde-fou : si le mod a pris V lui-meme pour le marchand (vieux mod : le
+    joueur n etait pas exclu de la recherche), on refuse -> sinon « vendre » donnait de l argent a V pour
+    ses propres objets."""
+    r = nav._wait(nav._send({'cmd': 'vendor_stock'}), timeout=6.0)
+    if r and r.get('ok'):
+        from . import inventory
+        name = str(r.get('vendor') or '').strip()
+        n_items = len(r.get('items') or [])
+        inv = inventory.fetch() or {}
+        if name in ('V', '') or n_items == len(inv.get('items') or []):
+            return {'ok': False, 'reason': f'le « marchand » est V lui-meme ({name or "?"}, {n_items} articles) : recharge le mod'}
+    return r
 
 
 def buy(index: int, qty: int = 1) -> dict | None:
