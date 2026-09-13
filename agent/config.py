@@ -134,8 +134,15 @@ class Config:
         self.language = user.get('language', 'fr')
         # comportements activables (panneau de configuration / fenetre in-game) : tout est actif par defaut
         feats = user.get('features') or {}
-        self.features = {k: bool(feats.get(k, True)) for k in ('radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs')}
+        self.features = {k: bool(feats.get(k, True)) for k in ('radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'fasttravel', 'phone', 'sms')}
         self.minutes = int(user.get('minutes') or 20)
+        # temperament : courage (prudent / equilibre / temeraire), style de combat (melee / mixte / distance),
+        # agressivite (defensif = ne se bat que s il est attaque ; normal ; chasseur = attaque tout hostile en vue)
+        self.courage = str(user.get('courage') or 'temeraire').lower()
+        self.style = str(user.get('style') or 'melee').lower()
+        self.aggro = str(user.get('aggro') or 'normal').lower()
+        # seuils derives du courage : (hostiles pour EVITER, hostiles pour EVITER si vie < 60, hostiles pour FUIR, vie mini pour SECOURIR, portee d engagement m)
+        self.courage_t = {'prudent': (5, 4, 5, 80, 25), 'equilibre': (6, 5, 6, 60, 25), 'temeraire': (8, 7, 8, 40, 35)}.get(self.courage, (8, 7, 8, 40, 35))
         self.log_file = DATA_DIR / 'brain_log.txt'
         self.deaths_file = DATA_DIR / 'deaths.json'
 
@@ -147,7 +154,7 @@ class Config:
                 'user_settings': str(self.user_settings), 'ollama_exe': self.ollama_exe, 'ollama_url': self.ollama_url,
                 'model': self.model, 'provider': self.provider, 'api_key': ('***' if self.api_key else None),
                 'openai_model': self.openai_model, 'anthropic_model': self.anthropic_model, 'features': self.features,
-                'minutes': self.minutes, 'data_dir': str(DATA_DIR)}
+                'minutes': self.minutes, 'courage': self.courage, 'style': self.style, 'aggro': self.aggro, 'data_dir': str(DATA_DIR)}
 
 
 CFG = Config()

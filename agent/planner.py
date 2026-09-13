@@ -116,11 +116,19 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
     near45 = [e for e in hostiles if e['d'] < 45]
     # V n est pas un couard : il evite seulement les groupes vraiment trop gros pour un solo (ou quand il
     # est deja bien entame). 2 a 5 hostiles = il se bat (il a gagne ces combats), 6+ = trop.
-    if len(near45) >= 6 or (len(near45) >= 5 and hp0 < 60) or (len(near45) >= 4 and hp0 < 35):
+    from .config import CFG as _C
+    T_AVOID, T_AVOID_HURT, _, T_RESCUE_HP, ENGAGE_R = _C.courage_t
+    if len(near45) >= T_AVOID or (len(near45) >= T_AVOID_HURT and hp0 < 60) or (len(near45) >= T_AVOID_HURT - 1 and hp0 < 35):
         return 'eviter', f'regle : {len(near45)} hostiles a < 45 m, vie {hp0:.0f} % -> zone trop dangereuse'
-    if hostiles and hostiles[0]['d'] < 25:
+    if _C.aggro == 'defensif':
+        hostiles_engage = [e for e in hostiles if e['d'] < 8]           # defensif : seulement au contact
+    elif _C.aggro == 'chasseur':
+        hostiles_engage = [e for e in hostiles if e['d'] < max(ENGAGE_R, 45)]
+    else:
+        hostiles_engage = [e for e in hostiles if e['d'] < ENGAGE_R]
+    if hostiles_engage:
         hp = st.get('hp'); hp = 100.0 if hp is None else hp
-        return 'attaquer', f"regle : hostile a {hostiles[0]['d']:.0f} m ({len(hostiles)} en vue)"
+        return 'attaquer', f"regle : hostile a {hostiles_engage[0]['d']:.0f} m ({len(hostiles)} en vue, {_C.aggro}/{_C.courage})"
     # AGRESSION a proximite : V peut choisir de jouer les sauveurs -> le modele tranche
     hp = st.get('hp'); hp = 100.0 if hp is None else hp
     aggr = aggressors(st)
@@ -135,7 +143,7 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
         spots = [(a['x'], a['y']) for a in aggr] + [(c['x'], c['y']) for c in crimes if c.get('x') is not None]
         if any(_q.near_danger(x, y) for x, y in spots):
             return 'objectif', 'regle : agression dans une zone deja jugee trop dangereuse -> on passe'
-        if (n_aggr <= 3 and hp >= 60) or (n_aggr <= 4 and hp >= 90):   # sauvetage en forme ; les renforts arrivent souvent
+        if (n_aggr <= 3 and hp >= T_RESCUE_HP) or (n_aggr <= 5 and hp >= 90):   # sauvetage selon le courage ; les renforts arrivent souvent
             return _decide_rescue(st, extra, n_aggr, near, timeout)
     if extra.get('dist_m') is None or extra['dist_m'] > 3000:
         return 'changer_quete', 'regle : objectif sans marqueur ou trop loin'

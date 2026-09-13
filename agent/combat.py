@@ -189,7 +189,8 @@ def engage(target: dict, stop=None, log=print, max_s: float = 25.0) -> bool:
     seq = None
     hacked = False
     st0 = motion.read_state() or {}
-    stealth = not st0.get('combat') and (target.get('d') or 0) > 4.0      # pas encore repere : on approche en DISCRETION
+    from .config import CFG as _C3
+    stealth = _C3.features.get('stealth', True) and not st0.get('combat') and (target.get('d') or 0) > 4.0   # pas encore repere : DISCRETION (option)
     crouched = False
     if stealth:
         kbm.act('crouch', 0.1); crouched = True; time.sleep(0.3)
@@ -332,8 +333,15 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             #    le groupe suit. Mieux vaut perdre l engagement que la partie (mort 20:55 face a 6).
             # fuite = vraiment submerge OU vie basse face a un groupe ; jamais sur le seul nombre (V n est pas un couard)
             # 6+ hostiles = on decroche TOUT DE SUITE (3 morts face a des groupes de 6 : 100 -> 41 % de vie en 5 s)
-            # la POLICE : on ne se bat pas, on file (les renforts sont sans fin)
-            want_flee = only_police or len(alive) >= 6 or (len(alive) >= 4 and hp < 35) or (len(alive) >= 2 and hp < 22)
+            # la POLICE : on ne se bat pas, on file (les renforts sont sans fin). Seuils de fuite selon le courage.
+            from .config import CFG as _C
+            T_FLEE = _C.courage_t[2]
+            if _C.courage == 'temeraire':
+                want_flee = only_police or (len(alive) >= T_FLEE and hp < 50) or (len(alive) >= 3 and hp < 22) or hp < 12
+            elif _C.courage == 'prudent':
+                want_flee = only_police or len(alive) >= T_FLEE or (len(alive) >= 3 and hp < 45) or (len(alive) >= 2 and hp < 30)
+            else:
+                want_flee = only_police or len(alive) >= T_FLEE or (len(alive) >= 4 and hp < 35) or (len(alive) >= 2 and hp < 22)
             if now < flee_until or (want_flee and now - last_flee_end > 4.0):
                 if now >= flee_until:
                     flee_until = now + 8.0; last_flee_end = flee_until; stats['fuites'] = stats.get('fuites', 0) + 1
@@ -381,11 +389,18 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
 
             # -- MODE A DISTANCE : cible loin ou en hauteur (drone/tourelle), si une arme a distance existe
             high = (e.get('z', st['z']) - st['z']) > 2.5
-            want_ranged = RANGED_SLOT is not None and (high or RANGED_MIN_M < e['d'] < RANGED_MAX_M)
+            from .config import CFG as _C2
+            if _C2.style == 'distance':
+                rmin, rback = 4.0, 2.5                    # arme a feu des 4 m : V est un tireur
+            elif _C2.style == 'mixte':
+                rmin, rback = 8.0, 5.0
+            else:
+                rmin, rback = RANGED_MIN_M, RANGED_BACK_M  # melee : arme a feu seulement loin / en hauteur
+            want_ranged = RANGED_SLOT is not None and (high or rmin < e['d'] < RANGED_MAX_M)
             if want_ranged and mode != 'ranged':
                 kbm.tap(RANGED_SLOT, 0.08); mode = 'ranged'; shots = 0; time.sleep(0.5)
                 log(f"  [combat] arme a distance (cible a {e['d']:.0f} m{', en hauteur' if high else ''})")
-            elif mode == 'ranged' and e['d'] <= RANGED_BACK_M and not high:
+            elif mode == 'ranged' and e['d'] <= rback and not high:
                 kbm.tap(MELEE_SLOT, 0.08); mode = 'melee'; time.sleep(0.4)
                 log('  [combat] retour au corps a corps')
             # l arme REELLEMENT tenue (export du mod) : si elle ne correspond pas au mode, on corrige (la touche

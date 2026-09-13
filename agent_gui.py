@@ -31,7 +31,20 @@ FEATURES = [('radio', 'Ecouter la radio de temps en temps'),
             ('rescue', 'Intervenir dans les agressions a proximite'),
             ('sell', 'Aller vendre la camelote et acheter des soins'),
             ('ripperdoc', 'Aller chez le charcudoc s optimiser (cyberware)'),
-            ('buffs', 'Se buffer avant et pendant le combat (nourriture, boissons, boosters)')]
+            ('buffs', 'Se buffer avant et pendant le combat (nourriture, boissons, boosters)'),
+            ('stealth', 'Approcher en discretion et eliminer furtivement quand V n est pas repere'),
+            ('fasttravel', 'Utiliser le voyage rapide (bornes) pour les objectifs lointains'),
+            ('phone', 'Repondre aux appels'),
+            ('sms', 'Lire et repondre aux SMS')]
+TEMPERAMENT = [('courage', 'Courage', [('prudent', 'Prudent : evite des 5 hostiles, fuit vite, secourt a 80 % de vie'),
+                                      ('equilibre', 'Equilibre : se bat jusqu a 5, fuit a 6, secourt a 60 %'),
+                                      ('temeraire', 'Temeraire : se bat jusqu a 7, ne fuit que presque mort, secourt a 40 %')]),
+               ('style', 'Style de combat', [('melee', 'Melee : katana / contondantes, arme a feu seulement loin ou en hauteur'),
+                                            ('mixte', 'Mixte : arme a feu des 8 m'),
+                                            ('distance', 'Distance : tireur, arme a feu des 4 m')]),
+               ('aggro', 'Agressivite', [('defensif', 'Defensif : ne se bat que s il est attaque ou au contact'),
+                                        ('normal', 'Normal : engage les hostiles a portee'),
+                                        ('chasseur', 'Chasseur : attaque tout hostile en vue (45 m)')])]
 
 
 def load() -> dict:
@@ -97,6 +110,15 @@ class App(tk.Tk):
             self.features[key] = v
             ttk.Checkbutton(frm, text=label, variable=v).grid(row=r, column=0, columnspan=3, sticky='w', padx=24)
 
+        self.temper: dict[str, tk.StringVar] = {}
+        for key, label, opts in TEMPERAMENT:
+            r += 1
+            ttk.Label(frm, text=label, font=('Segoe UI', 10, 'bold')).grid(row=r, column=0, columnspan=3, sticky='w', **pad)
+            v = tk.StringVar(value=cfg.get(key) or {'courage': 'temeraire', 'style': 'melee', 'aggro': 'normal'}[key])
+            self.temper[key] = v
+            for val, text in opts:
+                r += 1
+                ttk.Radiobutton(frm, text=text, value=val, variable=v).grid(row=r, column=0, columnspan=3, sticky='w', padx=24)
         r += 1
         ttk.Label(frm, text='Duree d une session (minutes)').grid(row=r, column=0, sticky='w', **pad)
         self.minutes = tk.StringVar(value=str(cfg.get('minutes') or 20))
@@ -124,7 +146,8 @@ class App(tk.Tk):
         d.update({'provider': self.provider.get(), 'model': self.model.get().strip() or 'llama3.2:latest',
                   'openai_model': self.openai_model.get().strip() or None, 'anthropic_model': self.anthropic_model.get().strip() or None,
                   'features': {k: bool(v.get()) for k, v in self.features.items()},
-                  'minutes': int(float(self.minutes.get() or 20))})
+                  'minutes': int(float(self.minutes.get() or 20)),
+                  **{k: v.get() for k, v in self.temper.items()}})
         key = self.api_key.get().strip()
         if key:
             d['api_key'] = key

@@ -2265,7 +2265,11 @@ end
 -- Ecrits dans agent_config.json (dossier du mod) ; l agent Python les lit en priorite.
 local ui = { open = false, provider = 1, key = '', model = 'llama3.2:latest', openai_model = 'gpt-4o-mini',
              anthropic_model = 'claude-haiku-4-5-20251001', minutes = 20, saved = '',
-             radio = true, driving = true, rescue = true, sell = true, ripperdoc = true, buffs = true }
+             radio = true, driving = true, rescue = true, sell = true, ripperdoc = true, buffs = true,
+             stealth = true, fasttravel = true, phone = true, sms = true, courage = 3, style = 1, aggro = 2 }
+local uiCourage = { 'prudent', 'equilibre', 'temeraire' }
+local uiStyle = { 'melee', 'mixte', 'distance' }
+local uiAggro = { 'defensif', 'normal', 'chasseur' }
 local uiProviders = { 'ollama', 'openai', 'anthropic' }
 local function uiLoad()
     local f = io.open('agent_config.json', 'r')
@@ -2280,15 +2284,20 @@ local function uiLoad()
     ui.anthropic_model = d.anthropic_model or ui.anthropic_model
     ui.minutes = d.minutes or ui.minutes
     if type(d.features) == 'table' then
-        for _, k in ipairs({ 'radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs' }) do
+        for _, k in ipairs({ 'radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'fasttravel', 'phone', 'sms' }) do
             if d.features[k] ~= nil then ui[k] = d.features[k] end
         end
     end
+    for i, v in ipairs(uiCourage) do if d.courage == v then ui.courage = i end end
+    for i, v in ipairs(uiStyle) do if d.style == v then ui.style = i end end
+    for i, v in ipairs(uiAggro) do if d.aggro == v then ui.aggro = i end end
 end
 local function uiSave()
     local d = { provider = uiProviders[ui.provider], api_key = ui.key, model = ui.model, openai_model = ui.openai_model,
                 anthropic_model = ui.anthropic_model, minutes = ui.minutes,
-                features = { radio = ui.radio, driving = ui.driving, rescue = ui.rescue, sell = ui.sell, ripperdoc = ui.ripperdoc, buffs = ui.buffs } }
+                courage = uiCourage[ui.courage], style = uiStyle[ui.style], aggro = uiAggro[ui.aggro],
+                features = { radio = ui.radio, driving = ui.driving, rescue = ui.rescue, sell = ui.sell, ripperdoc = ui.ripperdoc, buffs = ui.buffs,
+                             stealth = ui.stealth, fasttravel = ui.fasttravel, phone = ui.phone, sms = ui.sms } }
     local f = io.open('agent_config.json', 'w')
     if f then f:write(json.encode(d)); f:close(); ui.saved = 'enregistre ' .. os.date('%H:%M:%S') else ui.saved = 'echec d ecriture' end
 end
@@ -2317,6 +2326,18 @@ registerForEvent('onDraw', function()
         ui.sell = ImGui.Checkbox('Vendre la camelote / acheter des soins', ui.sell)
         ui.ripperdoc = ImGui.Checkbox('Charcudoc (cyberware)', ui.ripperdoc)
         ui.buffs = ImGui.Checkbox('Buffs avant le combat', ui.buffs)
+        ui.stealth = ImGui.Checkbox('Discretion (approche accroupie, elimination furtive)', ui.stealth)
+        ui.fasttravel = ImGui.Checkbox('Voyage rapide (bornes)', ui.fasttravel)
+        ui.phone = ImGui.Checkbox('Repondre aux appels', ui.phone)
+        ui.sms = ImGui.Checkbox('Lire et repondre aux SMS', ui.sms)
+        ImGui.Separator()
+        ImGui.Text('Temperament')
+        ImGui.Text('Courage :'); ImGui.SameLine()
+        for i, v in ipairs(uiCourage) do if ImGui.RadioButton(v, ui.courage == i) then ui.courage = i end; if i < #uiCourage then ImGui.SameLine() end end
+        ImGui.Text('Style :'); ImGui.SameLine()
+        for i, v in ipairs(uiStyle) do if ImGui.RadioButton(v .. '##s', ui.style == i) then ui.style = i end; if i < #uiStyle then ImGui.SameLine() end end
+        ImGui.Text('Agressivite :'); ImGui.SameLine()
+        for i, v in ipairs(uiAggro) do if ImGui.RadioButton(v .. '##a', ui.aggro == i) then ui.aggro = i end; if i < #uiAggro then ImGui.SameLine() end end
         ui.minutes = ImGui.InputInt('Duree de session (min)', ui.minutes)
         ImGui.Separator()
         if ImGui.Button('Enregistrer') then pcall(uiSave) end

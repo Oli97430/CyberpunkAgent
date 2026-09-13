@@ -183,7 +183,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
 
         # 0c. TELEPHONE : un appel entrant -> on repond (touche telephone maintenue), la conversation suit via le dialogue
         ph = st.get('phone') or {}
-        if ph.get('incoming') and time.perf_counter() - last_phone_t > 8.0 and not st.get('combat'):
+        if CFG.features.get('phone', True) and ph.get('incoming') and time.perf_counter() - last_phone_t > 8.0 and not st.get('combat'):
             last_phone_t = time.perf_counter()
             _log(f"TELEPHONE : appel entrant de « {ph.get('contact') or '?'} » -> V repond")
             kbm.act('phone', 0.9)
@@ -191,7 +191,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             time.sleep(1.5); continue
 
         # 0d. SMS : lecture et reponse (periodique, ou des qu un message arrive), hors combat
-        if not st.get('combat'):
+        if not st.get('combat') and CFG.features.get('sms', True):
             try:
                 n_sms = sms.check_and_reply(st, log=_log)
                 if n_sms:
@@ -574,7 +574,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             _log(f"conduite : {'arrive' if r.get('ok') else r.get('reason')}")
             if not r.get('ok') and r.get('reason') == 'embarquement echoue':
                 last_drive_t = time.perf_counter() + 360.0      # ici la moto ne vient pas / ne se monte pas : pas avant 10 min
-                if dist > 1500.0 and time.perf_counter() - last_ft_t > 600.0:
+                if dist > 1500.0 and time.perf_counter() - last_ft_t > 600.0 and CFG.features.get('fasttravel', True):
                     last_ft_t = time.perf_counter()
                     ft = nav.fast_travel_to(q0.get('mx'), q0.get('my'), log=_log)
                     _log(f"voyage rapide : {('arrive a ' + str(ft.get('point'))) if ft.get('ok') else ft.get('reason')}")
