@@ -1642,6 +1642,31 @@ local function handleCommand(player, cmd)
         resp.ok, resp.cls, resp.transferes, resp.noms, resp.methodes, resp.total = true, bestCls, moved, names, methods, listed
         journal(string.format('OK   loot : %s (%.1f m du point) -> %d/%d objet(s) [%s] %s', bestCls, bestD, moved, listed, table.concat(methods, ','), table.concat(names, ' | '):sub(1, 160)))
         return resp
+    elseif cmd.cmd == 'radio' then
+        -- RADIO (radioport) : x = 1 allumer, 0 eteindre, 2 station suivante. API PocketRadio (2.x), en pcall + journal.
+        journal('RUN  radio ' .. tostring(cmd.x))
+        local okR, pr = pcall(function() return player:GetPocketRadio() end)
+        if not okR or not pr then resp.reason = 'PocketRadio indisponible : ' .. tostring(pr); journal('FAIL radio : ' .. resp.reason); return resp end
+        local did = {}
+        if cmd.x == 1 then
+            if pcall(function() pr:TurnOn(false) end) then did[#did + 1] = 'TurnOn' else
+                if pcall(function() pr:TurnOn() end) then did[#did + 1] = 'TurnOn()' end
+            end
+        elseif cmd.x == 0 then
+            if pcall(function() pr:TurnOff() end) then did[#did + 1] = 'TurnOff' end
+        elseif cmd.x == 2 then
+            if pcall(function() pr:NextStation() end) then did[#did + 1] = 'NextStation' end
+        end
+        local station = nil
+        pcall(function() station = GetLocalizedText(tostring(pr:GetStationName())) end)
+        if not station or station == '' then pcall(function() station = tostring(pr:GetStationName()) end) end
+        if not station or station == '' then pcall(function() station = 'station ' .. tostring(pr:GetStationIndex()) end) end
+        local active = nil
+        pcall(function() active = pr:IsActive() end)
+        resp.ok, resp.station, resp.active, resp.methodes = (#did > 0), station, active, did
+        if #did == 0 then resp.reason = 'aucune methode radio acceptee' end
+        journal(string.format('OK   radio : [%s] station=%s active=%s', table.concat(did, ','), tostring(station), tostring(active)))
+        return resp
     elseif cmd.cmd == 'doors' then
         -- PORTES / DISPOSITIFS proches (< 15 m) : pour sortir d un ilot de maillage ferme (piece, local)
         journal('RUN  doors')

@@ -18,7 +18,7 @@ import math
 import time
 from pathlib import Path
 
-from . import buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, vendor
+from . import buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -125,6 +125,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             time.sleep(0.3); continue
         if paused_logged:
             paused_logged = False; _log('REPRISE (F11) : V rejoue'); plan.last_t = -99.0
+        # V aime ecouter la radio de temps a autre (hors combat, dialogue, vehicule) : c est lui qui choisit la station
+        try:
+            _st_r = motion.read_state() or {}
+            radio.tick(_st_r, log=_log, busy=bool(_st_r.get('combat') or (_st_r.get('dialog') or {}).get('choices') or _st_r.get('vehicle')))
+        except Exception as _e:
+            _log(f'  [radio] erreur : {_e}')
         # 0. jeu au premier plan ? sinon on ne touche a RIEN (les entrees iraient ailleurs)
         if not kbm.game_focused():
             kbm.release_all()
@@ -606,5 +612,6 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     stats['seconds'] = time.perf_counter() - t0
     if money_start is not None:
         stats['eddies_gagnes'] = inventory.MONEY - money_start
+    radio.turn_off(log=_log)
     _log(f'=== fin : {stats} ===')
     return stats
