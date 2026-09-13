@@ -169,7 +169,8 @@ def single_instance() -> bool:
 
 
 def main() -> None:
-    if not single_instance():
+    # le verrou mono-instance ne concerne que le JEU (--check / --config / --test restent possibles en parallele)
+    if not any(a in sys.argv[1:] for a in ('--check', '--config', '--test')) and not single_instance():
         print('Un agent CyberpunkAgent tourne deja (F12 pour l arreter). Cette instance se ferme.')
         if getattr(sys, 'frozen', False):
             time.sleep(4)
