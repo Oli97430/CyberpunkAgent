@@ -1001,7 +1001,7 @@ registerForEvent('onUpdate', function(dt)
         if not inCombat then
             pcall(function()
                 local qv = Game['TSQ_ALL;']()
-                qv.maxDistance = 25.0
+                qv.maxDistance = 150.0
                 qv.filterObjectByDistance = true
                 pcall(function() qv.testedSet = TargetingSet.Complete end)
                 local okV, partsV = Game.GetTargetingSystem():GetTargetParts(player, qv)
@@ -1021,7 +1021,7 @@ registerForEvent('onUpdate', function(dt)
                                     local rec = { x = vp.x, y = vp.y, z = vp.z, d = math.sqrt((vp.x - pos.x) ^ 2 + (vp.y - pos.y) ^ 2) }
                                     pcall(function() rec.name = GetLocalizedText(tostring(ent:GetDisplayName())) end)
                                     pcall(function() rec.player = ent:IsPlayerVehicle() end)
-                                    list[#list + 1] = rec
+                                    if rec.player or rec.d <= 25.0 then list[#list + 1] = rec end   -- les voitures des inconnus : 25 m ; la sienne : 150 m
                                 end
                             end
                         end
@@ -1243,6 +1243,8 @@ end
 
 local lastDoors = {}                         -- entites porte/dispositif par index de la derniere liste `doors`
 local lastFastTravel = {}                    -- points de voyage rapide par index
+local lastContacts = {}                      -- contacts du telephone (sms_list)
+local lastChoices = {}                       -- choix de reponse SMS (sms_read)
 local lastVendorStock = {}                   -- ItemID par index de la derniere liste de stock marchand
 -- marchand PRESENT (< 6 m) : une entree par entite, priorite a IsVendor()
 local function findNearbyVendor(player)
@@ -1708,6 +1710,87 @@ local function handleCommand(player, cmd)
         resp.ok, resp.cls, resp.transferes, resp.noms, resp.methodes, resp.total = true, bestCls, moved, names, methods, listed
         journal(string.format('OK   loot : %s (%.1f m du point) -> %d/%d objet(s) [%s] %s', bestCls, bestD, moved, listed, table.concat(methods, ','), table.concat(names, ' | '):sub(1, 160)))
         return resp
+    elseif cmd.cmd == 'sms_list' then
+        -- SMS : contacts du telephone avec messages non lus et options de reponse (JournalManager.GetContactDataArray)
+        journal('RUN  sms_list')
+        local jm = Game.GetJournalManager()
+        local okD, a, b = pcall(function() return jm:GetContactDataArray(true, true) end)
+        local data = nil
+        if okD then
+            if type(a) == 'table' then data = a elseif type(b) == 'table' then data = b end
+        end
+        if not data then resp.reason = 'GetContactDataArray : ' .. tostring(okD) .. '/' .. tostring(a) .. '/' .. tostring(b); journal('FAIL sms_list : ' .. resp.reason); return resp end
+        local out = {}
+        lastContacts = {}
+        for i = 1, #data do
+            local c = data[i]
+            local rec = { i = i }
+            pcall(function() rec.name = GetLocalizedText(tostring(c.localizedName)) end)
+            pcall(function() rec.unread = c.unreadMessages end)
+            pcall(function() rec.count = c.messagesCount end)
+            pcall(function() rec.can_reply = c.playerCanReply end)
+            pcall(function() rec.preview = GetLocalizedText(tostring(c.lastMesssagePreview)) end)
+            pcall(function() rec.has_replies = (type(c.activeReplyOptions) == 'table') and #c.activeReplyOptions or nil end)
+            lastContacts[i] = c
+            out[#out + 1] = rec
+        end
+        resp.ok, resp.contacts = true, out
+        journal(string.format('OK   sms_list : %d contacts, %d non lus', #out, (function() local n = 0; for _, r in ipairs(out) do n = n + (r.unread or 0) end; return n end)()))
+        return resp
+    elseif cmd.cmd == 'sms_read' then
+        -- messages et choix de reponse d un contact (index de sms_list) : GetMessagesAndChoices(contactEntry, filter)
+        local c = lastContacts[cmd.x or -1]
+        if not c then resp.reason = 'index inconnu (refaire sms_list)'; return resp end
+        journal(string.format('RUN  sms_read idx=%d', cmd.x))
+        local jm = Game.GetJournalManager()
+        local entry = nil
+        pcall(function() entry = c.contactEntry end)
+        if not entry then pcall(function() entry = jm:GetEntry(c.id) end) end
+        if not entry then resp.reason = 'entree de contact introuvable'; journal('FAIL sms_read : ' .. resp.reason); return resp end
+        local okM, r1, r2, r3 = pcall(function() return jm:GetMessagesAndChoices(entry, JournalRequestStateFilter.Any) end)
+        if not okM then
+            okM, r1, r2, r3 = pcall(function() return jm:GetMessagesAndChoices(entry) end)
+        end
+        journal(string.format('OK   sms_read : GetMessagesAndChoices -> %s / %s / %s / %s', tostring(okM), type(r1), type(r2), type(r3)))
+        local msgs, choices = {}, {}
+        local function textOf(e)
+            local t = nil
+            pcall(function() t = GetLocalizedText(tostring(e:GetText())) end)
+            if not t then pcall(function() t = tostring(e:GetText()) end) end
+            return t or '?'
+        end
+        for _, arr in ipairs({ r1, r2, r3 }) do
+            if type(arr) == 'table' then
+                for k = 1, #arr do
+                    local e = arr[k]
+                    local cls = ''
+                    pcall(function() cls = tostring(e:GetClassName()) end)
+                    if cls:find('Choice') then
+                        choices[#choices + 1] = { i = #choices + 1, text = textOf(e) }
+                        lastChoices[#choices] = e
+                    else
+                        local sender = nil
+                        pcall(function() sender = e:IsPlayerSender() end)
+                        msgs[#msgs + 1] = { text = textOf(e), from_v = sender }
+                    end
+                end
+            end
+        end
+        resp.ok, resp.messages, resp.choices = true, msgs, choices
+        journal(string.format('OK   sms_read : %d messages, %d choix', #msgs, #choices))
+        return resp
+    elseif cmd.cmd == 'sms_reply' then
+        -- repondre : activer l entree de choix (ce que fait l interface du telephone)
+        local e = lastChoices[cmd.x or -1]
+        if not e then resp.reason = 'choix inconnu (refaire sms_read)'; return resp end
+        journal(string.format('RUN  sms_reply idx=%d', cmd.x))
+        local jm = Game.GetJournalManager()
+        local okC = pcall(function() jm:ChangeEntryState(e, gameJournalEntryState.Active, JournalNotifyOption.Notify) end)
+        if not okC then okC = pcall(function() jm:ChangeEntryState(e, gameJournalEntryState.Active, JournalNotifyOption.DoNotNotify) end) end
+        resp.ok = okC
+        if not okC then resp.reason = 'ChangeEntryState refuse' end
+        journal('OK   sms_reply : ' .. tostring(okC))
+        return resp
     elseif cmd.cmd == 'fast_travel_points' then
         -- POINTS DE VOYAGE RAPIDE connus (FastTravelSystem est un ScriptableSystem, pas un membre de GameInstance)
         journal('RUN  fast_travel_points')
@@ -1735,8 +1818,8 @@ local function handleCommand(player, cmd)
         for i = 1, #pts do
             local p = pts[i]
             local rec = { i = i }
-            if i <= 3 then
-                -- sondes : quelles methodes/champs ce FastTravelPointData expose-t-il ?
+            if i <= 0 then
+                -- sondes (desactivees : resultats connus, voir journal du 13/09 12:12)
                 for _, mn in ipairs({ 'GetPointDisplayName', 'GetDistrictDisplayName', 'GetMarkerPosition', 'GetMappinID', 'GetPointRecord', 'GetMarkerRef', 'IsEnabled', 'GetTrackingType' }) do
                     local okM, v = pcall(function() return p[mn](p) end)
                     journal(string.format('OK   ftpoint[%d].%s -> %s / %s', i, mn, tostring(okM), tostring(v)))
@@ -1750,8 +1833,25 @@ local function handleCommand(player, cmd)
                     end
                 end
             end
-            pcall(function() rec.name = GetLocalizedText(tostring(p:GetPointDisplayName())) end)
+            pcall(function() rec.name = GetLocalizedTextByKey(p:GetPointDisplayName()) end)
+            if not rec.name or rec.name == '' then pcall(function() rec.name = GetLocalizedText(tostring(p:GetPointDisplayName())) end) end
+            pcall(function() rec.district = GetLocalizedTextByKey(p:GetDistrictDisplayName()) end)
             pcall(function() rec.record = TDBID.ToStringDEBUG(p.pointRecord) end)
+            -- POSITION : via le mappin du point (champ mappinID, sonde du 13/09)
+            pcall(function()
+                local mp = Game.GetMappinSystem():GetMappin(p.mappinID)
+                if mp then
+                    local w = mp:GetWorldPosition()
+                    if w and (w.x ~= 0 or w.y ~= 0) then rec.x, rec.y, rec.z = w.x, w.y, w.z; rec.d = math.sqrt((w.x - pos.x) ^ 2 + (w.y - pos.y) ^ 2) end
+                end
+            end)
+            if not rec.x then
+                -- repli : resolution du NodeRef du marqueur
+                pcall(function()
+                    local ent = Game.FindEntityByID(Game.GetEntityIDFromNodeRef(p.markerRef))
+                    if ent then local w = ent:GetWorldPosition(); rec.x, rec.y, rec.z = w.x, w.y, w.z; rec.d = math.sqrt((w.x - pos.x) ^ 2 + (w.y - pos.y) ^ 2) end
+                end)
+            end
             pcall(function() rec.district = tostring(p:GetDistrictDisplayName()) end)
             pcall(function()
                 local w = p:GetMarkerPosition()

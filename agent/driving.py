@@ -56,7 +56,8 @@ def summon_and_board(stop=None, log=print) -> bool:
     else:
         log(f"  [conduite] appel du vehicule (touche) : {(rv or {}).get('reason', 'mod muet')}")
         kbm.act('callvehicle', 0.15)
-    # attendre la voiture (jusqu a 30 s) : un vehicule du joueur, ou le plus proche a < 25 m
+    # attendre la voiture (jusqu a 30 s) : le vehicule du joueur arrive sur la ROUTE la plus proche (jusqu a 150 m) ;
+    # on ira le rejoindre par le maillage
     car = None
     t0 = time.perf_counter()
     while time.perf_counter() - t0 < 30.0:

@@ -109,7 +109,29 @@ def fast_travel_to(tx: float, ty: float, log=print, min_gain_m: float = 800.0) -
     if d_now - d_after < min_gain_m:
         return {'ok': False, 'reason': f'pas de point utile (gain {d_now - d_after:.0f} m)'}
     log(f"  [voyage] « {best.get('name')} » ({best.get('district')}) a {d_after:.0f} m de l objectif (gain {d_now - d_after:.0f} m)")
+    # 1. tentative directe par script ; 2. sinon, marcher jusqu a la BORNE la plus proche et l utiliser (invite), puis re-essayer
     r2 = _wait(_send({'cmd': 'fast_travel', 'x': best['i']}), timeout=8.0)
+    time.sleep(4.0)
+    s_chk = motion.read_state()
+    if not (s_chk and math.hypot(s_chk['x'] - best['x'], s_chk['y'] - best['y']) < 60.0):
+        near = min(pts, key=lambda p: p.get('d', 1e9))
+        if near.get('d', 1e9) < 400.0:
+            log(f"  [voyage] borne la plus proche « {near.get('name')} » a {near['d']:.0f} m : V y va")
+            from . import input_kbm as kbm
+            rg = goto(lambda: request_path_to(near['x'], near['y'], near.get('z')), arrive_m=2.0, max_legs=8, timeout=150.0, log=log)
+            if not rg.get('ok'):
+                old = motion.ARRIVE_M; motion.ARRIVE_M = 2.0
+                try:
+                    motion.walk_to(near['x'], near['y'], timeout=25.0)
+                finally:
+                    motion.ARRIVE_M = old
+            s3 = motion.read_state() or {}
+            if s3 and math.hypot(s3['x'] - near['x'], s3['y'] - near['y']) < 4.0:
+                motion.turn_to(motion.bearing_to(s3['x'], s3['y'], near['x'], near['y']), timeout=2.0)
+                kbm.act('interact', 0.2); time.sleep(2.5)            # la borne ouvre la carte des voyages rapides
+                r2 = _wait(_send({'cmd': 'fast_travel', 'x': best['i']}), timeout=8.0)
+                time.sleep(2.0)
+                kbm.tap('ESC', 0.08)                                  # refermer la carte si le voyage n a pas eu lieu
     time.sleep(6.0)                                      # ecran de chargement
     for _ in range(40):
         s2 = motion.read_state()

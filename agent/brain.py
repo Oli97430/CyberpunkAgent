@@ -18,7 +18,7 @@ import math
 import time
 from pathlib import Path
 
-from . import buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, vendor
+from . import buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, sms, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -189,6 +189,15 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             kbm.act('phone', 0.9)
             stats['appels'] = stats.get('appels', 0) + 1
             time.sleep(1.5); continue
+
+        # 0d. SMS : lecture et reponse (periodique, ou des qu un message arrive), hors combat
+        if not st.get('combat'):
+            try:
+                n_sms = sms.check_and_reply(st, log=_log)
+                if n_sms:
+                    stats['sms'] = stats.get('sms', 0) + n_sms
+            except Exception as _e:
+                _log(f'  [sms] erreur : {_e}')
 
         if st.get('carrying') and kbm.ACTIONS.get('dropbody'):
             _log('V porte un corps : il le lache (il ne peut ni courir ni se battre ainsi)')
