@@ -58,6 +58,49 @@ def _reload_last_save(log) -> bool:
     return False
 
 
+def _approach_machine(tx: float, ty: float, dist: float, log, stop) -> bool:
+    """Au marqueur sans invite active : V avance jusqu a ~1 m du point exact, le regarde (regard un peu baisse),
+    balaie a gauche/droite et appuie des que l invite de la machine devient active (E court puis E long).
+    Lecon du 13/09 (Olivier) : « il s avance encore d un metre et c est bon »."""
+    log(f'au marqueur ({dist:.1f} m) sans invite : V s approche a 1 m et cherche la machine')
+    old_a = motion.ARRIVE_M; motion.ARRIVE_M = 0.9
+    try:
+        r = motion.walk_to(tx, ty, timeout=8.0, stop=stop)
+    finally:
+        motion.ARRIVE_M = old_a
+    s_c = motion.read_state() or {}
+    if not s_c:
+        return False
+    if not r.get('ok') and math.hypot(s_c['x'] - tx, s_c['y'] - ty) > 2.5:
+        # bloque a plus de 2,5 m : contourner (pas de cote) puis re-essayer une fois
+        for side in ('A', 'D'):
+            kbm.hold(side); time.sleep(0.6); kbm.release(side)
+            motion.walk_to(tx, ty, timeout=5.0, stop=stop)
+            s_c = motion.read_state() or s_c
+            if math.hypot(s_c['x'] - tx, s_c['y'] - ty) <= 2.5:
+                break
+    motion.turn_to(motion.bearing_to(s_c['x'], s_c['y'], tx, ty), timeout=2.0, stop=stop)
+    for dyaw, dpitch in ((0, 150), (-25, 0), (50, 0), (-25, -250), (0, 100), (0, 150)):
+        if dyaw:
+            motion.turn_by(dyaw, timeout=1.2, stop=stop)
+        if dpitch:
+            for _ in range(abs(dpitch) // 50):
+                kbm.look(0, 50 if dpitch > 0 else -50); time.sleep(0.02)
+        time.sleep(0.45)
+        s_p = motion.read_state() or {}
+        ip = s_p.get('interact') or {}
+        chp = str((ip.get('choices') or [''])[0]).lower()
+        if chp and not any(w in chp for w in ('saisir', 'porter', 'prendre le contr', 'enfourcher')):
+            log(f"  machine trouvee : « {ip['choices'][0]} » -> E")
+            kbm.act('interact', 0.15); time.sleep(1.0)
+            s_q = motion.read_state() or {}
+            if (s_q.get('interact') or {}).get('choices'):
+                kbm.act('interact', 1.0)
+            return True
+    log('  rien a activer ici : on continue')
+    return False
+
+
 def _threat_near(st: dict) -> bool:
     """Interrompt un trajet : combat, ou hostile vivant a moins de ENGAGE_M."""
     if st.get('combat'):
@@ -397,6 +440,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         if alt_target is not None:
             dist = math.hypot(st['x'] - alt_target['x'], st['y'] - alt_target['y'])
             if dist < ARRIVE_M or time.perf_counter() - alt_target['t0'] > 900:
+                if dist < ARRIVE_M and not st.get('combat') and not ((st.get('interact') or {}).get('choices')):
+                    if _approach_machine(alt_target['x'], alt_target['y'], dist, _log, stop):   # console / donneur de quete
+                        stats['interactions'] += 1
+                        last_close_t = time.perf_counter()
+                        time.sleep(1.5)
                 _log('cible alternative atteinte ou expiree : retour a la quete suivie')
                 quests.mark_visited(alt_target.get('hash'))
                 alt_target = None
@@ -584,39 +632,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             if tries == 3 or (vehicle_prompt and ikey not in obj_inter_tries):
                 obj_inter_tries[ikey] = (4, t_first)
                 _log(f"invite « {inter['choices'][0]} » ignoree ({'vehicule' if vehicle_prompt else 'sans effet apres 3 essais'})")
-        # 5a. ARRIVE au marqueur sans invite : les machines a quetes (bornes, terminaux, distributeurs) exigent d etre
-        #     a ~1 m et de les regarder -> V avance encore d un metre, face au marqueur, regard legerement baisse,
-        #     petit balayage, et appuie des que l invite devient active (une fois par 30 s)
-        if dist is not None and dist < ARRIVE_M + 2.0 and not (inter and inter.get('choices'))                 and time.perf_counter() - last_close_t > 30.0 and not st.get('combat'):
+        # 5a. ARRIVE au marqueur (< 7 m) sans invite : machines a quetes (bornes, terminaux, distributeurs) -> on s approche a 1 m
+        if dist is not None and dist < ARRIVE_M + 4.0 and not (inter and inter.get('choices'))                 and time.perf_counter() - last_close_t > 30.0 and not st.get('combat'):
             last_close_t = time.perf_counter()
             tx, ty = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
             if tx is not None:
-                _log(f'au marqueur ({dist:.1f} m) sans invite : V s approche a 1 m et cherche la machine')
-                old_a = motion.ARRIVE_M; motion.ARRIVE_M = 0.9
-                try:
-                    motion.walk_to(tx, ty, timeout=6.0, stop=stop)
-                finally:
-                    motion.ARRIVE_M = old_a
-                s_c = motion.read_state() or st
-                motion.turn_to(motion.bearing_to(s_c['x'], s_c['y'], tx, ty), timeout=2.0, stop=stop)
-                pressed = False
-                for dyaw, dpitch in ((0, 150), (-25, 0), (50, 0), (-25, -250), (0, 100)):
-                    if dyaw:
-                        motion.turn_by(dyaw, timeout=1.2, stop=stop)
-                    if dpitch:
-                        for _ in range(abs(dpitch) // 50):
-                            kbm.look(0, 50 if dpitch > 0 else -50); time.sleep(0.02)
-                    time.sleep(0.4)
-                    s_p = motion.read_state() or {}
-                    ip = s_p.get('interact') or {}
-                    chp = str((ip.get('choices') or [''])[0]).lower()
-                    if chp and not any(w in chp for w in ('saisir', 'porter', 'prendre le contr', 'enfourcher')):
-                        _log(f"  machine trouvee : « {ip['choices'][0]} » -> E")
-                        kbm.act('interact', 0.15); time.sleep(1.0); kbm.act('interact', 1.0)
-                        stats['interactions'] += 1; pressed = True
-                        break
-                if not pressed:
-                    _log('  rien a activer ici : on continue')
+                if _approach_machine(tx, ty, dist, _log, stop):
+                    stats['interactions'] += 1
                 continue
         if dist is not None and dist > 500.0 and alt_target is None and kbm.ACTIONS.get('autodrive') and CFG.features.get('driving', True) \
                 and time.perf_counter() - last_drive_t > 240.0:
