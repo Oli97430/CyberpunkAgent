@@ -136,7 +136,7 @@ def answer_once(stop=None, log=print) -> dict | None:
         return None
     title, choices = d.get('title', '?'), d['choices']
     low_t = str(title).lower(); low_c = ' '.join(choices).lower()
-    is_stand = any(w in low_t for w in ('vendeur', 'vendor', 'marchand', 'stand'))
+    is_stand = any(w in low_t for w in ('vendeur', 'vendor', 'marchand', 'stand', 'netrunner', 'ripperdoc', 'charcudoc', 'armurier', 'tailleur', 'médecin', 'medecin'))
     buy_words = ('apporte-moi', 'a boire', 'à boire', 'a manger', 'à manger', 'commander', 'un verre')
     if is_stand or all(any(w in c.lower() for w in buy_words) for c in choices):
         log(f'  [dialog] stand « {title} » : on ne commande rien, on recule')

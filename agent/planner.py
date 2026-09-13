@@ -148,7 +148,12 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
     if extra.get('dist_m') is None or (extra['dist_m'] > 3000 and not _C.focus_tracked):
         return 'changer_quete', 'regle : objectif sans marqueur ou trop loin'
     if not st.get('interact'):
-        cands = [n for n in named_npcs(st) if n['d'] < 12 and extra.get('approached', lambda k: False)(n) is False]
+        # aborder un PNJ nomme : s il est cite dans l objectif de quete (« Parler a Johnny » -> Johnny), ou, sans quete
+        # suivie, n importe quel PNJ nomme non generique (exploration). Plus d « Artiste » ou de « Netrunner » au hasard.
+        qtxt = str((st.get('quest') or {}).get('text') or '').lower()
+        has_quest = bool((st.get('quest') or {}).get('hasMappin'))
+        cands = [n for n in named_npcs(st) if n['d'] < 12 and extra.get('approached', lambda k: False)(n) is False
+                 and ((str(n.get('name') or '').lower().split()[0] in qtxt) or not has_quest)]
         if cands:
             return 'aborder', f"regle : PNJ nomme « {cands[0].get('name')} » a {cands[0]['d']:.0f} m"
         return 'objectif', 'regle : rien d autre a faire ici'
