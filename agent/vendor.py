@@ -41,6 +41,7 @@ def pick_vendor(vendors: list[dict], prefer: str | None = None) -> dict | None:
     if not vendors:
         return None
     near = [v for v in vendors if v.get('dist', 1e9) <= MAX_VENDOR_M and (prefer == 'ripper' or 'ripper' not in (v.get('variant') or '').lower())
+            and not any(w in (v.get('variant') or '').lower() for w in ('apartment', 'wardrobe'))
             and time.perf_counter() - _failed.get((round(v.get('x', 0)), round(v.get('y', 0))), -1e9) > 900.0]
     if not near:
         return None

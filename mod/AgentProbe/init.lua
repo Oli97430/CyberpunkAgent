@@ -1293,6 +1293,15 @@ local function buyPrice(vendor, player, id)
     if not price then
         pcall(function() price = math.floor(Game.GetTransactionSystem():GetItemData(vendor, id):GetStatValueByType(gamedataStatType.Price)) end)
     end
+    if not price or price <= 0 then
+        -- le stat Price est souvent nul : estimation par qualite (et x5 pour le cyberware), pour ne JAMAIS acheter gratuitement
+        local q, t = 'Common', ''
+        pcall(function() q = tostring(RPGManager.GetItemDataQuality(Game.GetTransactionSystem():GetItemData(vendor, id))):gsub('gamedataQuality : ', ''):gsub(' %(%d+%)', '') end)
+        pcall(function() t = tostring(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):ItemType():Type()) end)
+        local base = ({ Common = 300, Uncommon = 900, Rare = 2500, Epic = 7000, Legendary = 20000 })[q] or 600
+        if t:find('Cyb') then base = base * 5 end
+        price = base
+    end
     return price or 0
 end
 

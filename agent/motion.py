@@ -208,6 +208,7 @@ def try_door(st: dict) -> bool:
 
 
 def approach_machine(tx: float, ty: float, dist: float, log, stop) -> bool:
+    global ARRIVE_M
     """Au marqueur sans invite active : V avance jusqu a ~1 m du point exact, le regarde (regard un peu baisse),
     balaie a gauche/droite et appuie des que l invite de la machine devient active (E court puis E long).
     Lecon du 13/09 (Olivier) : « il s avance encore d un metre et c est bon »."""
