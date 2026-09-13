@@ -102,6 +102,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_levelup_t = -999.0
     last_sell_t = -999.0
     last_phone_t = -999.0
+    last_close_t = -999.0
     last_ft_t = -999.0
     last_overlevel_t = -999.0
     mute_hostiles = {}
@@ -583,6 +584,40 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             if tries == 3 or (vehicle_prompt and ikey not in obj_inter_tries):
                 obj_inter_tries[ikey] = (4, t_first)
                 _log(f"invite « {inter['choices'][0]} » ignoree ({'vehicule' if vehicle_prompt else 'sans effet apres 3 essais'})")
+        # 5a. ARRIVE au marqueur sans invite : les machines a quetes (bornes, terminaux, distributeurs) exigent d etre
+        #     a ~1 m et de les regarder -> V avance encore d un metre, face au marqueur, regard legerement baisse,
+        #     petit balayage, et appuie des que l invite devient active (une fois par 30 s)
+        if dist is not None and dist < ARRIVE_M + 2.0 and not (inter and inter.get('choices'))                 and time.perf_counter() - last_close_t > 30.0 and not st.get('combat'):
+            last_close_t = time.perf_counter()
+            tx, ty = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
+            if tx is not None:
+                _log(f'au marqueur ({dist:.1f} m) sans invite : V s approche a 1 m et cherche la machine')
+                old_a = motion.ARRIVE_M; motion.ARRIVE_M = 0.9
+                try:
+                    motion.walk_to(tx, ty, timeout=6.0, stop=stop)
+                finally:
+                    motion.ARRIVE_M = old_a
+                s_c = motion.read_state() or st
+                motion.turn_to(motion.bearing_to(s_c['x'], s_c['y'], tx, ty), timeout=2.0, stop=stop)
+                pressed = False
+                for dyaw, dpitch in ((0, 150), (-25, 0), (50, 0), (-25, -250), (0, 100)):
+                    if dyaw:
+                        motion.turn_by(dyaw, timeout=1.2, stop=stop)
+                    if dpitch:
+                        for _ in range(abs(dpitch) // 50):
+                            kbm.look(0, 50 if dpitch > 0 else -50); time.sleep(0.02)
+                    time.sleep(0.4)
+                    s_p = motion.read_state() or {}
+                    ip = s_p.get('interact') or {}
+                    chp = str((ip.get('choices') or [''])[0]).lower()
+                    if chp and not any(w in chp for w in ('saisir', 'porter', 'prendre le contr', 'enfourcher')):
+                        _log(f"  machine trouvee : « {ip['choices'][0]} » -> E")
+                        kbm.act('interact', 0.15); time.sleep(1.0); kbm.act('interact', 1.0)
+                        stats['interactions'] += 1; pressed = True
+                        break
+                if not pressed:
+                    _log('  rien a activer ici : on continue')
+                continue
         if dist is not None and dist > 500.0 and alt_target is None and kbm.ACTIONS.get('autodrive') and CFG.features.get('driving', True) \
                 and time.perf_counter() - last_drive_t > 240.0:
             last_drive_t = time.perf_counter()
