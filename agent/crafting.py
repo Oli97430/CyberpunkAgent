@@ -42,6 +42,9 @@ def heal_stock(inventory_items: list[dict]) -> int:
     return sum(int(it.get('qty') or 1) for it in inventory_items if (it.get('type') or '') in HEAL_TYPES)
 
 
+_made_gear: set[str] = set()    # equipement fabrique dans la session (evite la boucle craft -> vente -> craft)
+
+
 def manage(inventory_items: list[dict], log=print) -> dict:
     """Consommables jusqu aux cibles WANT, puis tout l equipement faisable (1 par recette)."""
     t0 = time.perf_counter()
@@ -96,7 +99,10 @@ def manage(inventory_items: list[dict], log=print) -> dict:
     for r in gear:
         if made >= MAX_CRAFT_PER_PASS or gear_made >= MAX_GEAR_PER_PASS:
             break
+        if str(r.get('name', '')).lower() in _made_gear:
+            continue                 # deja fabrique cette session (et sans doute vendu) : on ne refait pas fondre les composants
         if craft(r['i'], 1):
+            _made_gear.add(str(r.get('name', '')).lower())
             made += 1; gear_made += 1
             log(f"  [craft] fabrique « {r.get('name')} » ({r.get('type')}, {r.get('quality')})")
             time.sleep(0.4)

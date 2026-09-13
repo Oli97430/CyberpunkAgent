@@ -57,7 +57,8 @@ def main() -> None:
     # 2. la charge utile de l installateur : agent, mod, docs, sources minimales (detection du jeu)
     shutil.copy2(agent_exe, PAYLOAD / 'CyberpunkAgent.exe')
     shutil.copy2(gui_exe, PAYLOAD / 'CyberpunkAgent-Config.exe')
-    shutil.copytree(ROOT / 'mod', PAYLOAD / 'mod')
+    (PAYLOAD / 'mod' / 'AgentProbe').mkdir(parents=True)
+    shutil.copy2(ROOT / 'mod' / 'AgentProbe' / 'init.lua', PAYLOAD / 'mod' / 'AgentProbe' / 'init.lua')   # JAMAIS agent_config.json (cle API), db, state
     for f in ('README.md', 'LICENSE', 'CHANGELOG.md'):
         shutil.copy2(ROOT / f, PAYLOAD / f)
     (PAYLOAD / 'src' / 'agent').mkdir(parents=True)
@@ -75,9 +76,7 @@ def main() -> None:
         z.write(setup_exe, 'CyberpunkAgent-Setup.exe')
         for f in ('README.md', 'LICENSE', 'CHANGELOG.md'):
             z.write(ROOT / f, f)
-        for f in (ROOT / 'mod').rglob('*'):
-            if f.is_file():
-                z.write(f, str(f.relative_to(ROOT)))
+        z.write(ROOT / 'mod' / 'AgentProbe' / 'init.lua', 'mod/AgentProbe/init.lua')
     print('\nrelease :')
     for f in (agent_exe, gui_exe, setup_exe, zip_path):
         print(f'  {f.name:40s} {f.stat().st_size / 1e6:6.1f} Mo')

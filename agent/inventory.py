@@ -34,8 +34,15 @@ MONEY: int = 0               # eddies a la derniere passe
 HEALS: int = 99              # soins en stock (MaxDoc + Bounce Back) a la derniere passe manage()
 
 
+LISTING_SEQ: int = 0         # incremente a chaque `inventory` : les indices `i` d une liste precedente sont PERIMES
+
+
 def fetch() -> dict | None:
-    return nav._wait(nav._send({'cmd': 'inventory'}), timeout=6.0)
+    global LISTING_SEQ
+    r = nav._wait(nav._send({'cmd': 'inventory'}), timeout=6.0)
+    if r:
+        LISTING_SEQ += 1
+    return r
 
 
 def equip(index: int, slot: int) -> bool:
@@ -195,7 +202,7 @@ def manage(log=print) -> dict:
     QVAL = {'Legendary': 2500, 'Epic': 1000, 'Rare': 400, 'Uncommon': 150, 'Common': 50}
     def _val(it):
         p = it.get('price') or 0
-        return (p * 0.15) if p > 0 else QVAL.get(str(it.get('quality')), 30) * (0.3 if (it.get('type') or '') in ('Gen_Misc', 'Prt_') else 1.0)
+        return (p * 0.15) if p > 0 else QVAL.get(str(it.get('quality')), 30) * (0.3 if ((it.get('type') or '') == 'Gen_Misc' or (it.get('type') or '').startswith('Prt_')) else 1.0)
     SELL_VALUE = int(sum(_val(it) * int(it.get('qty') or 1) for it in SELLABLE))
     if SELLABLE:
         log(f'  [inventaire] {len(SELLABLE)} objet(s) a vendre au prochain marchand (~{SELL_VALUE} eddies)')

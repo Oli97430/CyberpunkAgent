@@ -107,6 +107,10 @@ def detect_ollama() -> str | None:
     return None
 
 
+INGAME_KEYS = {'provider', 'api_key', 'model', 'openai_model', 'anthropic_model', 'minutes',
+               'features', 'courage', 'style', 'aggro', 'focus_tracked', 'language'}
+
+
 class Config:
     def __init__(self) -> None:
         base = _base_dir()
@@ -119,18 +123,23 @@ class Config:
         self.mod_dir: Path | None = (self.game_dir / MOD_REL) if self.game_dir else None
         # reglages saisis DANS LE JEU (fenetre CET du mod) : ecrits par le mod dans son dossier, prioritaires
         if self.mod_dir and (self.mod_dir / 'agent_config.json').exists():
-            user.update({k: v for k, v in _load_json(self.mod_dir / 'agent_config.json').items() if v not in ('', None)})
+            # liste blanche : ce fichier est dans le dossier du JEU (inscriptible par n importe quel mod) ; il ne doit
+            # jamais pouvoir fixer un executable (ollama_exe), une URL (base_url) ou un chemin de fichier
+            user.update({k: v for k, v in _load_json(self.mod_dir / 'agent_config.json').items()
+                         if k in INGAME_KEYS and v not in ('', None)})
         self.cet_log: Path | None = (self.game_dir / CET_LOG_REL) if self.game_dir else None
         self.user_settings = Path(user.get('user_settings') or detect_user_settings())
         self.ollama_exe = user.get('ollama_exe') or detect_ollama()
-        self.ollama_url = user.get('ollama_url', 'http://127.0.0.1:11434')
-        self.model = user.get('model', 'llama3.2:latest')
+        self.ollama_url = str(user.get('ollama_url') or 'http://127.0.0.1:11434').rstrip('/')
+        self.model = str(user.get('model') or 'llama3.2:latest')
         # fournisseur du modele de decision : "ollama" (local, defaut), "openai" ou "anthropic" (cle API)
         self.provider = (user.get('provider') or os.environ.get('CYBERPUNKAGENT_PROVIDER') or 'ollama').lower()
         self.api_key = user.get('api_key') or None
         self.openai_model = user.get('openai_model') or None
         self.anthropic_model = user.get('anthropic_model') or None
         self.openai_base_url = user.get('openai_base_url') or None
+        if self.openai_base_url and not str(self.openai_base_url).lower().startswith(('https://', 'http://127.0.0.1', 'http://localhost')):
+            print(f'  [config] openai_base_url refuse (https ou local seulement) : {self.openai_base_url}'); self.openai_base_url = None
         self.language = user.get('language', 'fr')
         # comportements activables (panneau de configuration / fenetre in-game) : tout est actif par defaut
         feats = user.get('features') or {}

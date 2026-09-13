@@ -31,6 +31,12 @@ local lastPollErr = nil
 -- sinon Lua les resout comme des GLOBALES nil -> 'attempt to call a nil value'.
 local dbReady = false
 local pollCommands
+local CMD_PERIOD = 0.25
+local cmdAcc, lastCmdSeq = 0.0, -1      -- AVANT onInit (sinon globale nil -> derniere commande rejouee au demarrage)
+local lastStateErr = nil                 -- derniere erreur du tick d etat (journalisee une fois)
+local slowT, slowLoot, slowVehicles, slowNpcs = -99.0, nil, nil, nil   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
+local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
+local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
 local enemyDiag, lastEnemyDiag = '', ''
 local aliveMemory, bodyMemory = {}, {}      -- derniere position des ennemis vus / corps (loot)
 local lastInventory = {}                    -- ItemID par index de la derniere liste d inventaire
@@ -575,9 +581,10 @@ registerForEvent('onInit', function()
     local okDb, errDb = pcall(function()
         db:exec('CREATE TABLE IF NOT EXISTS cmd (seq INTEGER PRIMARY KEY, cmd TEXT, x REAL, y REAL, z REAL, hash INTEGER)')
         pcall(function() db:exec('ALTER TABLE cmd ADD COLUMN hash INTEGER') end)
-        -- ignorer une commande restee dans la table depuis une session precedente
+        -- une commande restee dans la table depuis une session precedente ne doit JAMAIS etre rejouee
         local n = 0
         for row in db:nrows('SELECT MAX(seq) AS m FROM cmd') do if row.m then lastCmdSeq = row.m; n = 1 end end
+        db:exec('DELETE FROM cmd')
         return n
     end)
     dbReady = okDb
@@ -775,7 +782,7 @@ registerForEvent('onUpdate', function(dt)
                         if ent then
                             local ep = ent:GetWorldPosition()
                             local dxE, dyE = ep.x - pos.x, ep.y - pos.y
-                            local rec = { x = ep.x, y = ep.y, z = ep.z, d = math.sqrt(dxE * dxE + dyE * dyE), near = true }
+                            local rec = { x = ep.x, y = ep.y, z = ep.z, d = math.sqrt(dxE * dxE + dyE * dyE), id = key }
                             -- police (NCPD / MaxTac) : V ne l engage jamais de lui-meme, il ne fait que se defendre
                             pcall(function()
                                 local aff = tostring(TweakDBInterface.GetCharacterRecord(ent:GetRecordID()):Affiliation():Type())
@@ -871,7 +878,9 @@ registerForEvent('onUpdate', function(dt)
         -- OBJETS LOOTABLES a < 20 m : conteneurs, objets au sol, corps (par nom de classe), avec
         -- projection ecran pour viser en hauteur. 8 plus proches.
         local loot = nil
-        if not inCombat then
+        local slowScan = (attachedFor - slowT) >= 0.25      -- scans larges (couteux) : 4 fois par seconde suffisent
+        if slowScan then slowT = attachedFor end
+        if not inCombat and slowScan then
             pcall(function()
                 local qa = Game['TSQ_ALL;']()
                 qa.maxDistance = 20.0
@@ -919,6 +928,7 @@ registerForEvent('onUpdate', function(dt)
                     table.sort(list, function(a, b) return a.d < b.d end)
                     while #list > 8 do table.remove(list) end
                     if #list > 0 then loot = list end
+                    slowLoot = loot
                     if not lootClassesLogged and #list > 0 then
                         lootClassesLogged = true
                         local names = {}
@@ -1002,7 +1012,7 @@ registerForEvent('onUpdate', function(dt)
         end)
         -- VEHICULES proches (< 25 m) : pour monter dans la voiture appelee
         local vehicles = nil
-        if not inCombat then
+        if not inCombat and slowScan then
             pcall(function()
                 local qv = Game['TSQ_ALL;']()
                 qv.maxDistance = 150.0
@@ -1033,6 +1043,7 @@ registerForEvent('onUpdate', function(dt)
                     table.sort(list, function(a, b) return a.d < b.d end)
                     while #list > 4 do table.remove(list) end
                     if #list > 0 then vehicles = list end
+                    slowVehicles = vehicles
                 end
             end)
         end
@@ -1061,7 +1072,7 @@ registerForEvent('onUpdate', function(dt)
         -- PNJ NON HOSTILES proches (pour engager une conversation de sa propre initiative) :
         -- TSQ_NPC (sonde OK) a 15 m, attitude non hostile, avec leur nom affiche. 5 max.
         local npcs = nil
-        if not inCombat then
+        if not inCombat and slowScan then
             pcall(function()
                 local q = Game['TSQ_NPC;']()
                 q.maxDistance = 30.0
@@ -1101,18 +1112,22 @@ registerForEvent('onUpdate', function(dt)
                     table.sort(list, function(a, b) return a.d < b.d end)
                     while #list > 5 do table.remove(list) end
                     if #list > 0 then npcs = list end
+                    slowNpcs = npcs
                 end
             end)
         end
+        if not inCombat and not slowScan then loot, vehicles, npcs = slowLoot, slowVehicles, slowNpcs end
+        if inCombat then slowLoot, slowVehicles, slowNpcs = nil, nil, nil end
         -- CORPS : les requetes de ciblage excluent souvent les morts. On memorise la derniere
         -- position de chaque ennemi vu (cle = position arrondie) ; quand il n est plus
         -- renvoye vivant, il devient un "corps" exporte pendant 90 s (pour le loot).
-        local nowT = os.clock()
+        local nowT = attachedFor
         local seen = {}
         if enemies then
             for i = 1, #enemies do
                 local e = enemies[i]
-                local key = string.format('%d:%d', math.floor(e.x / 2), math.floor(e.y / 2))
+                local key = e.id or string.format('%d:%d', math.floor(e.x / 2), math.floor(e.y / 2))
+                e.id = nil                                      -- interne : pas exporte
                 seen[key] = true
                 if e.dead then
                     bodyMemory[key] = { x = e.x, y = e.y, z = e.z, t = nowT }
@@ -1154,10 +1169,30 @@ registerForEvent('onUpdate', function(dt)
             if data.dialog then journal('DIALOG ' .. json.encode(data.dialog)) else journal('DIALOG ferme') end
         end
     end
+    if not ok and tostring(data) ~= lastStateErr then
+        lastStateErr = tostring(data)
+        journal('STATE erreur: ' .. lastStateErr)
+    end
     if ok and data then
-        fh:seek('set', 0)
-        fh:write(pad(json.encode(data), STATE_WIDTH) .. '\n')
-        fh:flush()
+        local okE, s = pcall(json.encode, data)
+        if not okE then
+            if tostring(s) ~= lastStateErr then lastStateErr = tostring(s); journal('STATE encode: ' .. lastStateErr) end
+            s = nil
+        end
+        if s and #s >= STATE_WIDTH then
+            -- degradation ordonnee : on retire le moins utile jusqu a tenir dans la largeur fixe
+            journal(string.format('STATE trop long : %d o > %d (loot=%s npcs=%s veh=%s crimes=%s)', #s, STATE_WIDTH,
+                tostring(data.loot and #data.loot), tostring(data.npcs and #data.npcs), tostring(data.vehicles and #data.vehicles), tostring(data.crimes and #data.crimes)))
+            data.crimes, data.vehicles, data.npcs = nil, nil, nil
+            s = json.encode(data)
+            if #s >= STATE_WIDTH then data.loot, data.bodies = nil, nil; s = json.encode(data) end
+            if #s >= STATE_WIDTH then data.qh, data.enemies = nil, nil; s = json.encode(data) end
+        end
+        if s and #s < STATE_WIDTH then
+            fh:seek('set', 0)
+            fh:write(pad(s, STATE_WIDTH) .. '\n')
+            fh:flush()
+        end
     end
 end)
 
@@ -1170,9 +1205,6 @@ end)
 -- Navmesh streame par secteurs : si le chemin complet echoue, on vise un point
 -- intermediaire (<= 60 m) vers la cible et on marque partial=true ; Python redemande.
 -- =====================================================================================
-local CMD_PERIOD = 0.25
-local cmdAcc, lastCmdSeq = 0.0, -1
-
 local function writePath(resp)
     local f = io.open('path.json', 'w')
     if f then f:write(json.encode(resp)); f:flush(); f:close() end
@@ -1543,46 +1575,43 @@ local function handleCommand(player, cmd)
         -- le prix de vente calcule par le jeu (RPGManager.CalculateSellPrice). Journalise.
         local id = lastInventory[cmd.x or -1]
         if not id then resp.reason = 'index inconnu (refaire inventory)'; return resp end
-        journal(string.format('RUN  sell idx=%d qty=%d', cmd.x, cmd.y or 1))
-        local q = Game['TSQ_NPC;']()
-        q.maxDistance = 6.0
-        q.filterObjectByDistance = true
-        pcall(function() q.testedSet = TargetingSet.Complete end)
-        local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
-        local vendor = nil
-        local selfKey = nil
-        pcall(function() selfKey = tostring(player:GetEntityID().hash) end)
-        if okT and parts then
-            local seenEnt = {}   -- une entree par ENTITE (GetTargetParts renvoie une partie par zone du corps)
-            for i = 1, #parts do
-                local comp = TS_TargetPartInfo.GetComponent(parts[i])
-                local ent = comp and comp:GetEntity() or nil
-                if ent then
-                    local okH, h = pcall(function() return ent:GetEntityID().hash end)
-                    local key = okH and tostring(h) or tostring(ent)
-                    if seenEnt[key] or key == selfKey then ent = nil else seenEnt[key] = true end
-                end
-                if ent then
-                    local isV = false
-                    pcall(function() isV = ent:IsVendor() end)
-                    if isV then vendor = ent; break end
-                    if not vendor then vendor = ent end
-                end
-            end
-        end
+        local qtyWanted = math.floor(tonumber(cmd.y) or 1)
+        journal(string.format('RUN  sell idx=%d qty=%d', cmd.x, qtyWanted))
+        local vendor = findNearbyVendor(player)
         if not vendor then resp.reason = 'aucun marchand a portee'; journal('FAIL sell : aucun marchand'); return resp end
+        local ts = Game.GetTransactionSystem()
+        local owned = 0
+        pcall(function() owned = ts:GetItemQuantity(player, id) end)
+        if not owned or owned <= 0 then pcall(function() owned = ts:GetItemData(player, id):GetQuantity() end) end
+        if not owned or owned <= 0 then resp.reason = 'objet absent de l inventaire'; journal('FAIL sell : absent'); return resp end
+        local qty = math.max(1, math.min(qtyWanted, owned))
+        -- objets proteges : quete, iconique, equipe
+        local protected = false
+        pcall(function()
+            local d = ts:GetItemData(player, id)
+            if d and d:HasTag(CName.new('Quest')) then protected = true end
+            if RPGManager.IsItemIconic(d) then protected = true end
+        end)
+        pcall(function()
+            if Game.GetScriptableSystemsContainer():Get('EquipmentSystem'):GetPlayerData(player):IsEquipped(id) then protected = true end
+        end)
+        if protected then resp.reason = 'objet protege (quete / iconique / equipe)'; journal('FAIL sell : protege'); return resp end
         local price = 0
         local okP, pr = pcall(function() return RPGManager.CalculateSellPrice(vendor, id) end)
-        if okP and pr then price = pr else
-            pcall(function() price = math.floor(Game.GetTransactionSystem():GetItemData(player, id):GetStatValueByType(gamedataStatType.Price) * 0.15) end)
+        if okP and type(pr) == 'number' and pr > 0 then price = pr else
+            pcall(function() price = math.floor(ts:GetItemData(player, id):GetStatValueByType(gamedataStatType.Price) * 0.15) end)
         end
-        local qty = cmd.y or 1
-        local ts = Game.GetTransactionSystem()
-        local okX = pcall(function() ts:TransferItem(player, vendor, id, qty) end)
-        if not okX then pcall(function() ts:RemoveItem(player, id, qty) end) end
+        if not price or price <= 0 then
+            price = math.floor((buyPrice(vendor, player, id) or 0) * 0.1)     -- estimation par qualite : jamais donne
+        end
+        local okX, moved = pcall(function() return ts:TransferItem(player, vendor, id, qty) end)
+        if not okX or moved == false then
+            resp.reason = 'TransferItem refuse (' .. tostring(moved) .. ')'; journal('FAIL sell : ' .. resp.reason); return resp
+        end
         local total = math.floor(price * qty)
-        pcall(function() ts:GiveItem(player, MarketSystem.Money(), total) end)
-        resp.ok, resp.price, resp.total = true, price, total
+        local okM, paid = pcall(function() return ts:GiveItem(player, MarketSystem.Money(), total) end)
+        if not okM or paid == false then journal('WARN sell : GiveItem(Money) a echoue : ' .. tostring(paid)) end
+        resp.ok, resp.price, resp.total, resp.qty = true, price, total, qty
         journal(string.format('OK   sell : %d x -> %d eddies', qty, total))
         return resp
     elseif cmd.cmd == 'vendor_stock' then
@@ -1593,7 +1622,8 @@ local function handleCommand(player, cmd)
         local ts = Game.GetTransactionSystem()
         local okL, items = ts:GetItemList(vendor)
         if type(okL) == 'table' then items = okL end
-        lastVendorStock = {}
+        lastVendorStock, lastVendorQty = {}, {}
+        pcall(function() lastVendorKey = tostring(vendor:GetEntityID().hash) end)
         local out = {}
         if type(items) == 'table' then
             for i = 1, #items do
@@ -1604,6 +1634,7 @@ local function handleCommand(player, cmd)
                 if id then
                     lastVendorStock[i] = id
                     pcall(function() rec.qty = idata:GetQuantity() end)
+                    lastVendorQty[i] = tonumber(rec.qty) or 1
                     pcall(function() rec.name = GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):DisplayName()) end)
                     pcall(function() rec.type = tostring(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):ItemType():Type()):gsub('gamedataItemType : ', ''):gsub(' %(%d+%)', '') end)
                     pcall(function() rec.quality = tostring(RPGManager.GetItemDataQuality(idata)):gsub('gamedataQuality : ', ''):gsub(' %(%d+%)', '') end)
@@ -1624,21 +1655,29 @@ local function handleCommand(player, cmd)
         if not id then resp.reason = 'index inconnu (refaire vendor_stock)'; return resp end
         local vendor = findNearbyVendor(player)
         if not vendor then resp.reason = 'aucun marchand a portee'; return resp end
-        local qty = cmd.y or 1
+        local vkey = nil
+        pcall(function() vkey = tostring(vendor:GetEntityID().hash) end)
+        if lastVendorKey and vkey ~= lastVendorKey then resp.reason = 'marchand different de vendor_stock (refaire vendor_stock)'; journal('FAIL buy : ' .. resp.reason); return resp end
+        local qty = math.floor(tonumber(cmd.y) or 1)
+        local inStock = lastVendorQty[cmd.x or -1] or 1
+        if qty < 1 then qty = 1 end
+        if qty > inStock then qty = inStock end
         journal(string.format('RUN  buy idx=%d qty=%d', cmd.x, qty))
         local ts = Game.GetTransactionSystem()
         local price = buyPrice(vendor, player, id)
+        if not price or price <= 0 then resp.reason = 'prix inconnu, achat refuse'; journal('FAIL buy : prix inconnu'); return resp end
         local total = math.floor(price * qty)
         local money = 0
         pcall(function() money = ts:GetItemQuantity(player, MarketSystem.Money()) end)
         if money < total then resp.reason = string.format('pas assez d eddies (%d < %d)', money, total); journal('FAIL buy : ' .. resp.reason); return resp end
-        local okX = pcall(function() ts:TransferItem(vendor, player, id, qty) end)
-        if not okX then
-            local okG = pcall(function() ts:GiveItem(player, id, qty) end)
-            if not okG then resp.reason = 'transfert impossible'; journal('FAIL buy : transfert'); return resp end
+        local okPay, paid = pcall(function() return ts:RemoveItem(player, MarketSystem.Money(), total) end)
+        if not okPay or paid == false then resp.reason = 'paiement refuse (' .. tostring(paid) .. ')'; journal('FAIL buy : ' .. resp.reason); return resp end
+        local okX, moved = pcall(function() return ts:TransferItem(vendor, player, id, qty) end)
+        if not okX or moved == false then
+            pcall(function() ts:GiveItem(player, MarketSystem.Money(), total) end)     -- rembourse
+            resp.reason = 'transfert refuse (' .. tostring(moved) .. '), rembourse'; journal('FAIL buy : ' .. resp.reason); return resp
         end
-        pcall(function() ts:RemoveItem(player, MarketSystem.Money(), total) end)
-        resp.ok, resp.price, resp.total = true, price, total
+        resp.ok, resp.price, resp.total, resp.qty = true, price, total, qty
         journal(string.format('OK   buy : %d x -> %d eddies', qty, total))
         return resp
     elseif cmd.cmd == 'loot' then
@@ -1691,14 +1730,8 @@ local function handleCommand(player, cmd)
             local id = nil
             pcall(function() id = best:GetItemObject():GetItemID() end)
             if id then
-                local okX = pcall(function() ts:TransferItem(best, player, id, 1) end)
-                if okX then moved = 1; methods[#methods + 1] = 'TransferItem(drop)' else
-                    local okG = pcall(function() ts:GiveItem(player, id, 1) end)
-                    if okG then
-                        moved = 1; methods[#methods + 1] = 'GiveItem+Dispose'
-                        pcall(function() best:Dispose() end)
-                    end
-                end
+                local okX, didX = pcall(function() return ts:TransferItem(best, player, id, 1) end)
+                if okX and didX ~= false then moved = 1; methods[#methods + 1] = 'TransferItem(drop)' end
                 pcall(function() names[#names + 1] = GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):DisplayName()) end)
             end
         else
@@ -1926,6 +1959,7 @@ local function handleCommand(player, cmd)
             end)
             lastFastTravel[i] = p
             out[#out + 1] = rec
+            if rec.x and rec.y then lastFtPoints[#lastFtPoints + 1] = { x = rec.x, y = rec.y } end
         end
         local enabled = nil
         pcall(function() enabled = fts:IsFastTravelEnabled() end)
@@ -1956,6 +1990,15 @@ local function handleCommand(player, cmd)
     elseif cmd.cmd == 'teleport' then
         -- TELEPORTATION (TeleportationFacility) : reservee au voyage rapide borne -> borne quand l API du jeu refuse
         journal(string.format('RUN  teleport (%.0f,%.0f,%.0f)', cmd.x or 0, cmd.y or 0, cmd.z or 0))
+        local function nearFt(x, y)
+            for _, m in ipairs(lastFtPoints) do if (m.x - x) ^ 2 + (m.y - y) ^ 2 < 144 then return true end end
+            return false
+        end
+        local herePos = player:GetWorldPosition()
+        if not (cmd.x and cmd.y) or #lastFtPoints == 0 or not nearFt(cmd.x, cmd.y) or not nearFt(herePos.x, herePos.y) then
+            resp.reason = 'teleport refuse : uniquement borne -> borne (refaire fast_travel_points, V a < 12 m d une borne)'
+            journal('FAIL teleport : ' .. resp.reason); return resp
+        end
         local okT, err = pcall(function()
             Game.GetTeleportationFacility():Teleport(player, Vector4.new(cmd.x, cmd.y, (cmd.z or player:GetWorldPosition().z) + 0.5, 1.0), EulerAngles.new(0, 0, 0))
         end)
@@ -2091,7 +2134,7 @@ local function handleCommand(player, cmd)
                             pcall(function() rec.locked = ent:IsLocked() end)
                             pcall(function() rec.name = rec.name .. '/' .. GetLocalizedText(tostring(ent:GetDisplayName())) end)
                             out[#out + 1] = rec
-                            lastDoors[#out] = ent
+                            pcall(function() lastDoors[#out] = ent:GetEntityID() end)
                         end
                     end
                 end
@@ -2103,8 +2146,11 @@ local function handleCommand(player, cmd)
         return resp
     elseif cmd.cmd == 'door_open' then
         -- OUVRIR une porte par script (plusieurs API essayees ; on journalise celles qui marchent)
-        local ent = lastDoors[cmd.x or -1]
-        if not ent then resp.reason = 'index inconnu (refaire doors)'; return resp end
+        local eid = lastDoors[cmd.x or -1]
+        if not eid then resp.reason = 'index inconnu (refaire doors)'; return resp end
+        local ent = nil
+        pcall(function() ent = Game.FindEntityByID(eid) end)
+        if not ent then resp.reason = 'porte dechargee (refaire doors)'; return resp end
         journal(string.format('RUN  door_open idx=%d', cmd.x))
         local okList = {}
         local tries = {
@@ -2121,6 +2167,9 @@ local function handleCommand(player, cmd)
         for _, t in ipairs(tries) do
             local okX = pcall(t[2])
             if okX then okList[#okList + 1] = t[1] end
+            local nowOpen = false
+            pcall(function() nowOpen = ent:IsOpen() end)
+            if nowOpen then break end
         end
         local isOpen = nil
         pcall(function() isOpen = ent:IsOpen() end)
@@ -2317,7 +2366,10 @@ pollCommands = function(player, dt)
         if fromDb.seq ~= lastCmdSeq then
             lastCmdSeq = fromDb.seq
             local okH, resp = pcall(handleCommand, player, fromDb)
-            if not okH then resp = { seq = fromDb.seq, ok = false, reason = 'erreur: ' .. tostring(resp), seqEnd = fromDb.seq } end
+            if not okH then
+                journal('FAIL cmd ' .. tostring(fromDb.cmd) .. ' seq=' .. tostring(fromDb.seq) .. ' : ' .. tostring(resp))
+                resp = { seq = fromDb.seq, ok = false, reason = 'erreur: ' .. tostring(resp), seqEnd = fromDb.seq }
+            end
             writePath(resp)
         end
         return

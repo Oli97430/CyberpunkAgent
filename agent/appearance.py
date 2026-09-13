@@ -29,7 +29,7 @@ def _save() -> None:
         _FILE.write_text(_json.dumps({'last_epoch': _last['t']}), encoding='utf-8')
     except Exception:
         pass
-MIRROR_WORDS = ('miroir', 'apparence', 'regarder', 'mirror', 'appearance')
+MIRROR_WORDS = ('miroir', 'apparence', 'mirror', 'appearance')
 
 
 def due() -> bool:

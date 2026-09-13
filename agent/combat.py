@@ -182,10 +182,24 @@ def centroid(enemies) -> tuple[float, float]:
     return (sum(e['x'] for e in enemies) / len(enemies), sum(e['y'] for e in enemies) / len(enemies))
 
 
+def _ensure_weapon(slot, melee: bool) -> None:
+    """Degaine l arme de l emplacement demande SEULEMENT si elle n est pas deja en main : la touche est une
+    bascule, un appui de trop RENGAINE (engage() puis fight() appuyaient tous les deux). Poings = rien en main."""
+    from .inventory import MELEE_TYPES as _MT
+    st = motion.read_state() or {}
+    wt = st.get('weapon') or ''
+    holding_melee = wt in _MT and wt != 'Wea_Fists'
+    holding_ranged = wt.startswith('Wea_') and wt not in _MT
+    if (melee and holding_melee) or (not melee and holding_ranged):
+        return
+    if slot:
+        kbm.tap(slot, 0.08); time.sleep(0.35)
+
+
 # ---- engagement (avant que le jeu ne passe en combat) -----------------------------------
 def engage(target: dict, stop=None, log=print, max_s: float = 25.0) -> bool:
     t0 = time.perf_counter()
-    kbm.tap(MELEE_SLOT, 0.08)
+    _ensure_weapon(MELEE_SLOT, melee=True)
     seq = None
     hacked = False
     st0 = motion.read_state() or {}
@@ -261,7 +275,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     last_retreat_end = -99.0
     no_target_logged = False
     police_logged = False
-    kbm.tap(MELEE_SLOT, 0.08)
+    _ensure_weapon(MELEE_SLOT, melee=True)
     log(f'  [combat] v2 debut, arme emplacement {MELEE_SLOT}')
     try:
         while time.perf_counter() - t0 < max_s:
@@ -409,7 +423,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             if wt and now - t_wsync > 1.5:
                 from .inventory import MELEE_TYPES as _MT
                 holding_ranged = wt.startswith('Wea_') and wt not in _MT
-                holding_melee = wt in _MT
+                holding_melee = wt in _MT and wt != 'Wea_Fists'     # poings = rien en main
                 if mode == 'melee' and not holding_melee:
                     kbm.tap(MELEE_SLOT, 0.08); t_wsync = now; log(f'  [combat] arme tenue {wt} : on degaine la melee (emplacement {MELEE_SLOT})')
                 elif mode == 'ranged' and RANGED_SLOT and not holding_ranged:

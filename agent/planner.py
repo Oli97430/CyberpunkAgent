@@ -93,7 +93,7 @@ def _situation(st: dict, extra: dict) -> str:
         f"Vie : {st.get('hp', 0):.0f} %. En combat : {'oui' if st.get('combat') else 'non'}.",
         f"Quete suivie : {q.get('text') or 'aucune'}"
         + (f" (marqueur a {extra.get('dist_m'):.0f} m)" if extra.get('dist_m') is not None else ' (pas de marqueur)') + '.',
-        f"Interaction proposee : {inter.get('choices', ['aucune'])[0] if inter else 'aucune'}"
+        f"Interaction proposee : {(inter.get('choices') or ['aucune'])[0] if inter else 'aucune'}"
         + (f" avec « {inter.get('title')} »" if inter and inter.get('title') else '') + '.',
         f"Hostiles en vue : {len(hostiles)}" + (f", le plus proche a {hostiles[0]['d']:.0f} m" if hostiles else '') + '.',
         f"Historique recent : {extra.get('history') or 'rien'}.",
@@ -136,9 +136,9 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
     # un simple marqueur d agression a 60-80 m sans agresseur visible = souvent deja fini (2 x 1 min perdues le 13/09) :
     # on n y va que si des agresseurs sont VISIBLES, ou si le marqueur est tout proche (< 35 m)
     crimes = [c for c in crimes if (c.get('d') or 99) < 35] if not aggr else crimes
-    if (aggr or crimes) and hp >= 60 and not st.get('combat') and extra.get('rescued', lambda k: False)(aggr, crimes) is False:
+    if (aggr or crimes) and hp >= 60 and not st.get('combat') and extra.get('rescued', lambda a, c: False)(aggr, crimes) is False:
         n_aggr = len(aggr)
-        near = min([a['d'] for a in aggr] + [c['d'] for c in crimes])
+        near = min([a.get('d', 99) for a in aggr] + [c.get('d', 99) for c in crimes])
         from . import quests as _q
         spots = [(a['x'], a['y']) for a in aggr] + [(c['x'], c['y']) for c in crimes if c.get('x') is not None]
         if any(_q.near_danger(x, y) for x, y in spots):

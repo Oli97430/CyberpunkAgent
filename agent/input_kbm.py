@@ -70,7 +70,10 @@ SC = {
 }
 
 _held: set[int] = set()
+_held_ext: set[int] = set()     # scancodes maintenus avec le drapeau ETENDU (fleches)
 _acc = [0.0, 0.0]
+EXTENDED = {'UP', 'DOWN', 'LEFT', 'RIGHT'}   # memes scancodes que le pave numerique : sans E0, UP = Numpad 8
+_focus_cache = [0.0, True]
 
 # ---- TOUCHES PAR ACTION, lues dans les reglages du joueur ------------------------------
 # Lecon du 2026-09-11 : le joueur est en AZERTY avec des reassignations (interagir = E,
@@ -150,16 +153,29 @@ def K(action: str) -> str:
     return k
 
 
+_missing_warned: set = set()
+
+
+def _key_or_warn(action: str) -> str | None:
+    k = ACTIONS.get(action)
+    if not k and action not in _missing_warned:
+        _missing_warned.add(action); print(f'  [kbm] action sans touche dans les reglages : {action!r} (ignoree)')
+    return k
+
+
 def act(action: str, duration: float = 0.08) -> None:
-    tap(K(action), duration)
+    k = _key_or_warn(action)
+    if k: tap(k, duration)
 
 
 def act_hold(action: str) -> None:
-    hold(K(action))
+    k = _key_or_warn(action)
+    if k: hold(k)
 
 
 def act_release(action: str) -> None:
-    release(K(action))
+    k = ACTIONS.get(action)
+    if k: release(k)
 
 
 def is_admin() -> bool:
@@ -193,7 +209,21 @@ def game_focused(exe_name: str = 'Cyberpunk2077.exe') -> bool:
     return foreground_process_name().lower() == exe_name.lower()
 
 
+def game_focused_cached(max_age: float = 0.25) -> bool:
+    """game_focused() avec un cache court : appele a chaque touche, il ne doit rien couter."""
+    now = time.perf_counter()
+    if now - _focus_cache[0] > max_age:
+        _focus_cache[0] = now
+        try:
+            _focus_cache[1] = game_focused()
+        except Exception:
+            _focus_cache[1] = True
+    return _focus_cache[1]
+
+
 def key(scancode: int, down: bool, extended: bool = False) -> None:
+    if down and not game_focused_cached():      # jeu hors premier plan : aucun appui (les relachements passent toujours)
+        return
     flags = KEYEVENTF_SCANCODE | (0 if down else KEYEVENTF_KEYUP)
     if extended:
         flags |= KEYEVENTF_EXTENDEDKEY
@@ -201,26 +231,40 @@ def key(scancode: int, down: bool, extended: bool = False) -> None:
     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
     if down:
         _held.add(scancode)
+        if extended: _held_ext.add(scancode)
     else:
-        _held.discard(scancode)
+        _held.discard(scancode); _held_ext.discard(scancode)
 
 
 def tap(name: str, duration: float = 0.08) -> None:
-    sc = SC[name]
-    key(sc, True); time.sleep(duration); key(sc, False)
+    sc, ext = SC[name], name in EXTENDED
+    key(sc, True, ext); time.sleep(duration); key(sc, False, ext)
 
 
 def hold(name: str) -> None:
-    key(SC[name], True)
+    key(SC[name], True, name in EXTENDED)
 
 
 def release(name: str) -> None:
-    key(SC[name], False)
+    key(SC[name], False, name in EXTENDED)
+
+
+class held:
+    """`with kbm.held('W', 'LSHIFT'):` : touches maintenues puis TOUJOURS relachees, meme sur exception."""
+    def __init__(self, *names): self.names = names
+    def __enter__(self):
+        for n in self.names: hold(n)
+        return self
+    def __exit__(self, *exc):
+        for n in reversed(self.names): release(n)
+        return False
 
 
 def look(dx: float, dy: float) -> None:
     """Deplacement souris RELATIF (camera). Accumule le reste fractionnaire
     (sinon une commande de <1 px repetee est silencieusement perdue)."""
+    if not game_focused_cached():
+        return
     _acc[0] += dx; _acc[1] += dy
     ix, iy = int(_acc[0]), int(_acc[1])
     _acc[0] -= ix; _acc[1] -= iy
@@ -257,6 +301,8 @@ _mouse_held: set[str] = set()
 
 def mouse(button: str, down: bool) -> None:
     """Bouton souris : left = attaque/tir, right = parade/visee, middle = grenade (mapping)."""
+    if down and not game_focused_cached():
+        return
     flag = _MB[button][0 if down else 1]
     inp = INPUT(type=INPUT_MOUSE, u=_U(mi=MOUSEINPUT(0, 0, 0, flag, 0, 0)))
     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
@@ -275,7 +321,7 @@ def click(down: bool) -> None:
 
 def release_all() -> None:
     for sc in list(_held):
-        key(sc, False)
+        key(sc, False, sc in _held_ext)
     _held.clear()
     for b in list(_mouse_held):
         mouse(b, False)

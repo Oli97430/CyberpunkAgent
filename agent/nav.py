@@ -25,7 +25,11 @@ MOD_DIR = CFG.mod_dir or Path('.')      # <jeu>/bin/x64/plugins/cyber_engine_twe
 CMD_FILE = MOD_DIR / 'cmd.json'
 PATH_FILE = MOD_DIR / 'path.json'
 
-_seq = int(time.time()) % 100000
+_seq = int(time.time() * 1000) % 2_000_000_000     # croissant d une session a l autre : jamais la seq d un path.json perime
+try:
+    PATH_FILE.unlink()                             # reponse d une session precedente : on ne la relira pas
+except OSError:
+    pass
 
 
 DB_FILE = MOD_DIR / 'db.sqlite3'

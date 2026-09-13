@@ -123,7 +123,7 @@ _tried: dict[str, set] = {}   # signature du hub -> indices deja confirmes sans 
 
 
 def hub_signature(d: dict) -> str:
-    return d.get('title', '?') + '|' + '|'.join(d.get('choices', []))
+    return str(d.get('title', '?')) + '|' + '|'.join(str(c) for c in (d.get('choices') or []))
 
 
 def answer_once(stop=None, log=print) -> dict | None:
@@ -197,7 +197,7 @@ def run_conversation(stop=None, idle_end: float = 6.0, max_turns: int = 30, log=
             break
         d = current_dialog()
         if d and d.get('choices'):
-            sig = d['title'] + '|' + '|'.join(d['choices'])
+            sig = hub_signature(d)
             if sig != last_sig:
                 last_sig = sig
                 r = answer_once(stop=stop, log=log)
@@ -207,7 +207,7 @@ def run_conversation(stop=None, idle_end: float = 6.0, max_turns: int = 30, log=
                 t1 = time.perf_counter()
                 while time.perf_counter() - t1 < 8.0:
                     d2 = current_dialog()
-                    if not d2 or (d2['title'] + '|' + '|'.join(d2['choices'])) != sig:
+                    if not d2 or hub_signature(d2) != sig:
                         break
                     time.sleep(0.1)
             last_dialog_t = time.perf_counter()

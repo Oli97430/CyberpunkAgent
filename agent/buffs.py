@@ -42,7 +42,7 @@ def refresh(items: list[dict] | None = None) -> None:
             drink.append(it)
         elif t == 'Con_Edible':
             food.append(it)
-    _cache.update(t=time.perf_counter(), food=food, drink=drink, drug=drug)
+    _cache.update(t=time.perf_counter(), food=food, drink=drink, drug=drug, seq=inventory.LISTING_SEQ)
 
 
 def _use(it: dict) -> bool:
@@ -55,7 +55,9 @@ def apply(st: dict | None, log=print, in_combat: bool = False) -> int:
     from .config import CFG
     if not CFG.features.get('buffs', True):
         return 0
-    if time.perf_counter() - _cache['t'] > 600.0 and not in_combat:
+    if _cache.get('seq') != inventory.LISTING_SEQ or time.perf_counter() - _cache['t'] > 600.0:
+        if in_combat and _cache.get('seq') is not None and _cache.get('seq') != inventory.LISTING_SEQ:
+            return 0                     # indices perimes et pas le temps de relister : on ne consomme pas au hasard
         refresh()
     b = (st or {}).get('buffs') or {}
     now = time.perf_counter()

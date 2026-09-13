@@ -17,14 +17,25 @@ import json, math
 from pathlib import Path
 from .config import CFG
 _DEATHS = CFG.deaths_file               # %APPDATA%/CyberpunkAgent/deaths.json
-try:
-    _danger: list = json.loads(_DEATHS.read_text(encoding='utf-8'))     # lieux de mort / zones trop dangereuses (persistants)
-except Exception:
-    _danger = []
+def _load_danger() -> list:
+    """Lieux de mort / zones trop dangereuses (persistants) : valides (dict avec x, y numeriques), 200 derniers."""
+    try:
+        raw = json.loads(_DEATHS.read_text(encoding='utf-8'))
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [d for d in raw if isinstance(d, dict) and isinstance(d.get('x'), (int, float)) and isinstance(d.get('y'), (int, float))][-200:]
+
+
+_danger: list = _load_danger()
 
 
 def mark_death(x: float, y: float) -> None:
+    if near_danger(x, y, 10.0):
+        return                                  # deja connu : pas de doublon
     _danger.append({'x': x, 'y': y, 'kind': 'mort'})
+    del _danger[:-200]
     try:
         _DEATHS.write_text(json.dumps(_danger), encoding='utf-8')
     except Exception:

@@ -99,7 +99,8 @@ def mod_is_stale() -> str | None:
     return None
 
 
-def play(minutes: float) -> None:
+def play(minutes: float) -> bool:
+    """Renvoie True si F12 (arret demande par le joueur) a mis fin a la session."""
     from agent import brain, dialog, input_kbm as kbm
     stale = mod_is_stale()
     if stale:
@@ -112,12 +113,13 @@ def play(minutes: float) -> None:
     t1 = time.time()
     while not kbm.game_focused():
         if time.time() - t1 > 120:
-            print('ABANDON : le jeu n est pas passe au premier plan en 2 min.'); return
+            print('ABANDON : le jeu n est pas passe au premier plan en 2 min.'); return True
         time.sleep(0.25)
     print('  jeu au premier plan : depart dans 2 s', flush=True); time.sleep(2)
     ks = kbm.KillSwitch()
     brain.run(duration_s=minutes * 60.0, stop=ks.triggered, pause=ks.paused)
     print(f'\njournal : {brain.LOG_FILE}')
+    return ks.triggered.is_set()
 
 
 def run_test(name: str) -> None:
@@ -158,9 +160,9 @@ def single_instance() -> bool:
     """Un seul agent a la fois : deux instances enverraient des touches en meme temps (vu le 13/09)."""
     try:
         import ctypes
-        k32 = ctypes.windll.kernel32
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
         h = k32.CreateMutexW(None, True, 'CyberpunkAgent.single')
-        if k32.GetLastError() == 183:          # ERROR_ALREADY_EXISTS
+        if not h or ctypes.get_last_error() == 183:          # ERROR_ALREADY_EXISTS (ou echec : on ne prend pas le risque)
             return False
         globals()['_mutex'] = h
     except Exception:
@@ -170,7 +172,7 @@ def single_instance() -> bool:
 
 def main() -> None:
     # le verrou mono-instance ne concerne que le JEU (--check / --config / --test restent possibles en parallele)
-    if not any(a in sys.argv[1:] for a in ('--check', '--config', '--test')) and not single_instance():
+    if not any(a in sys.argv[1:] for a in ('--check', '--config')) and not single_instance():
         print('Un agent CyberpunkAgent tourne deja (F12 pour l arreter). Cette instance se ferme.')
         if getattr(sys, 'frozen', False):
             time.sleep(4)
@@ -200,10 +202,8 @@ def main() -> None:
         while True:
             n += 1
             print(f'\n===== session {n} =====', flush=True)
-            play(a.minutes)
-            import ctypes
-            if ctypes.windll.user32.GetAsyncKeyState(0x7B) & 0x8000:   # F12 enfonce : on s arrete
-                break
+            if play(a.minutes):            # F12 pendant la session : on n enchaine pas
+                print('F12 : arret demande, fin de la boucle.'); break
             time.sleep(5.0)
     else:
         play(a.minutes)

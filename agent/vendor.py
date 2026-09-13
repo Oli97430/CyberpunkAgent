@@ -89,7 +89,9 @@ def buy_heals(have: int, log=print, want: int = HEAL_WANT) -> dict:
     heals.sort(key=lambda it: int(it.get('price') or 1e9))
     bought, spent = 0, 0
     for it in heals:
-        price = max(1, int(it.get('price') or 0))
+        price = int(it.get('price') or 0)
+        if price <= 0:
+            continue                                    # prix inconnu : on n achete pas a l aveugle
         can_afford = (money - MONEY_RESERVE) // price
         n = min(want - have - bought, int(it.get('qty') or 1), can_afford)
         if n <= 0:
@@ -155,14 +157,14 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
         if er and er.get('ok') and er.get('worn'):
             posed += 1; spent += int(r.get('total') or price)
             log(f"  [charcudoc] POSE « {it.get('name')} » ({it.get('quality')}) pour {r.get('total')} eddies [{er.get('method')}]")
+        elif er is None:
+            log(f"  [charcudoc] « {it.get('name')} » : pas de reponse du mod, implant conserve (peut-etre pose)")
+            spent += int(r.get('total') or price)
         else:
-            # ne se pose pas : on le revend tout de suite (meme marchand, prix du jeu)
-            inv = inventory.fetch() or {}
-            mine = next((x for x in (inv.get('items') or []) if str(x.get('name')) == str(it.get('name')) and not x.get('equipped')), None)
-            sr = nav._wait(nav._send({'cmd': 'sell', 'x': mine['i'], 'y': 1}), timeout=6.0) if mine else None
-            log(f"  [charcudoc] « {it.get('name')} » ne se pose pas ({(er or {}).get('method')}) : revendu {((sr or {}).get('total') or 0)} eddies")
-            if sr and sr.get('ok'):
-                money += int(sr.get('total') or 0)
+            # ne se pose pas (capacite cyberware, emplacement occupe...) : on le GARDE (un marchand rachete a
+            # une fraction du prix : la revente immediate perdait ~80 %), il servira plus tard
+            spent += int(r.get('total') or price)
+            log(f"  [charcudoc] « {it.get('name')} » ne se pose pas ({(er or {}).get('method')}) : conserve dans l inventaire")
     return {'ok': True, 'poses': posed, 'eddies': spent, 'reste': money}
 
 
@@ -186,7 +188,9 @@ def buy_supplies(items: list[dict], log=print) -> dict:
         for it in cands:
             if n <= 0:
                 break
-            price = max(1, int(it.get('price') or 0))
+            price = int(it.get('price') or 0)
+            if price <= 0:
+                continue
             k = min(n, int(it.get('qty') or 1), (money - MONEY_RESERVE) // price)
             if k <= 0:
                 continue
