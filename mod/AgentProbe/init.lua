@@ -1253,14 +1253,17 @@ local lastChoices = {}                       -- choix de reponse SMS (sms_read)
 local lastVendorStock = {}                   -- ItemID par index de la derniere liste de stock marchand
 -- marchand PRESENT (< 6 m) : une entree par entite, priorite a IsVendor()
 local function findNearbyVendor(player)
+    -- le MARCHAND = parmi les PNJ a moins de 8 m, celui qui a le plus gros stock (chez le charcudoc, l infirmiere
+    -- au comptoir etait prise pour le vendeur : 1 article, contre 409 pour le ripperdoc)
     local q = Game['TSQ_NPC;']()
-    q.maxDistance = 6.0
+    q.maxDistance = 8.0
     q.filterObjectByDistance = true
     pcall(function() q.testedSet = TargetingSet.Complete end)
     local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
-    local vendor = nil
+    local vendor, bestCount = nil, -1
     local selfKey = nil
     pcall(function() selfKey = tostring(player:GetEntityID().hash) end)
+    local ts = Game.GetTransactionSystem()
     if okT and parts then
         local seenEnt = {}
         for i = 1, #parts do
@@ -1272,10 +1275,16 @@ local function findNearbyVendor(player)
                 if seenEnt[key] or key == selfKey then ent = nil else seenEnt[key] = true end
             end
             if ent then
+                local count = 0
+                pcall(function()
+                    local okL, items = ts:GetItemList(ent)
+                    if type(okL) == 'table' then items = okL end
+                    if type(items) == 'table' then count = #items end
+                end)
                 local isV = false
                 pcall(function() isV = ent:IsVendor() end)
-                if isV then return ent end
-                if not vendor then vendor = ent end
+                if isV then count = count + 1000 end
+                if count > bestCount then vendor, bestCount = ent, count end
             end
         end
     end
