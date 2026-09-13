@@ -27,13 +27,13 @@ GRENADE_MIN_M, GRENADE_MAX_M, GRENADE_CD = 11.0, 28.0, 20.0
 MELEE_RANGE = 2.4
 MELEE_SLOT = '3'                          # fixe par inventory.manage() : emplacement au meilleur DPS de melee
 RANGED_SLOT = None                        # fixe par inventory.manage() si une arme a distance est equipee
-RANGED_MIN_M, RANGED_MAX_M = 14.0, 45.0   # au-dela de 14 m (ou cible en hauteur), on tire si on a une arme
+RANGED_MIN_M, RANGED_MAX_M = 9.0, 45.0    # au-dela de 9 m (ou cible en hauteur), on tire si on a une arme a feu
 CYBERWARE_CD = 18.0                       # touche : kbm.K('iconic') (F chez ce joueur)
 # quick melee : kbm.K('quickmelee') (~ chez ce joueur)
 QUICKHACK_CD = 5.0
 KNIFE_CD = 4.0
 HACK_ROTATION = (0, 1, 2)     # on alterne les 3 premiers hacks du panneau (le meilleur n est pas forcement le 1er)
-DODGE_CD, STRAFE_CD, JUMP_ATTACK_CD, SLIDE_CD = 3.0, 1.6, 6.0, 8.0
+DODGE_CD, STRAFE_CD, JUMP_ATTACK_CD, SLIDE_CD = 1.4, 1.6, 6.0, 8.0   # esquive/dash toutes les 1,4 s max (Olivier : « plus d esquives »)
 
 
 def quickhack_first(slot: int = 0) -> None:
@@ -187,6 +187,12 @@ def engage(target: dict, stop=None, log=print, max_s: float = 25.0) -> bool:
     kbm.tap(MELEE_SLOT, 0.08)
     seq = None
     hacked = False
+    st0 = motion.read_state() or {}
+    stealth = not st0.get('combat') and (target.get('d') or 0) > 4.0      # pas encore repere : on approche en DISCRETION
+    crouched = False
+    if stealth:
+        kbm.act('crouch', 0.1); crouched = True; time.sleep(0.3)
+        log('  [combat] approche en discretion (accroupi)')
     try:
         while time.perf_counter() - t0 < max_s:
             if stop is not None and stop.is_set():
@@ -196,7 +202,16 @@ def engage(target: dict, stop=None, log=print, max_s: float = 25.0) -> bool:
                 continue
             seq = st['seq']
             if st.get('combat'):
+                if crouched:
+                    kbm.act('crouch', 0.1); crouched = False         # repere : on se releve et on se bat
                 return True
+            # elimination furtive : dans le dos d un ennemi inconscient du danger, l invite « Neutraliser / Tuer » apparait
+            inter = st.get('interact') or {}
+            ch0 = str((inter.get('choices') or [''])[0]).lower()
+            if crouched and any(w in ch0 for w in ('neutraliser', 'tuer', 'eliminer', 'éliminer', 'takedown', 'assommer')):
+                kbm.act('interact', 0.25); time.sleep(1.5)
+                log(f'  [combat] elimination furtive : « {ch0} »')
+                seq = None; continue
             alive = _alive(st.get('enemies'), allow_police=False)
             if not alive:
                 # cible imposee (agresseur pas encore hostile a V) : on la suit par sa position initiale
@@ -211,7 +226,7 @@ def engage(target: dict, stop=None, log=print, max_s: float = 25.0) -> bool:
                 quickhack_first(); hacked = True; seq = None; continue
             if e['d'] > MELEE_RANGE:
                 kbm.hold('W')
-                if e['d'] > 8.0: kbm.act_hold('sprint')
+                if e['d'] > 8.0 and not crouched: kbm.act_hold('sprint')
                 else: kbm.act_release('sprint')
             else:
                 kbm.release('W'); kbm.act_release('sprint')
@@ -219,6 +234,8 @@ def engage(target: dict, stop=None, log=print, max_s: float = 25.0) -> bool:
                     heavy_attack(); time.sleep(0.2)
     finally:
         kbm.release_all()
+        if crouched:
+            kbm.act('crouch', 0.1)                                   # ne jamais rester accroupi apres l approche
     return False
 
 
@@ -398,6 +415,8 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             # -- APPROCHE : sprint, glissade, frappe sautee, zigzag
             if e['d'] > MELEE_RANGE:
                 kbm.hold('W')
+                if 4.5 < e['d'] < 8.0 and now - t_dodge > DODGE_CD and gap < 20:
+                    dodge('W'); t_dodge = now; stats['esquives'] += 1          # DASH d approche (dodgeDash vers l avant)
                 if e['d'] > 7.0:
                     kbm.act_hold('sprint')
                     if e['d'] < 9.0 and now - t_slide > SLIDE_CD:
@@ -416,7 +435,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             combo += 1
             if pressure >= 2 and combo % 5 == 0:
                 block(0.3); stats['parades'] += 1
-            elif now - t_dodge > DODGE_CD and combo % 4 == 0:
+            elif now - t_dodge > DODGE_CD and combo % 2 == 0:
                 side = 'D' if side == 'A' else 'A'
                 dodge(side); t_dodge = now; stats['esquives'] += 1
             elif combo % 5 == 0:

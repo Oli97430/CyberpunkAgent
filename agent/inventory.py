@@ -21,6 +21,11 @@ from . import nav
 MELEE_TYPES = ('Wea_Knife', 'Wea_Katana', 'Wea_OneHandedClub', 'Wea_TwoHandedClub', 'Wea_Hammer',
                'Wea_LongBlade', 'Wea_ShortBlade', 'Wea_Machete', 'Wea_Axe', 'Wea_Chainsword', 'Wea_Fists')
 JUNK_TYPES = ('Gen_Junk',)
+BLUNT_TYPES = ('Wea_OneHandedClub', 'Wea_TwoHandedClub', 'Wea_Hammer')   # contondantes : preferees au corps a corps (Olivier)
+
+
+def melee_score(it: dict) -> float:
+    return (it.get('dps') or 0) * (1.25 if (it.get('type') or '') in BLUNT_TYPES else 1.0)
 MAX_DISASSEMBLE = 12
 equip_attempts: dict = {}      # index d objet -> tentatives d equipement (evite de re-equiper en boucle)
 SELLABLE: list = []          # rempli par manage() ; consomme par sell_all() chez un marchand
@@ -82,7 +87,7 @@ def manage(log=print) -> dict:
         from . import combat
         melee_slots = [s for s in slots if (s.get('type') or '') in MELEE_TYPES]
         ranged_slots = [s for s in slots if (s.get('type') or '').startswith('Wea_') and (s.get('type') or '') not in MELEE_TYPES]
-        best = max(melee_slots or slots, key=lambda s: s.get('dps') or 0)
+        best = max(melee_slots or slots, key=melee_score)
         combat.MELEE_SLOT = str(best['slot'])
         combat.RANGED_SLOT = str(max(ranged_slots, key=lambda s: s.get('dps') or 0)['slot']) if ranged_slots else None
         log(f"  [inventaire] emplacements : " + ' | '.join(f"{s['slot']}:{s.get('name', '?')} dps {s.get('dps', 0):.0f}" for s in slots)
@@ -91,7 +96,7 @@ def manage(log=print) -> dict:
     # 1. armes : 2 meilleures de MELEE (emplacements 1-2) + la meilleure A DISTANCE (emplacement 3)
     #    pour les drones, tourelles et cibles hors de portee ; V reste melee par defaut.
     melee = [it for it in items if (it.get('type') or '') in MELEE_TYPES and (it.get('dps') or 0) > 0]
-    melee.sort(key=lambda it: it.get('dps') or 0, reverse=True)
+    melee.sort(key=melee_score, reverse=True)          # contondantes favorisees (+25 %)
     ranged = [it for it in items if (it.get('type') or '').startswith('Wea_') and (it.get('type') or '') not in MELEE_TYPES and (it.get('dps') or 0) > 0]
     ranged.sort(key=lambda it: it.get('dps') or 0, reverse=True)
     equipped = 0
