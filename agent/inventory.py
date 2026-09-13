@@ -100,23 +100,27 @@ def manage(log=print) -> dict:
     ranged = [it for it in items if (it.get('type') or '').startswith('Wea_') and (it.get('type') or '') not in MELEE_TYPES and (it.get('dps') or 0) > 0]
     ranged.sort(key=lambda it: it.get('dps') or 0, reverse=True)
     equipped = 0
-    if ranged:
-        r0 = ranged[0]
-        if not r0.get('equipped') and equip(r0['i'], 2):
-            equipped += 1
-            log(f"  [inventaire] arme a distance « {r0.get('name')} » ({r0.get('type')}, dps {r0.get('dps', 0):.0f}) -> emplacement 3")
-            time.sleep(0.3)
-        from . import combat
-        if combat.RANGED_SLOT is None:
-            combat.RANGED_SLOT = '3'
+    # affectation STABLE : emplacement 1 = meilleure melee, 2 = deuxieme melee, 3 = meilleure arme a feu.
+    # On n equipe que si l emplacement ne contient pas deja cet objet (9 re-equipements par session sinon :
+    # les 3 melee et l arme a feu se chassaient l une l autre).
+    in_slot = {int(sl.get('slot') or 0): str(sl.get('name') or '') for sl in (inv.get('slots') or [])}
+    wanted = {}
     for slot, it in enumerate(melee[:2]):
-        if it.get('equipped'):
+        wanted[slot] = it
+    if ranged:
+        wanted[2] = ranged[0]
+    for slot, it in sorted(wanted.items()):
+        if in_slot.get(slot + 1) == str(it.get('name')):
             continue
         if equip(it['i'], slot):
             equipped += 1
-            log(f"  [inventaire] equipe « {it.get('name')} » ({it.get('type')}, dps {it.get('dps', 0):.0f}) -> emplacement {slot + 1}")
+            kind = 'arme a feu' if slot == 2 else 'melee'
+            log(f"  [inventaire] {kind} « {it.get('name')} » ({it.get('type')}, dps {it.get('dps', 0):.0f}) -> emplacement {slot + 1}")
             time.sleep(0.3)
-    top_idx = {it['i'] for it in melee[:2]} | ({ranged[0]['i']} if ranged else set())
+    from . import combat
+    if ranged and combat.RANGED_SLOT is None:
+        combat.RANGED_SLOT = '3'
+    top_idx ={it['i'] for it in melee[:2]} | ({ranged[0]['i']} if ranged else set())
 
     # 1b. vetements : dans chaque emplacement (tete, visage, torse int/ext, jambes, pieds), le meilleur
     #     par armure puis qualite. Un objet iconique/de quete n est jamais demonte, juste compare.
