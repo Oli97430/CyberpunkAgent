@@ -67,7 +67,7 @@ def track(hash_: int) -> bool:
 LEVEL_MARGIN = 2                # une quete est « de son niveau » si niveau recommande <= niveau de V + 2
 
 
-def pick_next(quests: list[dict], current_hash: int | None = None, player_level: int | None = None) -> dict | None:
+def pick_next(quests: list[dict], current_hash: int | None = None, player_level: int | None = None, prefer_givers: bool = False) -> dict | None:
     """Objectif de son NIVEAU d abord (niveau recommande connu et <= niveau de V + 2), puis le plus proche ;
     avec marqueur, pas bloque, pas celui en cours, pas dans une zone dangereuse."""
     cands = [q for q in quests
@@ -83,10 +83,12 @@ def pick_next(quests: list[dict], current_hash: int | None = None, player_level:
     def known(q):
         return 0 if (q.get('lvl') and player_level and q['lvl'] <= player_level + LEVEL_MARGIN) else 1
     # a pied, une quete a < 400 m est realiste ; au-dela, on n y va qu a defaut
-    return min(cands, key=lambda q: (over(q), known(q), q['dist'] >= 400, q['dist']))
+    def giver(q):                # 0 = donneur de quete (on lui parle pour lancer une quete), 1 = autre marqueur
+        return 0 if (prefer_givers and 'QuestGiver' in str(q.get('text') or '')) else 1
+    return min(cands, key=lambda q: (over(q), giver(q), known(q), q['dist'] >= 400, q['dist']))
 
 
-def switch(current_hash: int | None, log=print) -> dict | None:
+def switch(current_hash: int | None, log=print, prefer_givers: bool = False) -> dict | None:
     mark_blocked(current_hash)
     quests = list_active()
     if not quests:
@@ -95,7 +97,9 @@ def switch(current_hash: int | None, log=print) -> dict | None:
     log(f"  [quetes] {len(quests)} objectif(s) actifs, {sum(1 for q in quests if q.get('hasMappin'))} avec marqueur")
     from . import motion as _m
     _st = _m.read_state() or {}
-    nxt = pick_next(quests, current_hash, player_level=_st.get('level'))
+    nxt = pick_next(quests, current_hash, player_level=_st.get('level'), prefer_givers=prefer_givers)
+    if nxt and prefer_givers and 'QuestGiver' in str(nxt.get('text') or ''):
+        log('  [quetes] aucune quete suivie : V va voir un donneur de quete de son niveau pour en decrocher une')
     if not nxt:
         log('  [quetes] aucun autre objectif accessible')
         return None
