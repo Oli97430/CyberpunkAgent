@@ -87,13 +87,18 @@ local function questLevelOf(jm, e, hash)
         journal('OK   questLevel GetRecommendedLevelID -> ' .. tostring(okI) .. '/' .. tostring(sid))
         if okI and sid then
             raw = sid
-            local n = sid:match('(%d+)')
-            if n then lvl = tonumber(n) end
+            -- l ID est un enregistrement TweakDB (ex. DeviceContentAssignment.ma_wat_kab_08) : on lit ses champs
+            -- de niveau (noms possibles essayes un par un, journalises la premiere fois)
+            for _, fl in ipairs({ 'powerLevelMin', 'powerLevelMax', 'powerLevel', 'recommendedLevel', 'level', 'contentLevel', 'minLevel', 'maxLevel', 'difficulty' }) do
+                local okF, v = pcall(function() return TweakDB:GetFlat(sid .. '.' .. fl) end)
+                if okF and v ~= nil then
+                    journal('OK   questLevel flat ' .. fl .. ' = ' .. tostring(v))
+                    if type(v) == 'number' and v > 0 and not lvl then lvl = math.floor(v) end
+                end
+            end
             if not lvl then
-                pcall(function()
-                    local rec = TweakDBInterface.GetRecord(id)
-                    if rec then lvl = rec:Level() end
-                end)
+                local n = sid:match('_(%d+)$')
+                if n then lvl = tonumber(n) end          -- dernier recours : le numero du palier dans le nom
             end
             if lvl then break end
         end
