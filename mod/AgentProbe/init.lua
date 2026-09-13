@@ -37,6 +37,52 @@ local lastInventory = {}                    -- ItemID par index de la derniere l
 local qhListLogged = false                  -- structure de la liste des hacks journalisee une fois
 local lastRecipes = {}                       -- TweakDBID par index de la derniere liste de recettes
 local craftDiagDone = false
+-- NIVEAU RECOMMANDE d une quete : on remonte les parents de l entree de journal (objectif -> phase
+-- -> quete) jusqu a une entree qui expose GetRecommendedLevelID / GetRecommendedLevel. Chaque appel
+-- natif est journalise RUN/OK (un plantage designerait le coupable). Resultat mis en cache par hash.
+local questLvlCache = {}
+local function questLevelOf(jm, e, hash)
+    if hash and questLvlCache[hash] ~= nil then return questLvlCache[hash] or nil end
+    local lvl, raw = nil, nil
+    local cur = e
+    for depth = 1, 4 do
+        if not cur then break end
+        local cls = '?'
+        pcall(function() cls = tostring(cur:GetClassName()) end)
+        -- on ESSAIE les methodes (une methode absente leve une erreur Lua, attrapee par pcall ; pas de plantage natif)
+        journal('RUN  questLevel d=' .. depth .. ' ' .. cls .. ' GetRecommendedLevel')
+        local okL, v = pcall(function() return cur:GetRecommendedLevel() end)
+        journal('OK   questLevel GetRecommendedLevel -> ' .. tostring(okL) .. '/' .. tostring(v))
+        if okL and type(v) == 'number' and v > 0 then lvl = v; raw = tostring(v); break end
+        journal('RUN  questLevel d=' .. depth .. ' ' .. cls .. ' GetRecommendedLevelID')
+        local okI, id = pcall(function() return cur:GetRecommendedLevelID() end)
+        local sid = nil
+        if okI and id then
+            pcall(function() sid = TDBID.ToStringDEBUG(id) end)
+            if not sid then pcall(function() sid = tostring(id) end) end
+        end
+        journal('OK   questLevel GetRecommendedLevelID -> ' .. tostring(okI) .. '/' .. tostring(sid))
+        if okI and sid then
+            raw = sid
+            local n = sid:match('(%d+)')
+            if n then lvl = tonumber(n) end
+            if not lvl then
+                pcall(function()
+                    local rec = TweakDBInterface.GetRecord(id)
+                    if rec then lvl = rec:Level() end
+                end)
+            end
+            if lvl then break end
+        end
+        local okP, parent = pcall(function() return jm:GetParentEntry(cur) end)
+        cur = okP and parent or nil
+    end
+    journal('OK   questLevel final -> ' .. tostring(lvl) .. ' (' .. tostring(raw) .. ')')
+    if hash then questLvlCache[hash] = lvl or false end
+    return lvl, raw
+end
+
+
 local lootClassesLogged = false             -- classes d objets lootables vues, journalisees une fois
 local lookatLogged = false
 local crimeAcc, lastCrimes = 0.0, nil
@@ -1067,51 +1113,6 @@ local function writePath(resp)
 end
 
 
--- NIVEAU RECOMMANDE d une quete : on remonte les parents de l entree de journal (objectif -> phase
--- -> quete) jusqu a une entree qui expose GetRecommendedLevelID / GetRecommendedLevel. Chaque appel
--- natif est journalise RUN/OK (un plantage designerait le coupable). Resultat mis en cache par hash.
-local questLvlCache = {}
-local function questLevelOf(jm, e, hash)
-    if hash and questLvlCache[hash] ~= nil then return questLvlCache[hash] or nil end
-    local lvl, raw = nil, nil
-    local cur = e
-    for depth = 1, 4 do
-        if not cur then break end
-        local cls = '?'
-        pcall(function() cls = tostring(cur:GetClassName()) end)
-        -- on ESSAIE les methodes (une methode absente leve une erreur Lua, attrapee par pcall ; pas de plantage natif)
-        journal('RUN  questLevel d=' .. depth .. ' ' .. cls .. ' GetRecommendedLevel')
-        local okL, v = pcall(function() return cur:GetRecommendedLevel() end)
-        journal('OK   questLevel GetRecommendedLevel -> ' .. tostring(okL) .. '/' .. tostring(v))
-        if okL and type(v) == 'number' and v > 0 then lvl = v; raw = tostring(v); break end
-        journal('RUN  questLevel d=' .. depth .. ' ' .. cls .. ' GetRecommendedLevelID')
-        local okI, id = pcall(function() return cur:GetRecommendedLevelID() end)
-        local sid = nil
-        if okI and id then
-            pcall(function() sid = TDBID.ToStringDEBUG(id) end)
-            if not sid then pcall(function() sid = tostring(id) end) end
-        end
-        journal('OK   questLevel GetRecommendedLevelID -> ' .. tostring(okI) .. '/' .. tostring(sid))
-        if okI and sid then
-            raw = sid
-            local n = sid:match('(%d+)')
-            if n then lvl = tonumber(n) end
-            if not lvl then
-                pcall(function()
-                    local rec = TweakDBInterface.GetRecord(id)
-                    if rec then lvl = rec:Level() end
-                end)
-            end
-            if lvl then break end
-        end
-        local okP, parent = pcall(function() return jm:GetParentEntry(cur) end)
-        cur = okP and parent or nil
-    end
-    journal('OK   questLevel final -> ' .. tostring(lvl) .. ' (' .. tostring(raw) .. ')')
-    if hash then questLvlCache[hash] = lvl or false end
-    return lvl, raw
-end
-
 local function questTarget()
     local jm = Game.GetJournalManager()
     local e = jm:GetTrackedEntry()
@@ -1188,6 +1189,8 @@ local function findNearbyVendor(player)
     pcall(function() q.testedSet = TargetingSet.Complete end)
     local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
     local vendor = nil
+    local selfKey = nil
+    pcall(function() selfKey = tostring(player:GetEntityID().hash) end)
     if okT and parts then
         local seenEnt = {}
         for i = 1, #parts do
@@ -1196,7 +1199,7 @@ local function findNearbyVendor(player)
             if ent then
                 local okH, h = pcall(function() return ent:GetEntityID().hash end)
                 local key = okH and tostring(h) or tostring(ent)
-                if seenEnt[key] then ent = nil else seenEnt[key] = true end
+                if seenEnt[key] or key == selfKey then ent = nil else seenEnt[key] = true end
             end
             if ent then
                 local isV = false
@@ -1454,6 +1457,8 @@ local function handleCommand(player, cmd)
         pcall(function() q.testedSet = TargetingSet.Complete end)
         local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
         local vendor = nil
+        local selfKey = nil
+        pcall(function() selfKey = tostring(player:GetEntityID().hash) end)
         if okT and parts then
             local seenEnt = {}   -- une entree par ENTITE (GetTargetParts renvoie une partie par zone du corps)
             for i = 1, #parts do
@@ -1462,7 +1467,7 @@ local function handleCommand(player, cmd)
                 if ent then
                     local okH, h = pcall(function() return ent:GetEntityID().hash end)
                     local key = okH and tostring(h) or tostring(ent)
-                    if seenEnt[key] then ent = nil else seenEnt[key] = true end
+                    if seenEnt[key] or key == selfKey then ent = nil else seenEnt[key] = true end
                 end
                 if ent then
                     local isV = false
