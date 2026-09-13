@@ -120,7 +120,7 @@ def step_program() -> Path:
     say('\n[4/6] Programme')
     dst = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'Programs' / APP
     dst.mkdir(parents=True, exist_ok=True)
-    for name in ('CyberpunkAgent.exe', 'README.md', 'LICENSE', 'CHANGELOG.md'):
+    for name in ('CyberpunkAgent.exe', 'CyberpunkAgent-Config.exe', 'README.md', 'LICENSE', 'CHANGELOG.md'):
         f = payload_dir() / name
         if f.exists():
             shutil.copy2(f, dst / name)
@@ -204,9 +204,14 @@ def step_config(game: Path, prog: Path, ollama: str | None, prov_cfg: dict | Non
     exe = prog / 'CyberpunkAgent.exe'
     ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\\{APP}.lnk');"
           f"$s.TargetPath='{exe}';$s.Arguments='20';$s.WorkingDirectory='{prog}';$s.Description='V joue seul (F11 = pause/reprise, F12 = arret)';$s.Save()")
+    gui = prog / 'CyberpunkAgent-Config.exe'
+    ps2 = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\\{APP} Configuration.lnk');"
+           f"$s.TargetPath='{gui}';$s.WorkingDirectory='{prog}';$s.Description='Reglages de l agent (modele, cle API, comportements)';$s.Save()")
     try:
         subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps], capture_output=True, timeout=30)
-        say('      raccourci « CyberpunkAgent » cree sur le Bureau.')
+        if gui.exists():
+            subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps2], capture_output=True, timeout=30)
+        say('      raccourcis « CyberpunkAgent » et « CyberpunkAgent Configuration » crees sur le Bureau.')
     except Exception:
         say(f'      (raccourci non cree : lance {exe} directement)')
 

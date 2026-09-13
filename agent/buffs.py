@@ -52,6 +52,9 @@ def _use(it: dict) -> bool:
 
 def apply(st: dict | None, log=print, in_combat: bool = False) -> int:
     """Consomme ce qui manque : nourriture si pas Nourri, boisson si pas Hydrate, booster pour un combat."""
+    from .config import CFG
+    if not CFG.features.get('buffs', True):
+        return 0
     if time.perf_counter() - _cache['t'] > 600.0 and not in_combat:
         refresh()
     b = (st or {}).get('buffs') or {}

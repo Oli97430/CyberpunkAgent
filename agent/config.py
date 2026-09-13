@@ -117,6 +117,9 @@ class Config:
         gd = user.get('game_dir')
         self.game_dir: Path | None = Path(gd) if gd else detect_game_dir()
         self.mod_dir: Path | None = (self.game_dir / MOD_REL) if self.game_dir else None
+        # reglages saisis DANS LE JEU (fenetre CET du mod) : ecrits par le mod dans son dossier, prioritaires
+        if self.mod_dir and (self.mod_dir / 'agent_config.json').exists():
+            user.update({k: v for k, v in _load_json(self.mod_dir / 'agent_config.json').items() if v not in ('', None)})
         self.cet_log: Path | None = (self.game_dir / CET_LOG_REL) if self.game_dir else None
         self.user_settings = Path(user.get('user_settings') or detect_user_settings())
         self.ollama_exe = user.get('ollama_exe') or detect_ollama()
@@ -129,6 +132,10 @@ class Config:
         self.anthropic_model = user.get('anthropic_model') or None
         self.openai_base_url = user.get('openai_base_url') or None
         self.language = user.get('language', 'fr')
+        # comportements activables (panneau de configuration / fenetre in-game) : tout est actif par defaut
+        feats = user.get('features') or {}
+        self.features = {k: bool(feats.get(k, True)) for k in ('radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs')}
+        self.minutes = int(user.get('minutes') or 20)
         self.log_file = DATA_DIR / 'brain_log.txt'
         self.deaths_file = DATA_DIR / 'deaths.json'
 
@@ -139,7 +146,8 @@ class Config:
         return {'game_dir': str(self.game_dir) if self.game_dir else None, 'mod_dir': str(self.mod_dir) if self.mod_dir else None,
                 'user_settings': str(self.user_settings), 'ollama_exe': self.ollama_exe, 'ollama_url': self.ollama_url,
                 'model': self.model, 'provider': self.provider, 'api_key': ('***' if self.api_key else None),
-                'openai_model': self.openai_model, 'anthropic_model': self.anthropic_model, 'data_dir': str(DATA_DIR)}
+                'openai_model': self.openai_model, 'anthropic_model': self.anthropic_model, 'features': self.features,
+                'minutes': self.minutes, 'data_dir': str(DATA_DIR)}
 
 
 CFG = Config()

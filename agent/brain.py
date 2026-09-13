@@ -277,7 +277,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         # 3a-ter. COURSES : assez d objets a vendre OU soins bas (craft insuffisant) -> marchand a portee
         need_heals = inventory.HEALS < 2
         rich_sale = inventory.SELL_VALUE >= 1000          # assez a encaisser pour que le detour vaille le coup
-        if (len(inventory.SELLABLE) >= 8 or need_heals or rich_sale) and time.perf_counter() - last_sell_t > 600.0:
+        if CFG.features.get('sell', True) and (len(inventory.SELLABLE) >= 8 or need_heals or rich_sale) and time.perf_counter() - last_sell_t > 600.0:
             last_sell_t = time.perf_counter()
             vendor.MAX_VENDOR_M = 700.0 if (len(inventory.SELLABLE) >= 20 or need_heals or rich_sale) else 250.0   # on accepte d aller plus loin
             vend = vendor.pick_vendor(vendor.list_vendors())
@@ -305,7 +305,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 continue
 
         # 3a-quater. CHARCUDOC : assez d eddies -> V s optimise lui-meme (meilleur cyberware abordable, pose par script)
-        if inventory.MONEY >= 6000 and time.perf_counter() - last_ripper_t > 1800.0 and not st.get('combat'):
+        if CFG.features.get('ripperdoc', True) and inventory.MONEY >= 6000 and time.perf_counter() - last_ripper_t > 1800.0 and not st.get('combat'):
             last_ripper_t = time.perf_counter()
             vendor.MAX_VENDOR_M = 700.0
             rip = vendor.pick_vendor(vendor.list_vendors(), prefer='ripper')
@@ -356,6 +356,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             plan.last_t = -99.0; plan.action = 'objectif'
             continue
 
+        if action == 'secourir' and not CFG.features.get('rescue', True):
+            action = 'objectif'
         if action == 'secourir':
             aggr = planner.aggressors(st)
             crimes = st.get('crimes') or []
@@ -514,7 +516,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             if tries == 3 or (vehicle_prompt and ikey not in obj_inter_tries):
                 obj_inter_tries[ikey] = (4, t_first)
                 _log(f"invite « {inter['choices'][0]} » ignoree ({'vehicule' if vehicle_prompt else 'sans effet apres 3 essais'})")
-        if dist is not None and dist > 500.0 and alt_target is None and kbm.ACTIONS.get('autodrive') \
+        if dist is not None and dist > 500.0 and alt_target is None and kbm.ACTIONS.get('autodrive') and CFG.features.get('driving', True) \
                 and time.perf_counter() - last_drive_t > 240.0:
             last_drive_t = time.perf_counter()
             _log(f'objectif a {dist:.0f} m : V prend la voiture (autodrive)')

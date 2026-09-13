@@ -34,6 +34,9 @@ def turn_off(log=print) -> None:
 
 def tick(st: dict, log=print, busy: bool = False) -> None:
     """A appeler a chaque tour de boucle. `busy` = combat / dialogue / vehicule : on coupe."""
+    from .config import CFG
+    if not CFG.features.get('radio', True):
+        return
     now = time.perf_counter()
     if busy:
         if _state['on']:

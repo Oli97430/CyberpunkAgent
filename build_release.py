@@ -28,11 +28,11 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True, cwd=ROOT)
 
 
-def pyinstaller(script: Path, name: str, add_data: list[tuple[Path, str]], icon: Path | None = None) -> Path:
-    cmd = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--console',
+def pyinstaller(script: Path, name: str, add_data: list[tuple[Path, str]], icon: Path | None = None, windowed: bool = False) -> Path:
+    cmd = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed' if windowed else '--console',
            '--name', name, '--distpath', str(DIST), '--workpath', str(BUILD / 'work'), '--specpath', str(BUILD),
            '--exclude-module', 'dxcam', '--exclude-module', 'cv2', '--exclude-module', 'numpy', '--exclude-module', 'vgamepad',
-           '--exclude-module', 'tkinter', '--exclude-module', 'PIL']
+           '--exclude-module', 'PIL'] + ([] if windowed else ['--exclude-module', 'tkinter'])
     for src, dst in add_data:
         cmd += ['--add-data', f'{src};{dst}']
     if icon and icon.exists():
@@ -50,11 +50,13 @@ def main() -> None:
         shutil.rmtree(PAYLOAD)
     PAYLOAD.mkdir(parents=True)
 
-    # 1. l agent
+    # 1. l agent + le panneau de configuration (fenetre tkinter)
     agent_exe = pyinstaller(ROOT / 'run_agent.py', 'CyberpunkAgent', [])
+    gui_exe = pyinstaller(ROOT / 'agent_gui.py', 'CyberpunkAgent-Config', [], windowed=True)
 
     # 2. la charge utile de l installateur : agent, mod, docs, sources minimales (detection du jeu)
     shutil.copy2(agent_exe, PAYLOAD / 'CyberpunkAgent.exe')
+    shutil.copy2(gui_exe, PAYLOAD / 'CyberpunkAgent-Config.exe')
     shutil.copytree(ROOT / 'mod', PAYLOAD / 'mod')
     for f in ('README.md', 'LICENSE', 'CHANGELOG.md'):
         shutil.copy2(ROOT / f, PAYLOAD / f)
@@ -69,6 +71,7 @@ def main() -> None:
     zip_path = DIST / f'CyberpunkAgent-v{VERSION}-win64.zip'
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
         z.write(agent_exe, 'CyberpunkAgent.exe')
+        z.write(gui_exe, 'CyberpunkAgent-Config.exe')
         z.write(setup_exe, 'CyberpunkAgent-Setup.exe')
         for f in ('README.md', 'LICENSE', 'CHANGELOG.md'):
             z.write(ROOT / f, f)
@@ -76,7 +79,7 @@ def main() -> None:
             if f.is_file():
                 z.write(f, str(f.relative_to(ROOT)))
     print('\nrelease :')
-    for f in (agent_exe, setup_exe, zip_path):
+    for f in (agent_exe, gui_exe, setup_exe, zip_path):
         print(f'  {f.name:40s} {f.stat().st_size / 1e6:6.1f} Mo')
 
 

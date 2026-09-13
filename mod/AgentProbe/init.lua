@@ -1987,6 +1987,73 @@ pollCommands = function(player, dt)
     writePath(resp)
 end
 
+
+-- ============================ FENETRE IN-GAME (overlay CET) ============================
+-- Reglages de l agent saisis dans le jeu : fournisseur du modele, cle API, modeles, comportements.
+-- Ecrits dans agent_config.json (dossier du mod) ; l agent Python les lit en priorite.
+local ui = { open = false, provider = 1, key = '', model = 'llama3.2:latest', openai_model = 'gpt-4o-mini',
+             anthropic_model = 'claude-haiku-4-5-20251001', minutes = 20, saved = '',
+             radio = true, driving = true, rescue = true, sell = true, ripperdoc = true, buffs = true }
+local uiProviders = { 'ollama', 'openai', 'anthropic' }
+local function uiLoad()
+    local f = io.open('agent_config.json', 'r')
+    if not f then return end
+    local txt = f:read('*a'); f:close()
+    local ok, d = pcall(json.decode, txt)
+    if not ok or type(d) ~= 'table' then return end
+    for i, p in ipairs(uiProviders) do if d.provider == p then ui.provider = i end end
+    ui.key = d.api_key or ui.key
+    ui.model = d.model or ui.model
+    ui.openai_model = d.openai_model or ui.openai_model
+    ui.anthropic_model = d.anthropic_model or ui.anthropic_model
+    ui.minutes = d.minutes or ui.minutes
+    if type(d.features) == 'table' then
+        for _, k in ipairs({ 'radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs' }) do
+            if d.features[k] ~= nil then ui[k] = d.features[k] end
+        end
+    end
+end
+local function uiSave()
+    local d = { provider = uiProviders[ui.provider], api_key = ui.key, model = ui.model, openai_model = ui.openai_model,
+                anthropic_model = ui.anthropic_model, minutes = ui.minutes,
+                features = { radio = ui.radio, driving = ui.driving, rescue = ui.rescue, sell = ui.sell, ripperdoc = ui.ripperdoc, buffs = ui.buffs } }
+    local f = io.open('agent_config.json', 'w')
+    if f then f:write(json.encode(d)); f:close(); ui.saved = 'enregistre ' .. os.date('%H:%M:%S') else ui.saved = 'echec d ecriture' end
+end
+pcall(uiLoad)
+registerForEvent('onOverlayOpen', function() ui.open = true end)
+registerForEvent('onOverlayClose', function() ui.open = false end)
+registerForEvent('onDraw', function()
+    if not ui.open then return end
+    if ImGui.Begin('CyberpunkAgent') then
+        ImGui.Text('Modele de decision')
+        for i, p in ipairs(uiProviders) do
+            if ImGui.RadioButton(p, ui.provider == i) then ui.provider = i end
+            if i < #uiProviders then ImGui.SameLine() end
+        end
+        if ui.provider > 1 then
+            ui.key = ImGui.InputText('Cle API', ui.key, 256, ImGuiInputTextFlags.Password)
+        end
+        ui.model = ImGui.InputText('Modele Ollama', ui.model, 128)
+        ui.openai_model = ImGui.InputText('Modele OpenAI', ui.openai_model, 128)
+        ui.anthropic_model = ImGui.InputText('Modele Anthropic', ui.anthropic_model, 128)
+        ImGui.Separator()
+        ImGui.Text('Comportements de V')
+        ui.radio = ImGui.Checkbox('Radio de temps en temps', ui.radio)
+        ui.driving = ImGui.Checkbox('Conduire quand l objectif est loin', ui.driving)
+        ui.rescue = ImGui.Checkbox('Intervenir dans les agressions', ui.rescue)
+        ui.sell = ImGui.Checkbox('Vendre la camelote / acheter des soins', ui.sell)
+        ui.ripperdoc = ImGui.Checkbox('Charcudoc (cyberware)', ui.ripperdoc)
+        ui.buffs = ImGui.Checkbox('Buffs avant le combat', ui.buffs)
+        ui.minutes = ImGui.InputInt('Duree de session (min)', ui.minutes)
+        ImGui.Separator()
+        if ImGui.Button('Enregistrer') then pcall(uiSave) end
+        ImGui.SameLine(); ImGui.Text(ui.saved)
+        ImGui.Text('Lance ensuite CyberpunkAgent.exe (F11 pause, F12 arret).')
+    end
+    ImGui.End()
+end)
+
 registerForEvent('onShutdown', function()
     if fh then fh:close(); fh = nil end
 end)

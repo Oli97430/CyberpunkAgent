@@ -160,6 +160,13 @@ Fichier optionnel `config.json`, à côté de l'exe ou dans `%APPDATA%\Cyberpunk
 
 Tout est détecté automatiquement quand la clé est absente (Steam via le registre et `libraryfolders.vdf`, GOG et Epic aux emplacements habituels, Ollama dans le PATH).
 
+### Panneau de configuration
+
+Deux façons de régler l'agent sans toucher aux fichiers :
+
+- **`CyberpunkAgent-Config.exe`** (raccourci « CyberpunkAgent Configuration ») : fenêtre Windows avec le choix du modèle (Ollama / OpenAI / Claude), la clé API (masquée), les modèles, les comportements de V (radio, conduite, sauvetages, courses, charcudoc, buffs), la durée de session, un bouton **Vérifier** et un bouton **Lancer V**.
+- **Dans le jeu** : ouvrez la console Cyber Engine Tweaks, la fenêtre **CyberpunkAgent** propose les mêmes réglages ; « Enregistrer » les écrit dans le dossier du mod, et l'agent les lit en priorité au lancement suivant.
+
 ### Choisir le modèle de décision : Ollama, OpenAI ou Claude
 
 L'agent prend ses décisions ouvertes (parler ou non, secourir ou non, quel choix de dialogue) avec un modèle de langage. Trois fournisseurs, au choix de l'utilisateur (l'installateur le demande, ou `config.json`) :
