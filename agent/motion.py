@@ -144,7 +144,7 @@ def walk_to(x: float, y: float, timeout: float = 20.0, stop=None, interrupt=None
             d = dist2d(st, target)
             # sprint des que la cible est a plus de 12 m ; en fin de chemin (sprint=False) on
             # marche pour finir precisement
-            if d > 12.0 and not sprinting:
+            if d > 12.0 and not sprinting and not st.get('swim'):
                 kbm.act_hold('sprint'); sprinting = True
             elif d <= 6.0 and sprinting and not sprint:
                 kbm.act_release('sprint'); sprinting = False

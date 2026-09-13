@@ -190,7 +190,7 @@ def engage(target: dict, stop=None, log=print, max_s: float = 25.0) -> bool:
     hacked = False
     st0 = motion.read_state() or {}
     from .config import CFG as _C3
-    stealth = _C3.features.get('stealth', True) and not st0.get('combat') and (target.get('d') or 0) > 4.0   # pas encore repere : DISCRETION (option)
+    stealth = _C3.features.get('stealth', True) and not st0.get('combat') and (target.get('d') or 0) > 4.0 and not st0.get('swim')   # DISCRETION (option) ; jamais accroupi dans l eau (= plongee)
     crouched = False
     if stealth:
         kbm.act('crouch', 0.1); crouched = True; time.sleep(0.3)
@@ -551,6 +551,8 @@ def loot_around(stop=None, log=print, radius_m: float = 20.0, max_items: int = 8
     st = motion.read_state()
     if not st:
         return {'ok': False, 'reason': 'etat illisible'}
+    if st.get('swim'):
+        return {'ok': False, 'reason': 'dans l eau'}
     LOOT_CLS = ('gameLootContainerBase', 'gameItemDropObject', 'gameLootBag', 'gameContainerObject')
     NO_GRAB = ('saisir', 'porter', 'soulever', 'grab', 'carry')    # invites a NE JAMAIS accepter : V porterait un corps
     if st.get('carrying') and kbm.ACTIONS.get('dropbody'):

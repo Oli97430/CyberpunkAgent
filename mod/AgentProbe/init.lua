@@ -642,6 +642,10 @@ registerForEvent('onUpdate', function(dt)
         local hp = Game.GetStatPoolsSystem():GetStatPoolValue(id, gamedataStatPoolType.Health, true)
         local playerLevel = nil
         pcall(function() playerLevel = Game.GetStatsSystem():GetStatValue(id, gamedataStatType.Level) end)
+        -- NAGE : V dans l eau (IsSwimming) et oxygene restant (plongee) : ne jamais se noyer
+        local swim, oxygen = nil, nil
+        pcall(function() swim = player:IsSwimming() end)
+        pcall(function() oxygen = Game.GetStatPoolsSystem():GetStatPoolValue(id, gamedataStatPoolType.Oxygen, true) end)
         local psm = Game.GetBlackboardSystem():GetLocalInstanced(id, defs.PlayerStateMachine)
         local inCombat = psm and (psm:GetInt(defs.PlayerStateMachine.Combat) == EnumInt(gamePSMCombat.InCombat)) or false
         local inVehicle = false
@@ -1138,7 +1142,7 @@ registerForEvent('onUpdate', function(dt)
         if #bodies == 0 then bodies = nil end
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
-                 hp = hp, level = playerLevel, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
+                 hp = hp, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
                  lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs, phone = phone, weapon = weapon,
                  enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, seqEnd = seq }
     end)

@@ -88,6 +88,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     no_mappin_since = None
     path_failures = 0
     rot_failures = 0
+    swim_logged = False
     straight_tried = False
     obj_inter_tries = {}
     unfocused = False
@@ -198,6 +199,25 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     stats['sms'] = stats.get('sms', 0) + n_sms
             except Exception as _e:
                 _log(f'  [sms] erreur : {_e}')
+
+        # 0e. NAGE : dans l eau, V ne plonge pas (pas de touche accroupi), remonte des que l oxygene baisse,
+        #     et nage vers l objectif / la rive la plus proche ; pas de combat ni de loot dans l eau
+        if st.get('swim'):
+            oxy = st.get('oxygen')
+            if oxy is not None and oxy < 70:
+                kbm.act('jump', 0.4); time.sleep(0.3)                 # remonter a la surface
+                if not swim_logged:
+                    _log(f'NAGE : oxygene {oxy:.0f} %, V remonte a la surface')
+            if not swim_logged:
+                swim_logged = True; _log('NAGE : V est dans l eau, il nage vers l objectif (ni plongee, ni combat, ni loot)')
+            qs = st.get('quest') or {}
+            if qs.get('mx') is not None:
+                motion.walk_to(qs['mx'], qs['my'], timeout=8.0, stop=stop, sprint=False)
+            else:
+                kbm.hold('W'); time.sleep(3.0); kbm.release('W')
+            continue
+        if swim_logged:
+            swim_logged = False; _log('NAGE : V est sorti de l eau')
 
         if st.get('carrying') and kbm.ACTIONS.get('dropbody'):
             _log('V porte un corps : il le lache (il ne peut ni courir ni se battre ainsi)')
