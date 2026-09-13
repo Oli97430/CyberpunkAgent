@@ -395,14 +395,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     _log(f"charcudoc : non atteint ({tr.get('reason')})"); vendor.mark_failed(rip)
                 continue
 
-        # 3a-quinquies. APPARENCE : toutes les ~3 h, si un appartement de V est proche, passage au miroir
+        # 3a-quinquies. APPARENCE : une fois par mois, si un appartement de V est proche, passage au miroir
         if CFG.features.get('appearance', True) and appearance.due() and not st.get('combat') and inventory.MONEY > 0:
             apt = appearance.nearest_apartment(_log)
             if apt:
                 ra = appearance.visit_mirror(stop=stop, log=_log)
                 _log(f"apparence : {'nouveau look' if ra.get('ok') else ra.get('reason')}")
                 continue
-            appearance._last['t'] = time.perf_counter() - appearance.PERIOD_S + 900.0   # pas d appartement : on reverra dans 15 min
+            appearance._last['t'] = time.time() - appearance.PERIOD_S + 900.0   # pas d appartement : on reverra dans 15 min (sans l enregistrer)
 
         # 3b. soin hors combat si la vie est basse
         if (st.get('hp') or 100) < 40 and time.perf_counter() - last_heal_t > 8.0:

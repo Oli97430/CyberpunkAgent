@@ -1,7 +1,6 @@
 """
-appearance.py -- de temps en temps, V passe devant le miroir de son appartement et change un detail
-de son apparence (coiffure, maquillage, lunettes...). Purement cosmetique, donc rare (toutes les
-~3 h de jeu) et seulement quand un appartement de V est a moins de 150 m.
+appearance.py -- une fois par mois, V passe devant le miroir de son appartement et change un detail
+de son apparence (coiffure, maquillage, lunettes...). Purement cosmetique, donc rare (30 jours, memorise) et seulement quand un appartement de V est a moins de 150 m.
 
 Deroule : aller au marqueur d appartement -> entrer (porte : invite « Ouvrir ») -> chercher l invite
 du miroir (« miroir », « apparence », « regarder ») en tournant sur soi dans l appartement -> E ->
@@ -15,13 +14,26 @@ import time
 
 from . import input_kbm as kbm, motion, nav
 
-PERIOD_S = 3 * 3600.0
-_last = {'t': -999.0}
+PERIOD_S = 30 * 86400.0          # une fois par mois (temps reel), memorise entre les sessions (Olivier, 13/09)
+import json as _json
+from .config import DATA_DIR as _DATA
+_FILE = _DATA / 'appearance.json'
+try:
+    _last = {'t': float(_json.loads(_FILE.read_text(encoding='utf-8')).get('last_epoch', 0))}
+except Exception:
+    _last = {'t': 0.0}
+
+
+def _save() -> None:
+    try:
+        _FILE.write_text(_json.dumps({'last_epoch': _last['t']}), encoding='utf-8')
+    except Exception:
+        pass
 MIRROR_WORDS = ('miroir', 'apparence', 'regarder', 'mirror', 'appearance')
 
 
 def due() -> bool:
-    return time.perf_counter() - _last['t'] > PERIOD_S
+    return time.time() - _last['t'] > PERIOD_S
 
 
 def nearest_apartment(log=print) -> dict | None:
@@ -32,7 +44,7 @@ def nearest_apartment(log=print) -> dict | None:
 
 
 def visit_mirror(stop=None, log=print) -> dict:
-    _last['t'] = time.perf_counter()
+    _last['t'] = time.time(); _save()
     apt = nearest_apartment(log)
     if not apt:
         return {'ok': False, 'reason': 'aucun appartement a moins de 150 m'}
