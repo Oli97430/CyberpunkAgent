@@ -138,6 +138,8 @@ class Config:
         self.minutes = int(user.get('minutes') or 20)
         # temperament : courage (prudent / equilibre / temeraire), style de combat (melee / mixte / distance),
         # agressivite (defensif = ne se bat que s il est attaque ; normal ; chasseur = attaque tout hostile en vue)
+        # la quete SUIVIE (assignee par le joueur) est prioritaire sur tout le reste (courses, charcudoc, miroir, changements)
+        self.focus_tracked = bool(user.get('focus_tracked', True))
         self.courage = str(user.get('courage') or 'temeraire').lower()
         self.style = str(user.get('style') or 'melee').lower()
         self.aggro = str(user.get('aggro') or 'normal').lower()

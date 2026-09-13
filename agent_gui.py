@@ -37,7 +37,8 @@ FEATURES = [('radio', 'Ecouter la radio de temps en temps'),
             ('phone', 'Repondre aux appels'),
             ('sms', 'Lire et repondre aux SMS'),
             ('appearance', 'Changer d apparence au miroir de l appartement de temps en temps'),
-            ('recipes', 'Acheter et apprendre des plans de craft chez les marchands')]
+            ('recipes', 'Acheter et apprendre des plans de craft chez les marchands'),
+            ('focus_tracked', 'La quete suivie (assignee par le joueur) est prioritaire sur tout le reste')]
 TEMPERAMENT = [('courage', 'Courage', [('prudent', 'Prudent : evite des 5 hostiles, fuit vite, secourt a 80 % de vie'),
                                       ('equilibre', 'Equilibre : se bat jusqu a 5, fuit a 6, secourt a 60 %'),
                                       ('temeraire', 'Temeraire : se bat jusqu a 7, ne fuit que presque mort, secourt a 40 %')]),
@@ -108,7 +109,7 @@ class App(tk.Tk):
         self.features: dict[str, tk.BooleanVar] = {}
         for key, label in FEATURES:
             r += 1
-            v = tk.BooleanVar(value=bool(feats.get(key, True)))
+            v = tk.BooleanVar(value=bool(cfg.get('focus_tracked', True)) if key == 'focus_tracked' else bool(feats.get(key, True)))
             self.features[key] = v
             ttk.Checkbutton(frm, text=label, variable=v).grid(row=r, column=0, columnspan=3, sticky='w', padx=24)
 
@@ -147,7 +148,8 @@ class App(tk.Tk):
         d = load()
         d.update({'provider': self.provider.get(), 'model': self.model.get().strip() or 'llama3.2:latest',
                   'openai_model': self.openai_model.get().strip() or None, 'anthropic_model': self.anthropic_model.get().strip() or None,
-                  'features': {k: bool(v.get()) for k, v in self.features.items()},
+                  'features': {k: bool(v.get()) for k, v in self.features.items() if k != 'focus_tracked'},
+                  'focus_tracked': bool(self.features['focus_tracked'].get()),
                   'minutes': int(float(self.minutes.get() or 20)),
                   **{k: v.get() for k, v in self.temper.items()}})
         key = self.api_key.get().strip()

@@ -256,7 +256,9 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         dead_since = None
 
         q = st.get('quest') or {}
-        if q.get('lvl') and st.get('level') and q['lvl'] > st['level'] + 3 and alt_target is None \
+        # FOCUS : la quete suivie (assignee par le joueur) passe avant tout le reste tant qu elle a un marqueur
+        focus = CFG.focus_tracked and bool(q.get('hasMappin')) and alt_target is None
+        if q.get('lvl') and st.get('level') and q['lvl'] > st['level'] + 3 and alt_target is None and not CFG.focus_tracked \
                 and time.perf_counter() - last_overlevel_t > 300.0:
             last_overlevel_t = time.perf_counter()
             _log(f"quete suivie « {q.get('text')} » de niveau {q['lvl']} pour V niveau {st['level']} : trop haute, on en cherche une de son niveau")
@@ -346,7 +348,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         # 3a-ter. COURSES : assez d objets a vendre OU soins bas (craft insuffisant) -> marchand a portee
         need_heals = inventory.HEALS < 2
         rich_sale = inventory.SELL_VALUE >= 1000          # assez a encaisser pour que le detour vaille le coup
-        if CFG.features.get('sell', True) and (len(inventory.SELLABLE) >= 8 or need_heals or rich_sale) and time.perf_counter() - last_sell_t > 600.0:
+        if CFG.features.get('sell', True) and (len(inventory.SELLABLE) >= 8 or need_heals or rich_sale) and time.perf_counter() - last_sell_t > 600.0 \
+                and (not focus or need_heals):    # en focus, seules les courses de soins passent avant la quete
             last_sell_t = time.perf_counter()
             vendor.MAX_VENDOR_M = 700.0 if (len(inventory.SELLABLE) >= 20 or need_heals or rich_sale) else 250.0   # on accepte d aller plus loin
             vend = vendor.pick_vendor(vendor.list_vendors())
@@ -380,7 +383,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 continue
 
         # 3a-quater. CHARCUDOC : assez d eddies -> V s optimise lui-meme (meilleur cyberware abordable, pose par script)
-        if CFG.features.get('ripperdoc', True) and inventory.MONEY >= 6000 and time.perf_counter() - last_ripper_t > 1800.0 and not st.get('combat'):
+        if CFG.features.get('ripperdoc', True) and inventory.MONEY >= 6000 and time.perf_counter() - last_ripper_t > 1800.0 and not st.get('combat') and not focus:
             last_ripper_t = time.perf_counter()
             vendor.MAX_VENDOR_M = 700.0
             rip = vendor.pick_vendor(vendor.list_vendors(), prefer='ripper')
@@ -396,7 +399,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 continue
 
         # 3a-quinquies. APPARENCE : une fois par mois, si un appartement de V est proche, passage au miroir
-        if CFG.features.get('appearance', True) and appearance.due() and not st.get('combat') and inventory.MONEY > 0:
+        if CFG.features.get('appearance', True) and appearance.due() and not st.get('combat') and inventory.MONEY > 0 and not focus:
             apt = appearance.nearest_apartment(_log)
             if apt:
                 ra = appearance.visit_mirror(stop=stop, log=_log)
@@ -692,6 +695,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     stats['sorties'] = stats.get('sorties', 0) + (1 if re.get('ok') else 0)
                     if re.get('ok'):
                         path_failures = 0
+                    continue
+                if path_failures >= 5 and focus:
+                    _log('objectif inaccessible pour l instant, mais c est la quete assignee : on insiste (pause 45 s, puis vehicule / voyage rapide)')
+                    path_failures = 0; straight_tried = False
+                    last_drive_t = -999.0; last_ft_t = -999.0          # debloque les tentatives de vehicule et de voyage rapide
+                    t_w = time.perf_counter()
+                    while time.perf_counter() - t_w < 45.0 and not (stop is not None and stop.is_set()):
+                        time.sleep(1.0)
                     continue
                 if path_failures >= 5:
                     _log('objectif inaccessible a pied depuis ici : changement de quete')

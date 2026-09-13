@@ -145,7 +145,7 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
             return 'objectif', 'regle : agression dans une zone deja jugee trop dangereuse -> on passe'
         if (n_aggr <= 3 and hp >= T_RESCUE_HP) or (n_aggr <= 5 and hp >= 90):   # sauvetage selon le courage ; les renforts arrivent souvent
             return _decide_rescue(st, extra, n_aggr, near, timeout)
-    if extra.get('dist_m') is None or extra['dist_m'] > 3000:
+    if extra.get('dist_m') is None or (extra['dist_m'] > 3000 and not _C.focus_tracked):
         return 'changer_quete', 'regle : objectif sans marqueur ou trop loin'
     if not st.get('interact'):
         cands = [n for n in named_npcs(st) if n['d'] < 12 and extra.get('approached', lambda k: False)(n) is False]
