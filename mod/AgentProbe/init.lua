@@ -1248,6 +1248,7 @@ end
 local lastDoors = {}                         -- entites porte/dispositif par index de la derniere liste `doors`
 local lastFastTravel = {}                    -- points de voyage rapide par index
 local lastContacts = {}                      -- contacts du telephone (sms_list)
+local mappinProbeDone = false                -- sonde des methodes de mappin (une fois)
 local lastChoices = {}                       -- choix de reponse SMS (sms_read)
 local lastVendorStock = {}                   -- ItemID par index de la derniere liste de stock marchand
 -- marchand PRESENT (< 6 m) : une entree par entite, priorite a IsVendor()
@@ -2126,8 +2127,9 @@ local function handleCommand(player, cmd)
                         rec.lvl = questLvlCache[rec.hash] or nil
                     else
                         local entry = nil
-                        for _, mn in ipairs({ 'GetJournalEntry', 'GetEntry', 'GetQuestEntry', 'GetObjective' }) do
+                        for _, mn in ipairs({ 'GetJournalEntry', 'GetEntry', 'GetQuestEntry', 'GetObjective', 'GetJournalPathHash', 'GetJournalEntryHash', 'GetQuestMappinData', 'GetPhase', 'IsTracked', 'GetTrackedState', 'GetDataHash' }) do
                             local okH, has = pcall(function() return m[mn] ~= nil end)
+                            if not mappinProbeDone then journal('OK   mappin.' .. mn .. ' existe=' .. tostring(okH and has) .. (okH and '' or (' err=' .. tostring(has)))) end
                             if okH and has then
                                 journal('RUN  list_quests.mappin.' .. mn)
                                 local okE, en = pcall(function() return m[mn](m) end)
@@ -2135,6 +2137,7 @@ local function handleCommand(player, cmd)
                                 if okE and en then entry = en; break end
                             end
                         end
+                        mappinProbeDone = true
                         if entry then
                             local okL, lv = pcall(function() return questLevelOf(jm, entry, rec.hash) end)
                             if okL then rec.lvl = lv end

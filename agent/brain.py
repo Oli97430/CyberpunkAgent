@@ -682,9 +682,9 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         if no_mappin_since is None:
             no_mappin_since = time.perf_counter()
         elif time.perf_counter() - no_mappin_since > 20.0:
-            _log(f"objectif sans marqueur depuis 20 s ({q.get('text')}) : changement de quete")
+            _log(f"objectif sans marqueur depuis 20 s ({q.get('text')}) : V cherche une quete (donneur de quete de son niveau, ou marqueur)")
             no_mappin_since = None
-            nxt = quests.switch(q.get('hash'), log=_log)
+            nxt = quests.switch(q.get('hash'), log=_log, prefer_givers=True)
             if nxt:
                 alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
                 stats['changements_quete'] = stats.get('changements_quete', 0) + 1
