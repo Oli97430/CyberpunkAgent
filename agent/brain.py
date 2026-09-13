@@ -271,6 +271,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             lr2 = nav._wait(nav._send({'cmd': 'levelup'}), timeout=6.0)
             if lr2 and lr2.get('ok'):
                 _log(f"niveau : {lr2.get('bought', 0)} point(s) d attribut depenses ({lr2.get('attribute_points_before')} -> {lr2.get('attribute_points_after')}), perks dispo {lr2.get('perk_points')}")
+                if (lr2.get('perk_points') or 0) > 0:
+                    pr = nav._wait(nav._send({'cmd': 'perks'}), timeout=8.0)
+                    if pr and pr.get('ok'):
+                        _log(f"perks : {len(pr.get('achetes') or [])} achete(s) {pr.get('achetes')}, restants {pr.get('restants')}")
+                    else:
+                        _log(f"perks : echec ({(pr or {}).get('reason', 'mod muet')})")
             else:
                 _log(f"niveau : echec ({(lr2 or {}).get('reason', 'mod muet')})")
 

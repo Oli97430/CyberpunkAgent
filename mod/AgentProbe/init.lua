@@ -1676,6 +1676,75 @@ local function handleCommand(player, cmd)
         resp.ok, resp.cls, resp.transferes, resp.noms, resp.methodes, resp.total = true, bestCls, moved, names, methods, listed
         journal(string.format('OK   loot : %s (%.1f m du point) -> %d/%d objet(s) [%s] %s', bestCls, bestD, moved, listed, table.concat(methods, ','), table.concat(names, ' | '):sub(1, 160)))
         return resp
+    elseif cmd.cmd == 'vehicle_call' then
+        -- APPEL D UN VEHICULE AU HASARD parmi ceux que V possede (VehicleSystem) : x = 0 hasard, 1 voiture, 2 moto.
+        journal('RUN  vehicle_call ' .. tostring(cmd.x))
+        local vs = Game.GetVehicleSystem()
+        if not vs then resp.reason = 'VehicleSystem indisponible'; return resp end
+        local okL, list = pcall(function() return vs:GetPlayerUnlockedVehicles() end)
+        if not okL or type(list) ~= 'table' or #list == 0 then
+            resp.reason = 'aucun vehicule debloque lisible (' .. tostring(list) .. ')'; journal('FAIL vehicle_call : ' .. resp.reason); return resp
+        end
+        local cands = {}
+        for i = 1, #list do
+            local v = list[i]
+            local rec, name, vtype = nil, '?', '?'
+            pcall(function() rec = TweakDBInterface.GetVehicleRecord(v.recordID) end)
+            if rec then
+                pcall(function() name = GetLocalizedTextByKey(rec:DisplayName()) end)
+                pcall(function() vtype = tostring(rec:Type():Type()):gsub('gamedataVehicleType : ', ''):gsub(' %(%d+%)', '') end)
+            end
+            local isBike = vtype:find('Bike') ~= nil
+            if cmd.x == 0 or (cmd.x == 1 and not isBike) or (cmd.x == 2 and isBike) then
+                cands[#cands + 1] = { v = v, name = name, vtype = vtype, isBike = isBike }
+            end
+        end
+        if #cands == 0 then resp.reason = 'aucun vehicule de ce type'; journal('FAIL vehicle_call : ' .. resp.reason); return resp end
+        local pick = cands[math.random(#cands)]
+        local typeEnum = pick.isBike and gamedataVehicleType.Bike or gamedataVehicleType.Car
+        local did = {}
+        if pcall(function() vs:TogglePlayerActiveVehicle(pick.v, typeEnum, true) end) then did[#did + 1] = 'TogglePlayerActiveVehicle' end
+        if pcall(function() vs:SpawnPlayerVehicle(typeEnum) end) then did[#did + 1] = 'SpawnPlayerVehicle' end
+        resp.ok, resp.name, resp.vtype, resp.methodes, resp.total = (#did > 0), pick.name, pick.vtype, did, #list
+        journal(string.format('OK   vehicle_call : %s (%s) parmi %d [%s]', tostring(pick.name), tostring(pick.vtype), #list, table.concat(did, ',')))
+        return resp
+    elseif cmd.cmd == 'perks' then
+        -- DEPENSE DES POINTS DE PERK : jalons des arbres Corps / Reflexes / Sang-froid / Technique (build melee),
+        -- essayes dans l ordre jusqu a epuisement des points ; chaque achat journalise.
+        journal('RUN  perks')
+        local okPds, pds = pcall(function() return Game.GetScriptableSystemsContainer():Get('PlayerDevelopmentSystem') end)
+        if not okPds or not pds then resp.reason = 'PlayerDevelopmentSystem introuvable'; return resp end
+        local pdd = nil
+        pcall(function() pdd = pds:GetData(player) end)
+        if not pdd then pcall(function() pdd = PlayerDevelopmentSystem.GetData(player) end) end
+        if not pdd then resp.reason = 'GetData indisponible'; return resp end
+        local pts = 0
+        pcall(function() pts = pdd:GetDevPoints(gamedataDevelopmentPointType.Primary) end)
+        local order = { 'Body_Central_Milestone_1', 'Reflexes_Central_Milestone_1', 'Cool_Central_Milestone_1',
+                        'Body_Left_Milestone_1', 'Body_Right_Milestone_1', 'Reflexes_Left_Milestone_1', 'Reflexes_Right_Milestone_1',
+                        'Body_Central_Milestone_2', 'Reflexes_Central_Milestone_2', 'Cool_Central_Milestone_2',
+                        'Tech_Central_Milestone_1', 'Intelligence_Central_Milestone_1',
+                        'Body_Central_Milestone_3', 'Reflexes_Central_Milestone_3', 'Cool_Central_Milestone_3',
+                        'Body_Left_Milestone_2', 'Body_Right_Milestone_2', 'Reflexes_Left_Milestone_2', 'Reflexes_Right_Milestone_2' }
+        local bought = {}
+        local guard = 0
+        while pts > 0 and guard < 12 do
+            guard = guard + 1
+            local progressed = false
+            for _, nm in ipairs(order) do
+                local okB, res = pcall(function() return pdd:BuyNewPerk(gamedataNewPerkType[nm]) end)
+                if okB and res == true then
+                    bought[#bought + 1] = nm; progressed = true
+                    pcall(function() pts = pdd:GetDevPoints(gamedataDevelopmentPointType.Primary) end)
+                    break
+                end
+            end
+            if not progressed then break end
+        end
+        pcall(function() pts = pdd:GetDevPoints(gamedataDevelopmentPointType.Primary) end)
+        resp.ok, resp.achetes, resp.restants = true, bought, pts
+        journal(string.format('OK   perks : %d achete(s) [%s], restants %s', #bought, table.concat(bought, ','), tostring(pts)))
+        return resp
     elseif cmd.cmd == 'radio' then
         -- RADIO (radioport) : x = 1 allumer, 0 eteindre, 2 station suivante. API PocketRadio (2.x), en pcall + journal.
         journal('RUN  radio ' .. tostring(cmd.x))

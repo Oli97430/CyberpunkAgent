@@ -46,8 +46,16 @@ def summon_and_board(stop=None, log=print) -> bool:
         return True
     if not kbm.ACTIONS.get('callvehicle'):
         log('  [conduite] pas de touche « appeler le vehicule »'); return False
-    log('  [conduite] appel du vehicule')
-    kbm.act('callvehicle', 0.15)
+    # au hasard : une voiture ou une moto parmi celles de V (VehicleSystem) ; a defaut la touche d appel
+    import random
+    from . import nav
+    want = random.choice((0, 1, 2))                      # 0 = n importe lequel, 1 = voiture, 2 = moto
+    rv = nav._wait(nav._send({'cmd': 'vehicle_call', 'x': want}), timeout=5.0)
+    if rv and rv.get('ok'):
+        log(f"  [conduite] V appelle « {rv.get('name')} » ({rv.get('vtype')}) parmi ses {rv.get('total')} vehicules")
+    else:
+        log(f"  [conduite] appel du vehicule (touche) : {(rv or {}).get('reason', 'mod muet')}")
+        kbm.act('callvehicle', 0.15)
     # attendre la voiture (jusqu a 30 s) : un vehicule du joueur, ou le plus proche a < 25 m
     car = None
     t0 = time.perf_counter()
