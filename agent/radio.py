@@ -64,5 +64,9 @@ def tick(st: dict, log=print, busy: bool = False) -> None:
         if r2 and r2.get('ok'):
             name = r2.get('station') or name
         time.sleep(0.15)
+    import re
+    m = re.search(r'RadioStation(\w+)', str(name or ''))
+    if m:
+        name = re.sub(r'(?<!^)(?=[A-Z])', ' ', m.group(1))          # « AggroTechno » -> « Aggro Techno »
     _state.update(on=True, until=now + random.uniform(LISTEN_MIN_S, LISTEN_MAX_S), station=name)
     log(f"  [radio] V allume la radio : « {name or 'station inconnue'} » pour {(_state['until'] - now) / 60:.0f} min")
