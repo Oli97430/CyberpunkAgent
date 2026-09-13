@@ -2078,7 +2078,7 @@ local function handleCommand(player, cmd)
                 local v = ''
                 pcall(function() v = tostring(m:GetVariant()):gsub('gamedataMappinVariant : ', ''):gsub(' %(%d+%)', '') end)
                 local lv = v:lower()
-                if lv:find('vendor') or lv:find('shop') or lv:find('ripper') or lv:find('junk') or lv:find('market') then
+                if lv:find('vendor') or lv:find('shop') or lv:find('ripper') or lv:find('junk') or lv:find('market') or lv:find('apartment') or lv:find('wardrobe') then
                     local rec = { variant = v }
                     pcall(function()
                         local w = m:GetWorldPosition()
@@ -2291,7 +2291,7 @@ end
 local ui = { open = false, provider = 1, key = '', model = 'llama3.2:latest', openai_model = 'gpt-4o-mini',
              anthropic_model = 'claude-haiku-4-5-20251001', minutes = 20, saved = '',
              radio = true, driving = true, rescue = true, sell = true, ripperdoc = true, buffs = true,
-             stealth = true, fasttravel = true, phone = true, sms = true, courage = 3, style = 1, aggro = 2 }
+             stealth = true, fasttravel = true, phone = true, sms = true, appearance = true, recipes = true, courage = 3, style = 1, aggro = 2 }
 local uiCourage = { 'prudent', 'equilibre', 'temeraire' }
 local uiStyle = { 'melee', 'mixte', 'distance' }
 local uiAggro = { 'defensif', 'normal', 'chasseur' }
@@ -2309,7 +2309,7 @@ local function uiLoad()
     ui.anthropic_model = d.anthropic_model or ui.anthropic_model
     ui.minutes = d.minutes or ui.minutes
     if type(d.features) == 'table' then
-        for _, k in ipairs({ 'radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'fasttravel', 'phone', 'sms' }) do
+        for _, k in ipairs({ 'radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'fasttravel', 'phone', 'sms', 'appearance', 'recipes' }) do
             if d.features[k] ~= nil then ui[k] = d.features[k] end
         end
     end
@@ -2322,7 +2322,7 @@ local function uiSave()
                 anthropic_model = ui.anthropic_model, minutes = ui.minutes,
                 courage = uiCourage[ui.courage], style = uiStyle[ui.style], aggro = uiAggro[ui.aggro],
                 features = { radio = ui.radio, driving = ui.driving, rescue = ui.rescue, sell = ui.sell, ripperdoc = ui.ripperdoc, buffs = ui.buffs,
-                             stealth = ui.stealth, fasttravel = ui.fasttravel, phone = ui.phone, sms = ui.sms } }
+                             stealth = ui.stealth, fasttravel = ui.fasttravel, phone = ui.phone, sms = ui.sms, appearance = ui.appearance, recipes = ui.recipes } }
     local f = io.open('agent_config.json', 'w')
     if f then f:write(json.encode(d)); f:close(); ui.saved = 'enregistre ' .. os.date('%H:%M:%S') else ui.saved = 'echec d ecriture' end
 end
@@ -2355,6 +2355,8 @@ registerForEvent('onDraw', function()
         ui.fasttravel = ImGui.Checkbox('Voyage rapide (bornes)', ui.fasttravel)
         ui.phone = ImGui.Checkbox('Repondre aux appels', ui.phone)
         ui.sms = ImGui.Checkbox('Lire et repondre aux SMS', ui.sms)
+        ui.appearance = ImGui.Checkbox('Changer d apparence au miroir de temps en temps', ui.appearance)
+        ui.recipes = ImGui.Checkbox('Acheter et apprendre des plans de craft', ui.recipes)
         ImGui.Separator()
         ImGui.Text('Temperament')
         ImGui.Text('Courage :'); ImGui.SameLine()

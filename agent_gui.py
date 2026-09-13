@@ -35,7 +35,9 @@ FEATURES = [('radio', 'Ecouter la radio de temps en temps'),
             ('stealth', 'Approcher en discretion et eliminer furtivement quand V n est pas repere'),
             ('fasttravel', 'Utiliser le voyage rapide (bornes) pour les objectifs lointains'),
             ('phone', 'Repondre aux appels'),
-            ('sms', 'Lire et repondre aux SMS')]
+            ('sms', 'Lire et repondre aux SMS'),
+            ('appearance', 'Changer d apparence au miroir de l appartement de temps en temps'),
+            ('recipes', 'Acheter et apprendre des plans de craft chez les marchands')]
 TEMPERAMENT = [('courage', 'Courage', [('prudent', 'Prudent : evite des 5 hostiles, fuit vite, secourt a 80 % de vie'),
                                       ('equilibre', 'Equilibre : se bat jusqu a 5, fuit a 6, secourt a 60 %'),
                                       ('temeraire', 'Temeraire : se bat jusqu a 7, ne fuit que presque mort, secourt a 40 %')]),

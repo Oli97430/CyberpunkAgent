@@ -196,6 +196,45 @@ def buy_supplies(items: list[dict], log=print) -> dict:
     return {'ok': True, 'achats': bought, 'reste': money}
 
 
+RECIPE_WORDS = ('plan', 'schéma', 'schema', 'recette', 'spec', 'blueprint', 'recipe')
+
+
+def buy_recipes(items: list[dict], log=print, max_buys: int = 2) -> dict:
+    """Plans de craft en vente chez le marchand present : achat (<= 20 % de la fortune, reserve gardee) puis
+    apprentissage (commande use). Les plans deja connus (noms des recettes) sont ignores."""
+    from .config import CFG
+    if not CFG.features.get('recipes', True):
+        return {'ok': True, 'appris': []}
+    stock = vendor_stock()
+    if not stock or not stock.get('ok'):
+        return {'ok': False}
+    from . import crafting, inventory
+    known = {str(r.get('name') or '').lower() for r in crafting.recipes()}
+    money = int(stock.get('money') or 0)
+    cands = [it for it in (stock.get('items') or [])
+             if ('recipe' in str(it.get('type') or '').lower() or 'spec' in str(it.get('type') or '').lower()
+                 or any(w in str(it.get('name') or '').lower() for w in RECIPE_WORDS))
+             and not any(str(it.get('name') or '').lower().replace('plan : ', '').replace('plan: ', '') in k or k in str(it.get('name') or '').lower() for k in known if k)]
+    cands.sort(key=lambda it: -QR.get(str(it.get('quality')), 0))
+    learned = []
+    for it in cands[:max_buys]:
+        price = int(it.get('price') or 0)
+        if price <= 0 or price > money * 0.2 or money - price < MONEY_RESERVE:
+            continue
+        r = buy(it['i'], 1)
+        if not (r and r.get('ok')):
+            continue
+        money -= int(r.get('total') or price)
+        inv = inventory.fetch() or {}
+        mine = next((x for x in (inv.get('items') or []) if str(x.get('name')) == str(it.get('name'))), None)
+        if mine:
+            u = nav._wait(nav._send({'cmd': 'use', 'x': mine['i']}), timeout=4.0)
+            if u and u.get('ok'):
+                learned.append(str(it.get('name')))
+                log(f"  [achat] plan appris : « {it.get('name')} » ({it.get('quality')}) pour {r.get('total')} eddies")
+    return {'ok': True, 'appris': learned, 'reste': money}
+
+
 def sell_trip(vendor: dict, stop=None, log=print) -> dict:
     """Va au marchand, ouvre la boutique (F maintenu), vend la camelote (G), valide (F), sort."""
     t0 = time.perf_counter()

@@ -18,7 +18,7 @@ import math
 import time
 from pathlib import Path
 
-from . import buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, sms, vendor
+from . import appearance, buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, sms, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -370,6 +370,9 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     sp = vendor.buy_supplies((inventory.fetch() or {}).get('items') or [], log=_log)
                     if sp.get('achats'):
                         _log(f"achat : {', '.join(sp['achats'])}")
+                    rp = vendor.buy_recipes((inventory.fetch() or {}).get('items') or [], log=_log)
+                    if rp.get('appris'):
+                        stats['plans'] = stats.get('plans', 0) + len(rp['appris'])
                     if br.get('achetes'):
                         inventory.HEALS += br['achetes']
                         _log(f"achat : {br['achetes']} soin(s) pour {br.get('eddies', 0)} eddies")
@@ -391,6 +394,15 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 else:
                     _log(f"charcudoc : non atteint ({tr.get('reason')})"); vendor.mark_failed(rip)
                 continue
+
+        # 3a-quinquies. APPARENCE : toutes les ~3 h, si un appartement de V est proche, passage au miroir
+        if CFG.features.get('appearance', True) and appearance.due() and not st.get('combat') and inventory.MONEY > 0:
+            apt = appearance.nearest_apartment(_log)
+            if apt:
+                ra = appearance.visit_mirror(stop=stop, log=_log)
+                _log(f"apparence : {'nouveau look' if ra.get('ok') else ra.get('reason')}")
+                continue
+            appearance._last['t'] = time.perf_counter() - appearance.PERIOD_S + 900.0   # pas d appartement : on reverra dans 15 min
 
         # 3b. soin hors combat si la vie est basse
         if (st.get('hp') or 100) < 40 and time.perf_counter() - last_heal_t > 8.0:
