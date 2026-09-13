@@ -27,7 +27,8 @@ GRENADE_MIN_M, GRENADE_MAX_M, GRENADE_CD = 11.0, 28.0, 20.0
 MELEE_RANGE = 2.4
 MELEE_SLOT = '3'                          # fixe par inventory.manage() : emplacement au meilleur DPS de melee
 RANGED_SLOT = None                        # fixe par inventory.manage() si une arme a distance est equipee
-RANGED_MIN_M, RANGED_MAX_M = 9.0, 45.0    # au-dela de 9 m (ou cible en hauteur), on tire si on a une arme a feu
+RANGED_MIN_M, RANGED_MAX_M = 12.0, 45.0   # on passe a l arme a feu au-dela de 12 m (ou cible en hauteur) et on revient
+RANGED_BACK_M = 7.0                       # au corps a corps sous 7 m : au CAC, c est le katana (Olivier, 13/09)
 CYBERWARE_CD = 18.0                       # touche : kbm.K('iconic') (F chez ce joueur)
 # quick melee : kbm.K('quickmelee') (~ chez ce joueur)
 QUICKHACK_CD = 5.0
@@ -245,6 +246,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     stats = {'soins': 0, 'grenades': 0, 'coups': 0, 'charges': 0, 'esquives': 0, 'strafes': 0,
              'parades': 0, 'replis': 0, 'sauts': 0, 'glissades': 0, 'cyberware': 0, 'quickhacks': 0, 'quick_melee': 0}
     t_heal = t_gren = t_cyber = t_hack = t_dodge = t_strafe = t_jump = t_slide = t_knife = -99.0
+    t_wsync = -99.0
     mode = 'melee'; shots = 0
     hack_i = 0
     last_hp, last_hp_t = None, time.perf_counter()
@@ -383,9 +385,20 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             if want_ranged and mode != 'ranged':
                 kbm.tap(RANGED_SLOT, 0.08); mode = 'ranged'; shots = 0; time.sleep(0.5)
                 log(f"  [combat] arme a distance (cible a {e['d']:.0f} m{', en hauteur' if high else ''})")
-            elif not want_ranged and mode == 'ranged' and e['d'] <= RANGED_MIN_M - 3 and not high:
+            elif mode == 'ranged' and e['d'] <= RANGED_BACK_M and not high:
                 kbm.tap(MELEE_SLOT, 0.08); mode = 'melee'; time.sleep(0.4)
                 log('  [combat] retour au corps a corps')
+            # l arme REELLEMENT tenue (export du mod) : si elle ne correspond pas au mode, on corrige (la touche
+            # d emplacement est une bascule : un appui de trop rengainait, ou laissait la mitrailleuse au CAC)
+            wt = st.get('weapon')
+            if wt and now - t_wsync > 1.5:
+                from .inventory import MELEE_TYPES as _MT
+                holding_ranged = wt.startswith('Wea_') and wt not in _MT
+                holding_melee = wt in _MT
+                if mode == 'melee' and not holding_melee:
+                    kbm.tap(MELEE_SLOT, 0.08); t_wsync = now; log(f'  [combat] arme tenue {wt} : on degaine la melee (emplacement {MELEE_SLOT})')
+                elif mode == 'ranged' and RANGED_SLOT and not holding_ranged:
+                    kbm.tap(RANGED_SLOT, 0.08); t_wsync = now; log(f'  [combat] arme tenue {wt} : on degaine l arme a feu (emplacement {RANGED_SLOT})')
             if mode == 'ranged':
                 kbm.release('W'); kbm.act_release('sprint')
                 if gap < 4:

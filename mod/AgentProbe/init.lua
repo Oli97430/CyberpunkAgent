@@ -934,6 +934,16 @@ registerForEvent('onUpdate', function(dt)
                 lastCrimes = (#out > 0) and out or nil
             end)
         end
+        -- ARME ACTIVE (main droite) : type TweakDB, pour que le combat sache ce que V tient vraiment
+        local weapon = nil
+        pcall(function()
+            local ts = Game.GetTransactionSystem()
+            local obj = ts:GetItemInSlot(player, TweakDBID.new('AttachmentSlots.WeaponRight'))
+            if obj then
+                local wid = obj:GetItemID()
+                weapon = tostring(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(wid)):ItemType():Type()):gsub('gamedataItemType : ', ''):gsub(' %(%d+%)', '')
+            end
+        end)
         -- TELEPHONE : appel entrant / en cours (UI_ComDevice.callInformation : callPhase, contactName)
         local phone = nil
         pcall(function()
@@ -1113,7 +1123,7 @@ registerForEvent('onUpdate', function(dt)
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
                  hp = hp, level = playerLevel, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
-                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs, phone = phone,
+                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs, phone = phone, weapon = weapon,
                  enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)
