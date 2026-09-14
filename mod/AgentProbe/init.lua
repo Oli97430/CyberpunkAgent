@@ -37,6 +37,9 @@ local lastStateErr = nil                 -- derniere erreur du tick d etat (jour
 local slowT, slowLoot, slowVehicles, slowNpcs = -99.0, nil, nil, nil   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
+local breachCtrl = nil                   -- HackingMinigameGameController capture a l ouverture du Breach Protocol
+local lastUpdateClock, lastDrawClock = 0.0, 0.0   -- onUpdate s arrete dans les menus (dont le mini-jeu) : onDraw prend le relais
+local lastExport = nil                   -- derniere table d etat ecrite (reutilisee par onDraw pendant le mini-jeu)
 local enemyDiag, lastEnemyDiag = '', ''
 local aliveMemory, bodyMemory = {}, {}      -- derniere position des ennemis vus / corps (loot)
 local lastInventory = {}                    -- ItemID par index de la derniere liste d inventaire
@@ -572,9 +575,131 @@ local function runNextProbe()
         tostring(a), tostring(b), tostring(c)))
 end
 
+-- ---- BREACH PROTOCOL --------------------------------------------------------------------------------------
+local function breachState()
+    local st, tm = 0, nil
+    pcall(function()
+        local def = GetAllBlackboardDefs().HackingMinigame
+        local bb = def and Game.GetBlackboardSystem():Get(def) or nil
+        if bb then st = bb:GetInt(def.State) or 0; pcall(function() tm = bb:GetFloat(def.TimerLeftPercent) end) end
+    end)
+    return st, tm
+end
+local function breachLastPos()
+    local last = nil
+    pcall(function()
+        local def = GetAllBlackboardDefs().HackingMinigame
+        local bb = Game.GetBlackboardSystem():Get(def)
+        local v = bb:GetVector4(def.LastPlayerHackPosition)
+        if v then last = { x = v.x, y = v.y } end
+    end)
+    return last
+end
+-- parcours des widgets ink du mini-jeu : tous les textes hexadecimaux (1C, 55, BD, E9, 7A, FF) avec leur position
+-- ABSOLUE (somme des positions dans les parents) et la geometrie de leur parent (la case cliquable)
+local function breachInfo(cmd)
+    local info = { ok = false }
+    info.state, info.timer = breachState()
+    info.last = breachLastPos()
+    pcall(function()
+        local def = GetAllBlackboardDefs().HackingMinigame
+        local bb = Game.GetBlackboardSystem():Get(def)
+        local md = FromVariant(bb:GetVariant(def.MinigameDefaults))
+        if md then info.size = tonumber(md.gridSize); info.buffer = tonumber(md.bufferSize); info.timeLimit = tonumber(md.timeLimit) end
+    end)
+    if not breachCtrl then info.reason = 'controleur non capture (mini-jeu ferme ou hook absent)'; return info end
+    -- chaines (sequences numeriques) + programmes (noms)
+    pcall(function()
+        local chains = breachCtrl:GetProgramsChains()
+        info.chains = {}
+        for i = 1, #chains do
+            local c = chains[i]
+            local r = {}
+            pcall(function() for j = 1, #c.rarities do r[#r + 1] = tonumber(c.rarities[j]) end end)
+            info.chains[#info.chains + 1] = { rarities = r, matched = tonumber(c.matchedValues), owner = tonumber(c.ownerId),
+                                              fulfilled = c.isFulfilled and true or false, possible = c.isPossible and true or false }
+        end
+    end)
+    pcall(function()
+        local progs = breachCtrl:GetUnlockablePrograms()
+        info.programs = {}
+        for i = 1, #progs do
+            local p = progs[i]
+            info.programs[#info.programs + 1] = { name = tostring(p.name), fulfilled = p.isFulfilled and true or false, hidden = p.hidden and true or false }
+        end
+    end)
+    -- widgets
+    local okW, errW = pcall(function()
+        local root = breachCtrl:GetRootWidget()
+        if not root then info.reason = 'pas de widget racine'; return end
+        local rs = root:GetSize()
+        info.root = { w = rs.X, h = rs.Y }
+        local texts, allTexts, count = {}, {}, 0
+        local dump = (cmd and cmd.x == 1)
+        local function walk(w, ax, ay, depth, pw, ph)
+            if depth > 40 or count > 6000 then return end
+            local okC, isC = pcall(function() return w:IsA('inkCompoundWidget') end)
+            if not (okC and isC) then return end
+            local n = 0
+            pcall(function() n = w:GetNumChildren() end)
+            for i = 0, n - 1 do
+                local c = nil
+                pcall(function() c = w:GetWidget(i) end)
+                if c then
+                    count = count + 1
+                    local px, py, sw, sh, tx, ty = 0, 0, 0, 0, 0, 0
+                    pcall(function() local p = w:GetChildPosition(c); px, py = p.X, p.Y end)
+                    pcall(function() local sz = w:GetChildSize(c); sw, sh = sz.X, sz.Y end)
+                    pcall(function() local t = c:GetTranslation(); tx, ty = t.X, t.Y end)
+                    local cx, cy = ax + px + tx, ay + py + ty
+                    local okT, isT = pcall(function() return c:IsA('inkTextWidget') end)
+                    if okT and isT then
+                        local txt = ''
+                        pcall(function() txt = tostring(c:GetText()) end)
+                        local vis = true
+                        pcall(function() vis = c:IsVisible() end)
+                        local up = txt:upper():gsub('^%s+', ''):gsub('%s+$', '')
+                        if up:match('^[0-9A-F][0-9A-F]$') then
+                            texts[#texts + 1] = { t = up, x = cx, y = cy, w = sw, h = sh, px = ax, py = ay, pw = pw or 0, ph = ph or 0, v = vis, d = depth }
+                        end
+                        if dump and #allTexts < 200 then
+                            local nm = ''
+                            pcall(function() nm = tostring(c:GetName()) end)
+                            allTexts[#allTexts + 1] = string.format('%s|%s|%.0f,%.0f|%.0fx%.0f|p%.0fx%.0f|%s|d%d', nm, up:sub(1, 24), cx, cy, sw, sh, pw or 0, ph or 0, tostring(vis), depth)
+                        end
+                    end
+                    walk(c, cx, cy, depth + 1, sw, sh)
+                end
+            end
+        end
+        walk(root, 0, 0, 0, rs.X, rs.Y)
+        info.texts, info.widgets = texts, count
+        if dump then
+            journal(string.format('BREACH dump : racine %.0fx%.0f, %d widgets, %d textes', rs.X, rs.Y, count, #allTexts))
+            for _, l in ipairs(allTexts) do journal('BREACH txt ' .. l) end
+        end
+    end)
+    if not okW then info.reason = 'widgets : ' .. tostring(errW) end
+    info.ok = (info.texts ~= nil and #info.texts > 0)
+    if not info.ok and not info.reason then info.reason = 'aucun texte hexadecimal trouve' end
+    return info
+end
+
 registerForEvent('onInit', function()
     os.remove('probe_progress.txt')
     journal('onInit ' .. os.date('%H:%M:%S'))
+    -- Breach Protocol : on capture l instance du controleur natif a l ouverture (grille/sequences lisibles ensuite)
+    local okO, errO = pcall(function()
+        Observe('HackingMinigameGameController', 'OnInitialize', function(self)
+            breachCtrl = self
+            journal('BREACH ouvert : controleur capture')
+        end)
+        Observe('HackingMinigameGameController', 'OnUninitialize', function(self)
+            breachCtrl = nil
+            journal('BREACH ferme')
+        end)
+    end)
+    journal('BREACH hooks : ' .. tostring(okO) .. (okO and '' or (' ' .. tostring(errO))))
     fh = io.open('state.bin', 'w+b')
     journal('state.bin ouvert : ' .. tostring(fh ~= nil))
     -- table de commandes SQLite (canal Python -> Lua). NB: db:exec = SQLite, pas un shell.
@@ -600,6 +725,7 @@ registerForEvent('onUpdate', function(dt)
     local p0 = player:GetWorldPosition()
     if math.abs(p0.x) + math.abs(p0.y) < 10.0 then attachedFor = 0.0; return end
     attachedFor = attachedFor + dt
+    lastUpdateClock = os.clock()
     if attachedFor < WARMUP then return end
 
     -- une sonde par image, apres l'echauffement
@@ -975,15 +1101,8 @@ registerForEvent('onUpdate', function(dt)
         -- ne reste pas devant la grille indefiniment (pas encore de resolveur : il en sort)
         local breach = nil
         pcall(function()
-            local def = GetAllBlackboardDefs().HackingMinigame
-            if not def then return end
-            local bb = Game.GetBlackboardSystem():Get(def)
-            if not bb then return end
-            local stt = bb:GetInt(def.State)
-            if stt and stt ~= 0 then
-                breach = { state = stt }
-                pcall(function() breach.timer = bb:GetFloat(def.TimerLeftPercent) end)
-            end
+            local stt, tm = breachState()
+            if stt and stt ~= 0 then breach = { state = stt, timer = tm, last = breachLastPos(), ctrl = (breachCtrl ~= nil) } end
         end)
         -- TELEPHONE : appel entrant / en cours (UI_ComDevice.callInformation : callPhase, contactName)
         local phone = nil
@@ -1206,6 +1325,7 @@ registerForEvent('onUpdate', function(dt)
             fh:seek('set', 0)
             fh:write(pad(s, STATE_WIDTH) .. '\n')
             fh:flush()
+            lastExport = data
         end
     end
 end)
@@ -2001,6 +2121,14 @@ local function handleCommand(player, cmd)
         if #did == 0 then resp.reason = 'aucune methode de voyage acceptee' end
         journal('OK   fast_travel : [' .. table.concat(did, ',') .. '] erreurs: ' .. table.concat(errs, ' | '):sub(1, 400))
         return resp
+    elseif cmd.cmd == 'breach_info' then
+        -- BREACH PROTOCOL : grille / sequences / buffer / chaines ; x = 1 -> journalise aussi tous les textes (diagnostic)
+        local info = breachInfo(cmd)
+        for k, v in pairs(info) do resp[k] = v end
+        if info.ok then journal(string.format('OK   breach_info : etat %s, %d textes hex, %d chaines, grille %s, buffer %s',
+            tostring(info.state), #(info.texts or {}), #(info.chains or {}), tostring(info.size), tostring(info.buffer)))
+        else journal('FAIL breach_info : ' .. tostring(info.reason)) end
+        return resp
     elseif cmd.cmd == 'teleport' then
         -- TELEPORTATION (TeleportationFacility) : reservee au voyage rapide borne -> borne quand l API du jeu refuse
         journal(string.format('RUN  teleport (%.0f,%.0f,%.0f)', cmd.x or 0, cmd.y or 0, cmd.z or 0))
@@ -2457,6 +2585,29 @@ pcall(uiLoad)
 registerForEvent('onOverlayOpen', function() ui.open = true end)
 registerForEvent('onOverlayClose', function() ui.open = false end)
 registerForEvent('onDraw', function()
+    -- RELAIS PENDANT LE BREACH PROTOCOL : le jeu est en pause (onUpdate ne tourne plus) mais onDraw continue.
+    -- On sert les commandes Python et on exporte un etat (avec breach) pour que l agent puisse resoudre la grille.
+    pcall(function()
+        local now = os.clock()
+        local dtd = (lastDrawClock > 0) and (now - lastDrawClock) or 0.016
+        lastDrawClock = now
+        if now - lastUpdateClock < 0.3 then return end          -- onUpdate tourne : rien a faire ici
+        local stt, tm = breachState()
+        if not (breachCtrl ~= nil or stt == 1) then return end   -- pas de mini-jeu ouvert : les autres menus restent "figes" (garde Python)
+        local player = Game.GetPlayer()
+        if not player or not dbReady then return end
+        local okP, errP = pcall(pollCommands, player, dtd)
+        if not okP and tostring(errP) ~= lastPollErr then lastPollErr = tostring(errP); journal('POLL(draw) erreur: ' .. lastPollErr) end
+        if fh and lastExport then
+            seq = seq + 1
+            lastExport.seq, lastExport.seqEnd = seq, seq
+            lastExport.breach = { state = stt, timer = tm, last = breachLastPos(), ctrl = (breachCtrl ~= nil) }
+            lastExport.paused = true
+            lastExport.combat, lastExport.enemies, lastExport.dialog, lastExport.interact = false, nil, nil, nil
+            local okE, s = pcall(json.encode, lastExport)
+            if okE and #s < STATE_WIDTH then fh:seek('set', 0); fh:write(pad(s, STATE_WIDTH) .. '\n'); fh:flush() end
+        end
+    end)
     if not ui.open then return end
     if ImGui.Begin('CyberpunkAgent') then
         ImGui.Text('Modele de decision')

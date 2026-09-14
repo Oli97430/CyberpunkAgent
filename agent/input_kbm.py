@@ -313,6 +313,38 @@ def mouse_tap(button: str = 'left', duration: float = 0.09) -> None:
     mouse(button, True); time.sleep(duration); mouse(button, False)
 
 
+MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK = 0x8000, 0x4000
+
+
+def game_client_rect() -> tuple[int, int, int, int] | None:
+    """(gauche, haut, largeur, hauteur) en pixels ecran de la zone CLIENT de la fenetre du jeu au premier plan
+    (mode fenetre : la barre de titre est exclue). None si le jeu n est pas au premier plan."""
+    if not game_focused():
+        return None
+    hwnd = user32.GetForegroundWindow()
+    rc = wt.RECT()
+    if not user32.GetClientRect(hwnd, ctypes.byref(rc)):
+        return None
+    pt = wt.POINT(0, 0)
+    user32.ClientToScreen(hwnd, ctypes.byref(pt))
+    return int(pt.x), int(pt.y), int(rc.right - rc.left), int(rc.bottom - rc.top)
+
+
+def move_abs(x: int, y: int) -> None:
+    """Place le curseur en coordonnees ECRAN absolues (bureau virtuel), pour cliquer dans une interface."""
+    if not game_focused_cached():
+        return
+    vx, vy = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)          # origine du bureau virtuel
+    vw, vh = user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)          # taille du bureau virtuel
+    if vw <= 0 or vh <= 0:
+        vw, vh = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1); vx = vy = 0
+    nx = int((x - vx) * 65535 / max(1, vw - 1)); ny = int((y - vy) * 65535 / max(1, vh - 1))
+    nx = max(0, min(65535, nx)); ny = max(0, min(65535, ny))
+    flags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    inp = INPUT(type=INPUT_MOUSE, u=_U(mi=MOUSEINPUT(nx, ny, 0, flags, 0, 0)))
+    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+
 def click(down: bool) -> None:
     flag = MOUSEEVENTF_LEFTDOWN if down else MOUSEEVENTF_LEFTUP
     inp = INPUT(type=INPUT_MOUSE, u=_U(mi=MOUSEINPUT(0, 0, 0, flag, 0, 0)))
