@@ -90,14 +90,17 @@ _DEFAULT_ACTIONS = {'interact': 'F', 'iconic': 'E', 'quickmelee': 'Q', 'dodge': 
                     'consumable': 'X', 'crouch': 'C', 'jump': 'SPACE', 'reload': 'R', 'holster': 'B',
                     'ui_confirm': 'F', 'scanner': 'TAB', 'forward': 'W', 'back': 'S', 'left': 'A', 'right': 'D',
                     'weapon1': '1', 'weapon2': '2', 'weapon3': '3', 'callvehicle': 'V', 'walktoggle': None, 'dropbody': None,
-                    'autodrive': None, 'exitvehicle': 'F', 'phone': 'T'}
+                    'autodrive': None, 'exitvehicle': 'F', 'phone': 'T',
+                    'bd_pause': 'SPACE', 'bd_fwd': 'E', 'bd_back': 'Q', 'bd_layer': 'LSHIFT', 'bd_mode': 'TAB', 'bd_restart': 'R', 'bd_exit': 'X'}
 _SETTING_NAMES = {'interact': 'selectChoice', 'iconic': 'iconic', 'quickmelee': 'quickmelee', 'dodge': 'dodgeDash',
                   'sprint': 'sprintHold', 'consumable': 'useConsumable', 'crouch': 'crouchToggle', 'jump': 'jump',
                   'reload': 'reload', 'holster': 'holsterWeapon', 'ui_confirm': 'selectChoiceUI', 'scanner': 'visionHold',
                   'forward': 'forward', 'back': 'back', 'left': 'left', 'right': 'right',
                   'weapon1': 'weapon1', 'weapon2': 'weapon2', 'weapon3': 'weapon3', 'callvehicle': 'callVehicle',
                   'walktoggle': 'walkToggle', 'dropbody': 'dropCarriedObject',
-                  'autodrive': 'vehicleAutodrive', 'exitvehicle': 'exitVehicle', 'phone': 'openPhone'}
+                  'autodrive': 'vehicleAutodrive', 'exitvehicle': 'exitVehicle', 'phone': 'openPhone',
+                  'bd_pause': 'braindancePause', 'bd_fwd': 'braindanceForward', 'bd_back': 'braindanceBackward', 'bd_layer': 'braindanceLayer',
+                  'bd_mode': 'braindanceMode', 'bd_restart': 'braindanceRestart', 'bd_exit': 'braindanceExit'}
 ACTIONS: dict[str, str | None] = dict(_DEFAULT_ACTIONS)
 
 

@@ -18,7 +18,7 @@ import math
 import time
 from pathlib import Path
 
-from . import appearance, breach, buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, sms, vendor
+from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, sms, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -120,6 +120,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_sell_t = -999.0
     last_phone_t = -999.0
     breach_t = None
+    bd_t = None
     last_close_t = -999.0
     last_ft_t = -999.0
     last_overlevel_t = -999.0
@@ -213,6 +214,20 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     time.sleep(0.5); continue
                 elif not br:
                     breach_t = None
+
+                # 0a3. DANSE SENSORIELLE (braindance) : V prend l editeur en main (indices, couches, timeline, sortie)
+                bdst = st.get('bd') or {}
+                if bdst.get('active') or bdst.get('rew'):
+                    if bd_t is None:
+                        bd_t = time.perf_counter(); kbm.release_all()
+                        stats['bd'] = stats.get('bd', 0) + 1
+                        _log('DANSE SENSORIELLE : V prend l editeur en main')
+                        rbd = braindance.run(stop=stop, log=_log)
+                        _log(f"danse sensorielle : {rbd.get('reason')} ({rbd.get('scans', 0)} indice(s) scanne(s), {rbd.get('seconds', 0):.0f} s)")
+                        stats['bd_scans'] = stats.get('bd_scans', 0) + int(rbd.get('scans') or 0)
+                    time.sleep(0.5); continue
+                else:
+                    bd_t = None
 
                 # 0b. etat FIGE (pause, menu, carte, chargement) : le mod ne tourne plus -> on ne touche a rien
                 if st.get('seq') != frozen_seq:

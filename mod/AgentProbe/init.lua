@@ -38,6 +38,7 @@ local slowT, slowLoot, slowVehicles, slowNpcs = -99.0, nil, nil, nil   -- scans 
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
 local breachCtrl = nil                   -- HackingMinigameGameController capture a l ouverture du Breach Protocol
+local bdClues, bdLastClueSig, bdFocusCache = {}, '', nil   -- danse sensorielle : indices de la timeline vus, entites-indices
 local lastUpdateClock, lastDrawClock = 0.0, 0.0   -- onUpdate s arrete dans les menus (dont le mini-jeu) : onDraw prend le relais
 local lastExport = nil                   -- derniere table d etat ecrite (reutilisee par onDraw pendant le mini-jeu)
 local enemyDiag, lastEnemyDiag = '', ''
@@ -573,6 +574,133 @@ local function runNextProbe()
     local ok, a, b, c = pcall(pr.fn)
     journal(string.format('%s %s -> %s %s %s', ok and 'OK  ' or 'FAIL', pr.name,
         tostring(a), tostring(b), tostring(c)))
+end
+
+-- ---- DANSE SENSORIELLE (braindance) --------------------------------------------------------------------------
+local function enumNum(v)
+    local okE, n = pcall(function() return EnumInt(v) end)
+    if okE and type(n) == 'number' then return n end
+    local d = tostring(v):match('%((%d+)%)')
+    if d then return tonumber(d) end
+    return tonumber(v)
+end
+local function bdSceneIface()
+    local si = nil
+    pcall(function() si = Game.GetSceneSystem():GetScriptInterface() end)
+    return si
+end
+local function bdEnum(kind, name, idx)
+    local v = nil
+    pcall(function() v = _G[kind][name] end)
+    if v == nil then pcall(function() v = Enum.new(kind, name) end) end
+    if v == nil then v = idx end
+    return v
+end
+local function bdState()
+    local bd = nil
+    pcall(function()
+        local def = GetAllBlackboardDefs().Braindance
+        local bb = def and Game.GetBlackboardSystem():Get(def) or nil
+        if not bb then return end
+        local active = false
+        pcall(function() active = bb:GetBool(def.IsActive) end)
+        local si = bdSceneIface()
+        local rew = false
+        if si then pcall(function() rew = si:IsRewindableSectionActive() end) end
+        if not active and not rew then
+            if next(bdClues) ~= nil then bdClues, bdLastClueSig, bdFocusCache = {}, '', nil end
+            return
+        end
+        bd = { active = active, rew = rew }
+        pcall(function() bd.fpp = bb:GetBool(def.IsFPP) end)
+        pcall(function() bd.layer = bb:GetInt(def.activeBraindanceVisionMode) end)
+        pcall(function() bd.exit = bb:GetBool(def.EnableExit) end)
+        pcall(function() bd.prog = bb:GetFloat(def.Progress) end)
+        if si then
+            pcall(function() bd.t = si:GetRewindableSectionTimeInSec() end)
+            pcall(function() bd.dur = si:GetRewindableSectionDurationInSec() end)
+            pcall(function() bd.paused = si:IsRewindableSectionPaused() end)
+            pcall(function() bd.speed = enumNum(si:GetRewindableSectionPlaySpeed()) end)
+            pcall(function() bd.dir = enumNum(si:GetRewindableSectionPlayDirection()) end)
+        end
+        -- indice de la timeline (dernier evenement du blackboard) : accumule par nom
+        pcall(function()
+            local c = FromVariant(bb:GetVariant(def.Clue))
+            if c and c.clueName then
+                local name = tostring(c.clueName)
+                local mode = tostring(c.mode)
+                local sig = name .. '|' .. mode .. '|' .. tostring(c.startTime)
+                if sig ~= bdLastClueSig and name ~= '' and name ~= 'None' then
+                    bdLastClueSig = sig
+                    local rec = bdClues[name] or { name = name }
+                    rec.t0, rec.t1 = tonumber(c.startTime), tonumber(c.endTime)
+                    rec.layer = enumNum(c.layer)
+                    rec.mode = mode
+                    if mode:find('Finish') or mode:find('%(2%)') then rec.done = true end
+                    bdClues[name] = rec
+                    journal(string.format('BD indice %s mode=%s t=%.1f-%.1f couche=%s', name, mode, rec.t0 or -1, rec.t1 or -1, tostring(rec.layer)))
+                end
+            end
+        end)
+        local list = {}
+        for _, rec in pairs(bdClues) do list[#list + 1] = rec end
+        table.sort(list, function(a, b) return (a.t0 or 0) < (b.t0 or 0) end)
+        bd.clues = list
+        pcall(function()
+            local sys = Game.GetScriptableSystemsContainer():Get('BraindanceSystem')
+            local m = sys:GetInputMask()
+            bd.masks = { pause = m.pauseAction, fwd = m.playForwardAction, back = m.playBackwardAction, restart = m.restartAction,
+                         layer = m.switchLayerAction, cam = m.cameraToggleAction }
+            bd.inbd = sys:GetIsInBraindance()
+        end)
+    end)
+    return bd
+end
+-- entites porteuses d un indice de danse sensorielle (ScanningComponent.IsBraindanceClue) a < 40 m
+local function bdScanFocus(player, pos)
+    local list, seen = {}, {}
+    local q = Game['TSQ_ALL;']()
+    q.maxDistance = 40.0
+    q.filterObjectByDistance = true
+    pcall(function() q.testedSet = TargetingSet.Complete end)
+    local okF, partsF = Game.GetTargetingSystem():GetTargetParts(player, q)
+    if not (okF and partsF) then return list end
+    local cam = Game.GetCameraSystem()
+    for i = 1, #partsF do
+        local comp = TS_TargetPartInfo.GetComponent(partsF[i])
+        local ent = comp and comp:GetEntity() or nil
+        if ent then
+            local okH, h = pcall(function() return ent:GetEntityID().hash end)
+            local key = okH and tostring(h) or tostring(ent)
+            if not seen[key] then
+                seen[key] = true
+                local sc = nil
+                pcall(function() sc = ent:FindComponentByName('scanning') end)
+                local isClue = false
+                if sc then pcall(function() isClue = sc:IsBraindanceClue() end) end
+                if isClue then
+                    local ep = ent:GetWorldPosition()
+                    local rec = { id = key, x = ep.x, y = ep.y, z = ep.z }
+                    pcall(function() local sp = sc:GetBoundingSphere(); if sp and sp.centre then rec.x, rec.y, rec.z, rec.r = sp.centre.x, sp.centre.y, sp.centre.z, sp.radius end end)
+                    rec.d = math.sqrt((rec.x - pos.x) ^ 2 + (rec.y - pos.y) ^ 2 + (rec.z - pos.z) ^ 2)
+                    pcall(function() rec.layer = enumNum(sc:GetBraindanceLayer()) end)
+                    pcall(function() rec.scanned = sc:IsScanned() end)
+                    pcall(function() rec.blocked = sc:IsBraindanceBlocked() end)
+                    pcall(function() rec.prog = sc:GetScanningProgress() end)
+                    pcall(function() rec.need = sc:GetTimeNeeded() end)
+                    pcall(function() rec.enabled = sc:IsAnyClueEnabled() end)
+                    pcall(function() rec.insp = sc:IsClueInspected() end)
+                    pcall(function() rec.scanning = sc:IsScanning() end)
+                    pcall(function() rec.name = GetLocalizedText(tostring(ent:GetDisplayName())) end)
+                    pcall(function() rec.cls = tostring(ent:GetClassName()) end)
+                    pcall(function() local s2 = cam:ProjectPoint(Vector4.new(rec.x, rec.y, rec.z, 1.0)); rec.sx, rec.sy = s2.x, s2.y end)
+                    list[#list + 1] = rec
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.d < b.d end)
+    return list
 end
 
 -- ---- BREACH PROTOCOL --------------------------------------------------------------------------------------
@@ -1249,6 +1377,38 @@ registerForEvent('onUpdate', function(dt)
                 end
             end)
         end
+        -- DANSE SENSORIELLE : etat + indices (entites a 4 Hz) + objet sous le reticule
+        local bd = bdState()
+        if bd then
+            if slowScan or not bdFocusCache then
+                pcall(function() bdFocusCache = bdScanFocus(player, pos) end)
+            end
+            local focus = {}
+            for i = 1, math.min(8, #(bdFocusCache or {})) do focus[i] = bdFocusCache[i] end
+            bd.focus = focus
+            pcall(function()
+                local ts2 = Game.GetTargetingSystem()
+                local obj = nil
+                pcall(function() obj = ts2:GetLookAtObject(player, true, false) end)
+                if not obj then pcall(function() obj = ts2:GetLookAtObject(player, false, false) end) end
+                if obj then
+                    local sc = nil
+                    pcall(function() sc = obj:FindComponentByName('scanning') end)
+                    if sc then
+                        local l = {}
+                        pcall(function() l.clue = sc:IsBraindanceClue() end)
+                        pcall(function() l.scanned = sc:IsScanned() end)
+                        pcall(function() l.prog = sc:GetScanningProgress() end)
+                        pcall(function() l.blocked = sc:IsBraindanceBlocked() end)
+                        pcall(function() l.scanning = sc:IsScanning() end)
+                        local op = obj:GetWorldPosition()
+                        l.d = math.sqrt((op.x - pos.x) ^ 2 + (op.y - pos.y) ^ 2 + (op.z - pos.z) ^ 2)
+                        pcall(function() l.id = tostring(obj:GetEntityID().hash) end)
+                        bd.look = l
+                    end
+                end
+            end)
+        end
         if not inCombat and not slowScan then loot, vehicles, npcs = slowLoot, slowVehicles, slowNpcs end
         if inCombat then slowLoot, slowVehicles, slowNpcs = nil, nil, nil end
         -- CORPS : les requetes de ciblage excluent souvent les morts. On memorise la derniere
@@ -1292,7 +1452,7 @@ registerForEvent('onUpdate', function(dt)
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
                  hp = hp, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
                  lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
-                 enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, seqEnd = seq }
+                 enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)
     if ok and data then
@@ -2120,6 +2280,49 @@ local function handleCommand(player, cmd)
         resp.ok, resp.methodes, resp.erreurs = (#did > 0), did, errs
         if #did == 0 then resp.reason = 'aucune methode de voyage acceptee' end
         journal('OK   fast_travel : [' .. table.concat(did, ',') .. '] erreurs: ' .. table.concat(errs, ' | '):sub(1, 400))
+        return resp
+    elseif cmd.cmd == 'bd_jump' then
+        -- DANSE SENSORIELLE : saut de la timeline a x secondes (puis pause) ; z = vitesse du saut (defaut 10)
+        local si = bdSceneIface()
+        if not si then resp.reason = 'SceneSystem indisponible'; return resp end
+        journal(string.format('RUN  bd_jump %.1f', tonumber(cmd.x) or 0))
+        local okJ, r = pcall(function()
+            return si:JumpRewindableSection(tonumber(cmd.z) or 10.0, tonumber(cmd.x) or 0.0, bdEnum('scnPlayDirection', 'Forward', 0), bdEnum('scnPlaySpeed', 'Pause', 0))
+        end)
+        resp.ok = okJ and (r ~= false)
+        if not okJ then resp.reason = 'JumpRewindableSection : ' .. tostring(r) end
+        pcall(function() resp.t = si:GetRewindableSectionTimeInSec() end)
+        journal('OK   bd_jump : ' .. tostring(resp.ok) .. ' t=' .. tostring(resp.t) .. (okJ and '' or (' ' .. tostring(r))))
+        return resp
+    elseif cmd.cmd == 'bd_speed' then
+        -- x = 0 pause, 1 lent, 2 normal, 3 rapide, 4 tres rapide ; y = 1 -> marche arriere
+        local si = bdSceneIface()
+        if not si then resp.reason = 'SceneSystem indisponible'; return resp end
+        local names = { [0] = 'Pause', 'Slow', 'Normal', 'Fast', 'VeryFast' }
+        local sp = math.max(0, math.min(4, math.floor(tonumber(cmd.x) or 0)))
+        journal(string.format('RUN  bd_speed %d dir=%s', sp, tostring(cmd.y)))
+        local okD = pcall(function() si:SetRewindableSectionPlayDirection(bdEnum('scnPlayDirection', (cmd.y == 1) and 'Backward' or 'Forward', (cmd.y == 1) and 1 or 0)) end)
+        local okS, errS = pcall(function() si:SetRewindableSectionPlaySpeed(bdEnum('scnPlaySpeed', names[sp], sp)) end)
+        resp.ok = okS
+        if not okS then resp.reason = tostring(errS) end
+        journal('OK   bd_speed : ' .. tostring(okS) .. ' dir=' .. tostring(okD))
+        return resp
+    elseif cmd.cmd == 'bd_clues' then
+        -- diagnostic complet dans le journal : etat, indices de la timeline, entites-indices
+        local bd = bdState()
+        if not bd then resp.reason = 'pas de danse sensorielle active'; return resp end
+        local pos = player:GetWorldPosition()
+        local okF, focus = pcall(bdScanFocus, player, pos)
+        bd.focus = okF and focus or nil
+        journal(string.format('BD etat : actif=%s rew=%s fpp=%s couche=%s t=%s/%s pause=%s exit=%s masques=%s', tostring(bd.active), tostring(bd.rew),
+            tostring(bd.fpp), tostring(bd.layer), tostring(bd.t), tostring(bd.dur), tostring(bd.paused), tostring(bd.exit), bd.masks and json.encode(bd.masks) or '?'))
+        for _, c in ipairs(bd.clues or {}) do journal(string.format('BD timeline : %s %.1f-%.1f couche=%s mode=%s done=%s', c.name, c.t0 or -1, c.t1 or -1, tostring(c.layer), tostring(c.mode), tostring(c.done))) end
+        for _, f in ipairs(bd.focus or {}) do
+            journal(string.format('BD indice : %s [%s] d=%.1f couche=%s scanne=%s bloque=%s actif=%s prog=%s besoin=%s sx=%s sy=%s', tostring(f.name), tostring(f.cls), f.d or -1,
+                tostring(f.layer), tostring(f.scanned), tostring(f.blocked), tostring(f.enabled), tostring(f.prog), tostring(f.need), tostring(f.sx), tostring(f.sy)))
+        end
+        if not okF then journal('BD indices : erreur ' .. tostring(focus)) end
+        resp.ok, resp.bd = true, bd
         return resp
     elseif cmd.cmd == 'breach_info' then
         -- BREACH PROTOCOL : grille / sequences / buffer / chaines ; x = 1 -> journalise aussi tous les textes (diagnostic)

@@ -148,6 +148,16 @@ def run_test(name: str) -> None:
         if not q.get('hasMappin'):
             print('aucun objectif de quete suivi'); return
         print(f'resultat : {driving.drive_to(q["mx"], q["my"], stop=stop, log=print)}')
+    elif name in ('bd', 'bdrun'):
+        from agent import braindance
+        print('Lance une danse sensorielle dans le jeu, puis bascule vers le jeu : ' + ('diagnostic dans 5 s (journal probe_progress.txt)' if name == 'bd' else 'V prend la main dans 5 s'))
+        time.sleep(5.0)
+        if name == 'bd':
+            import json as _j
+            r = braindance.dump(log=print)
+            print(_j.dumps((r or {}).get('bd') or r, ensure_ascii=False, indent=1)[:6000])
+        else:
+            print('resultat :', braindance.run(log=print))
     elif name in ('breach', 'breachdry'):
         from agent import breach
         print('Ouvre un Breach Protocol dans le jeu (terminal / point d acces), puis bascule vers le jeu : analyse dans 5 s' + (' (sans clic)' if name == 'breachdry' else ''))
@@ -186,7 +196,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description='Agent IA autonome pour Cyberpunk 2077 (V joue seul).')
     ap.add_argument('minutes', nargs='?', type=float, default=20.0, help='duree de jeu en minutes (defaut 20)')
     ap.add_argument('--check', action='store_true', help='verifier l installation et quitter')
-    ap.add_argument('--test', choices=['keys', 'loot', 'drive', 'walk', 'breach', 'breachdry'], help='lancer un test unitaire en jeu (breach : grille ouverte)')
+    ap.add_argument('--test', choices=['keys', 'loot', 'drive', 'walk', 'breach', 'breachdry', 'bd', 'bdrun'], help='lancer un test unitaire en jeu (breach : grille ouverte ; bd : danse sensorielle en cours)')
     ap.add_argument('--config', action='store_true', help='afficher la configuration detectee')
     ap.add_argument('--loop', action='store_true', help='enchainer les sessions sans fin (F12 pour arreter)')
     a = ap.parse_args()
