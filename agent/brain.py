@@ -121,6 +121,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_phone_t = -999.0
     breach_t = None
     bd_t = None
+    menu_t, menu_esc, scene_t = None, 0, None
     last_close_t = -999.0
     last_ft_t = -999.0
     last_overlevel_t = -999.0
@@ -228,6 +229,35 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     time.sleep(0.5); continue
                 else:
                     bd_t = None
+
+                # 0a4. MENU OUVERT sans raison (ecran de marchand, inventaire, carte laisses ouverts) : le monde continue
+                # mais la souris ne pilote plus la camera (« rotation initiale echouee » en boucle hier soir) -> Echap
+                if st.get('menu') and not (st.get('breach') or {}).get('state') == 1 and not (st.get('bd') or {}).get('active'):
+                    if menu_t is None:
+                        menu_t = time.perf_counter(); menu_esc = 0
+                    elif time.perf_counter() - menu_t > 2.5 and menu_esc < 4:
+                        menu_esc += 1; menu_t = time.perf_counter()
+                        _log(f'menu ouvert (marchand / inventaire / carte) : Echap ({menu_esc}/4)')
+                        kbm.release_all(); kbm.tap('ESC', 0.09)
+                    time.sleep(0.4); continue
+                menu_t = None
+                # 0a5. SCENE sans choix de dialogue depuis 25 s (assis a un stand, conversation muette) : on en sort
+                if st.get('scene') and not (st.get('dialog') or {}).get('choices') and not (st.get('bd') or {}).get('active'):
+                    if scene_t is None:
+                        scene_t = time.perf_counter()
+                    elif time.perf_counter() - scene_t > 25.0:
+                        scene_t = time.perf_counter() - 10.0
+                        _log('scene sans dialogue depuis 25 s : V s en extrait (Echap, recul, saut)')
+                        kbm.tap('ESC', 0.09); time.sleep(0.8)
+                        s_e = motion.read_state() or {}
+                        if s_e.get('menu'):
+                            kbm.tap('ESC', 0.09); time.sleep(0.6)
+                        kbm.hold('S'); time.sleep(1.5); kbm.release('S')
+                        kbm.act('jump', 0.1); time.sleep(0.8)
+                        stats['scenes_quittees'] = stats.get('scenes_quittees', 0) + 1
+                        continue
+                else:
+                    scene_t = None
 
                 # 0b. etat FIGE (pause, menu, carte, chargement) : le mod ne tourne plus -> on ne touche a rien
                 if st.get('seq') != frozen_seq:

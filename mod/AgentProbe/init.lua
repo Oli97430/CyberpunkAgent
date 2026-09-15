@@ -1377,6 +1377,16 @@ registerForEvent('onUpdate', function(dt)
                 end
             end)
         end
+        -- MENU OUVERT (marchand, inventaire, carte...) et SCENE (V assis, dialogue) : la souris n agit plus sur la camera
+        local menuOpen, inScene = nil, nil
+        pcall(function()
+            local ud = GetAllBlackboardDefs().UI_System
+            menuOpen = Game.GetBlackboardSystem():Get(ud):GetBool(ud.IsInMenu)
+        end)
+        pcall(function()
+            local si = Game.GetSceneSystem():GetScriptInterface()
+            inScene = si:IsEntityInScene(id) or si:IsEntityInDialogue(id)
+        end)
         -- DANSE SENSORIELLE : etat + indices (entites a 4 Hz) + objet sous le reticule
         local bd = bdState()
         if bd then
@@ -1452,7 +1462,7 @@ registerForEvent('onUpdate', function(dt)
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
                  hp = hp, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
                  lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
-                 enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, seqEnd = seq }
+                 enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)
     if ok and data then
