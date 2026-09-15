@@ -51,8 +51,17 @@ def summon_and_board(stop=None, log=print) -> bool:
     from . import nav
     want = random.choice((0, 1, 2))                      # 0 = n importe lequel, 1 = voiture, 2 = moto
     rv = nav._wait(nav._send({'cmd': 'vehicle_call', 'x': want}), timeout=5.0)
-    if rv and rv.get('ok'):
+    if rv and rv.get('ok') and rv.get('spawned', True):
         log(f"  [conduite] V appelle « {rv.get('name')} » ({rv.get('vtype')}) parmi ses {rv.get('total')} vehicules")
+    elif rv and rv.get('ok'):
+        # le systeme a refuse le spawn (cooldown, zone sans route, restriction de scene) : inutile d attendre 30 s
+        log(f"  [conduite] vehicule « {rv.get('name')} » : {rv.get('reason')} -> touche d appel en secours")
+        kbm.act('callvehicle', 0.15)
+        if rv.get('cooldown') or rv.get('restricted'):
+            time.sleep(1.5)
+            s0 = motion.read_state() or {}
+            if not [v for v in (s0.get('vehicles') or []) if v.get('player')]:
+                return False
     else:
         log(f"  [conduite] appel du vehicule (touche) : {(rv or {}).get('reason', 'mod muet')}")
         kbm.act('callvehicle', 0.15)

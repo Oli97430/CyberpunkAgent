@@ -736,7 +736,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     else:
                         path_failures += 1
                         _log(f"  trajet : {r.get('reason')} (echec {path_failures}/5)")
-                        if path_failures >= 5 and dist is not None and dist < 300 and not straight_tried:
+                        if path_failures >= 5 and dist is not None and not straight_tried:      # meme pour une cible lointaine : d abord SORTIR d ici
                             # le maillage ne repond pas (interieur, escalier, ring...) : on marche EN LIGNE DROITE vers
                             # la cible 20 s (les portes s ouvrent en passant) ; si V a avance, le maillage se recalcule
                             straight_tried = True
@@ -765,6 +765,16 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             while time.perf_counter() - t_w < 45.0 and not (stop is not None and stop.is_set()):
                                 time.sleep(1.0)
                             continue
+                        if path_failures >= 5 and CFG.features.get('fasttravel', True) and time.perf_counter() - last_ft_t > 120.0:
+                            # aucun chemin d ici et la sortie a echoue : le voyage rapide (par requete au systeme du jeu) peut nous sortir
+                            last_ft_t = time.perf_counter()
+                            tx, ty = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
+                            _log('aucun chemin d ici : tentative de voyage rapide vers l objectif')
+                            rft = nav.fast_travel_to(tx, ty, log=_log, min_gain_m=100.0)
+                            if rft.get('ok'):
+                                stats['voyages'] = stats.get('voyages', 0) + 1; path_failures = 0; straight_tried = False
+                                continue
+                            _log(f"  voyage rapide : {rft.get('reason')}")
                         if path_failures >= 5:
                             _log('objectif inaccessible a pied depuis ici : changement de quete')
                             path_failures = 0

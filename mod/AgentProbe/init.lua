@@ -2267,11 +2267,22 @@ local function handleCommand(player, cmd)
         journal(string.format('RUN  fast_travel idx=%d', cmd.x))
         local fts = Game.GetScriptableSystemsContainer():Get('FastTravelSystem')
         local did, errs = {}, {}
+        -- source du jeu (fastTravelSystem.script) : PerformFastTravel(player, nodeData) ne verifie que HasFastTravelPoint
+        -- et destination ~= point de depart, puis TeleportToNode : utilisable de N IMPORTE OU (pas besoin d une borne)
+        pcall(function()
+            local bbd = GetAllBlackboardDefs().FastTRavelSystem
+            local bb = Game.GetBlackboardSystem():Get(bbd)
+            bb:SetVariant(bbd.StartingPoint, ToVariant(TweakDBID.new('')))   -- sinon refus si on repart du dernier point d arrivee
+        end)
         local tries = {
-            { 'PerformFastTravel(p, player)', function() fts:PerformFastTravel(p, player) end },
-            { 'PerformFastTravel(p)', function() fts:PerformFastTravel(p) end },
-            { 'FastTravel(p)', function() fts:FastTravel(p) end },
-            { 'PerformFastTravel(record, player)', function() fts:PerformFastTravel(p.pointRecord, player) end },
+            { 'PerformFastTravel(player, p)', function() fts:PerformFastTravel(player, p) end },
+            { 'PerformFastTravelRequest', function()
+                local req = PerformFastTravelRequest.new()
+                req.pointData = p
+                req.player = player
+                fts:QueueRequest(req)
+            end },
+            { 'TeleportToNode', function() Game.GetTeleportationFacility():TeleportToNode(player, p:GetMarkerRef()) end },
         }
         for _, t in ipairs(tries) do
             local okX, err = pcall(t[2])
@@ -2378,10 +2389,22 @@ local function handleCommand(player, cmd)
         local pick = cands[math.random(#cands)]
         local typeEnum = pick.isBike and gamedataVehicleType.Bike or gamedataVehicleType.Car
         local did = {}
+        local cooldown = nil
+        pcall(function() cooldown = vs:IsActivePlayerVehicleOnCooldown(typeEnum) end)
+        local restricted = nil
+        pcall(function() restricted = VehicleSystem.IsSummoningVehiclesRestricted(GetGameInstance()) end)
         if pcall(function() vs:TogglePlayerActiveVehicle(pick.v, typeEnum, true) end) then did[#did + 1] = 'TogglePlayerActiveVehicle' end
-        if pcall(function() vs:SpawnPlayerVehicle(typeEnum) end) then did[#did + 1] = 'SpawnPlayerVehicle' end
+        local spawned = false
+        local okS, rS = pcall(function() return vs:SpawnPlayerVehicle(typeEnum, pick.v.recordID, false) end)
+        if okS then did[#did + 1] = 'SpawnPlayerVehicle=' .. tostring(rS); spawned = (rS == true) end
+        if not spawned then
+            local okA, rA = pcall(function() return vs:SpawnActivePlayerVehicle(typeEnum) end)
+            if okA then did[#did + 1] = 'SpawnActivePlayerVehicle=' .. tostring(rA); spawned = spawned or (rA == true) end
+        end
         resp.ok, resp.name, resp.vtype, resp.methodes, resp.total = (#did > 0), pick.name, pick.vtype, did, #list
-        journal(string.format('OK   vehicle_call : %s (%s) parmi %d [%s]', tostring(pick.name), tostring(pick.vtype), #list, table.concat(did, ',')))
+        resp.spawned, resp.cooldown, resp.restricted = spawned, cooldown, restricted
+        if not spawned then resp.reason = 'spawn refuse (cooldown=' .. tostring(cooldown) .. ', restriction=' .. tostring(restricted) .. ')' end
+        journal(string.format('OK   vehicle_call : %s (%s) parmi %d [%s] spawn=%s cooldown=%s restriction=%s', tostring(pick.name), tostring(pick.vtype), #list, table.concat(did, ','), tostring(spawned), tostring(cooldown), tostring(restricted)))
         return resp
     elseif cmd.cmd == 'perks' then
         -- DEPENSE DES POINTS DE PERK : jalons des arbres Corps / Reflexes / Sang-froid / Technique (build melee),
