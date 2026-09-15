@@ -197,18 +197,42 @@ def _ensure_weapon(slot, melee: bool) -> None:
 
 
 # ---- engagement (avant que le jeu ne passe en combat) -----------------------------------
-def engage(target: dict, stop=None, log=print, max_s: float = 25.0) -> bool:
+LAST_ENGAGE = {'d0': None, 'd1': None}          # distance a la cible au debut / a la fin du dernier engage (pour le cerveau)
+STEALTH_MAX_M = 12.0                           # accroupi seulement a moins de 12 m : plus loin on court (V n est pas une limace)
+
+
+def _rescue_target(st: dict, last: dict) -> dict | None:
+    """Cible de SECOURS rafraichie : le PNJ agressif / en combat le plus proche de la derniere position connue."""
+    from . import planner as _pl
+    aggr = _pl.aggressors(st)
+    if not aggr:
+        return None
+    return min(aggr, key=lambda n: math.hypot(n['x'] - last['x'], n['y'] - last['y']))
+
+
+def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescue: bool = False) -> bool:
+    """Va au contact d une cible et DECLENCHE le combat (premier coup / premiers tirs). True des que le jeu marque V
+    en combat. max_s None = proportionnel a la distance (8 s + 1 s par 2,5 m). rescue : cible = PNJ agressif suivi
+    en direct (il bouge), pas de discretion (il est deja en train de se battre)."""
     t0 = time.perf_counter()
     _ensure_weapon(MELEE_SLOT, melee=True)
     seq = None
     hacked = False
     st0 = motion.read_state() or {}
     from .config import CFG as _C3
-    stealth = _C3.features.get('stealth', True) and not st0.get('combat') and (target.get('d') or 0) > 4.0 and not st0.get('swim')   # DISCRETION (option) ; jamais accroupi dans l eau (= plongee)
+    d_init = float(target.get('d') or 0.0)
+    if max_s is None:
+        max_s = 8.0 + d_init / 2.5
+    LAST_ENGAGE['d0'], LAST_ENGAGE['d1'] = d_init, d_init
+    stealth = _C3.features.get('stealth', True) and not rescue and not st0.get('combat') and 4.0 < d_init <= STEALTH_MAX_M and not st0.get('swim')
     crouched = False
+    last_pos = {'x': target.get('x'), 'y': target.get('y')}
+    struck = 0
     if stealth:
         kbm.act('crouch', 0.1); crouched = True; time.sleep(0.3)
         log('  [combat] approche en discretion (accroupi)')
+    elif d_init > STEALTH_MAX_M:
+        log(f"  [combat] cible a {d_init:.0f} m : V y va en courant")
     try:
         while time.perf_counter() - t0 < max_s:
             if stop is not None and stop.is_set():
@@ -230,16 +254,36 @@ def engage(target: dict, stop=None, log=print, max_s: float = 25.0) -> bool:
                 seq = None; continue
             alive = _alive(st.get('enemies'), allow_police=False)
             if not alive:
-                # cible imposee (agresseur pas encore hostile a V) : on la suit par sa position initiale
-                if target and target.get('x') is not None and time.perf_counter() - t0 < 12.0:
-                    dd = math.hypot(target['x'] - st['x'], target['y'] - st['y'])
-                    alive = [{'x': target['x'], 'y': target['y'], 'd': dd, 'sy': None}]
+                # cible imposee (agresseur pas encore hostile a V) : suivie EN DIRECT parmi les PNJ agressifs, sinon
+                # par sa derniere position connue
+                live = _rescue_target(st, last_pos) if (rescue or target.get('x') is not None) else None
+                if live is not None:
+                    last_pos = {'x': live['x'], 'y': live['y']}
+                    alive = [{'x': live['x'], 'y': live['y'], 'd': live.get('d') or math.hypot(live['x'] - st['x'], live['y'] - st['y']), 'sy': live.get('sy')}]
+                elif last_pos.get('x') is not None:
+                    dd = math.hypot(last_pos['x'] - st['x'], last_pos['y'] - st['y'])
+                    if dd < 2.0 and time.perf_counter() - t0 > 4.0:
+                        log('  [combat] personne a la derniere position connue de la cible'); return False
+                    alive = [{'x': last_pos['x'], 'y': last_pos['y'], 'd': dd, 'sy': None}]
                 else:
                     return False
             e = alive[0]
+            LAST_ENGAGE['d1'] = e['d']
             gap = aim_at(e, st)
+            # discretion : on s accroupit seulement en arrivant a portee (< 12 m), jamais pour un secours
+            if stealth is False and _C3.features.get('stealth', True) and not rescue and not crouched and e['d'] <= STEALTH_MAX_M and d_init > STEALTH_MAX_M and not st.get('swim'):
+                kbm.act_release('sprint'); kbm.act('crouch', 0.1); crouched = True; stealth = True; time.sleep(0.2)
+                log('  [combat] a portee : approche en discretion (accroupi)')
             if not hacked and e['d'] > 6.0 and gap < 8 and time.perf_counter() - t0 > 1.0:
                 quickhack_first(); hacked = True; seq = None; continue
+            # DECLENCHER le combat : a distance, quelques tirs alignes (style mixte / distance) ; au contact, un coup
+            if RANGED_SLOT and _C3.style != 'melee' and 5.0 < e['d'] < RANGED_MAX_M and gap < 6 and struck < 3 and time.perf_counter() - t0 > 1.0:
+                kbm.release('W'); kbm.act_release('sprint')
+                _ensure_weapon(RANGED_SLOT, melee=False)
+                kbm.mouse('right', True); time.sleep(0.2); kbm.mouse_tap('left', 0.12); kbm.mouse('right', False)
+                struck += 1; seq = None
+                if struck == 1: log(f"  [combat] ouverture du feu a {e['d']:.0f} m")
+                continue
             if e['d'] > MELEE_RANGE:
                 kbm.hold('W')
                 if e['d'] > 8.0 and not crouched: kbm.act_hold('sprint')
@@ -247,7 +291,8 @@ def engage(target: dict, stop=None, log=print, max_s: float = 25.0) -> bool:
             else:
                 kbm.release('W'); kbm.act_release('sprint')
                 if gap < 25:
-                    heavy_attack(); time.sleep(0.2)
+                    _ensure_weapon(MELEE_SLOT, melee=True)
+                    heavy_attack(); struck += 1; time.sleep(0.2)
     finally:
         kbm.release_all()
         if crouched:
@@ -304,7 +349,11 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
 
             alive = _alive(st.get('enemies'))
             if not st.get('combat'):
-                log('  [combat] fin : plus en combat'); break
+                # le jeu ne marque V « en combat » qu apres le premier echange : pendant 5 s, s il reste des hostiles
+                # vivants a portee, on continue (et on frappe) au lieu de conclure que c est fini
+                near_alive = [x for x in alive if x['d'] < 25.0]
+                if now - t0 > 5.0 or not near_alive:
+                    log('  [combat] fin : plus en combat'); break
             # combat STERILE : rien ne change depuis 75 s (meme nombre d hostiles, vie intacte) -> cibles
             # injoignables (vitre, autre etage, tourelle hors portee) : on arrete de taper dans le vide
             sig = (len(alive), hp >= 90)

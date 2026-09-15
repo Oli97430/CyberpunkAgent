@@ -554,7 +554,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         aggr2 = planner.aggressors(s2)
                         if aggr2:
                             a = aggr2[0]
-                            combat.engage({'x': a['x'], 'y': a['y'], 'd': a['d'], 'sy': None}, stop=stop, log=_log)
+                            combat.engage({'x': a['x'], 'y': a['y'], 'd': a['d'], 'sy': a.get('sy')}, stop=stop, log=_log, rescue=True)
                             r = combat.fight(stop=stop, log=_log)
                             stats['combats'] = stats.get('combats', 0) + 1
                             stats['sauvetages'] = stats.get('sauvetages', 0) + 1
@@ -644,8 +644,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     if hostiles:
                         _log(f"V engage le combat : {len(hostiles)} hostile(s), le plus proche a {hostiles[0]['d']:.0f} m")
                         plan.note('a engage un combat')
-                        engaged = combat.engage(hostiles[0], stop=stop, log=_log, max_s=14.0)
+                        engaged = combat.engage(hostiles[0], stop=stop, log=_log)
                         s_now = motion.read_state() or {}
+                        d0, d1 = combat.LAST_ENGAGE.get('d0') or 0.0, combat.LAST_ENGAGE.get('d1') or 0.0
+                        if not engaged and not s_now.get('combat') and d0 - d1 > 6.0 and d1 > 4.0:
+                            _log(f"  engagement inacheve ({d0:.0f} -> {d1:.0f} m) : on y retourne")
+                            plan.last_t = -99.0; plan.action = 'attaquer'
+                            continue
                         if not engaged and not s_now.get('combat'):
                             mute_hostiles[(round(hostiles[0]['x']), round(hostiles[0]['y']))] = time.perf_counter()
                             _log('  cible sans reaction : ignoree 3 min')
