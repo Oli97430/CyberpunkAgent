@@ -214,7 +214,7 @@ Attach these three files to any bug report.
 ## Known limits
 
 - **Races** (Beat on the Brat by car, street races): autodrive does not race.
-- **Breach Protocol**: terminals are detected, the mini-game is not solved yet.
+- **Breach Protocol** and **braindance**: an automatic solver and editor control ship since 0.1.1, still being validated in-game (unhandled cases end with Escape).
 - **Complex interiors** (elevators, locked doors): the escape routine often works, not always.
 - **High-level areas**: V flees and avoids the area afterwards, but can die when caught between several groups.
 - **Language**: prompt keywords are French. Other languages need `DOOR_WORDS`, `NO_GRAB`, `HEAL_WORDS`, `ALCOHOL` adjusted.

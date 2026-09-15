@@ -1,8 +1,13 @@
 # Changelog
 
-## Non publié — 2026-09-13 — revue de code complète
+## 0.1.1 — 2026-09-15 — revue de code, Breach Protocol, danse sensorielle
 
-Voir `REVIEW.md` (trois revues : mod Lua, cœur Python, services + packaging). Corrigé :
+- **Breach Protocol** : résolveur intégré (lecture de la grille et des séquences dans l'interface du mini-jeu, combinaison des daemons, clics souris) ; le mod continue de répondre pendant la pause du jeu. À valider en jeu.
+- **Danse sensorielle** : V prend l'éditeur en main (indices de la timeline, couches, saut dans la timeline par script, analyse des indices, sortie). À valider en jeu.
+- **Sortie d'îlot** : voyage rapide par le système du jeu (utilisable sans borne), tentative de sortie même pour une cible lointaine ; appel de véhicule : résultat du spawn et cooldown lus.
+- **Menus et scènes** : Échap sur un menu laissé ouvert, extraction d'une scène muette après 25 s.
+- **Combat** : V n'abandonne plus l'approche (course au-delà de 12 m, durée d'engagement proportionnelle à la distance, cible de secours suivie en direct, premier coup ou premiers tirs pour déclencher le combat).
+- **Revue de code complète (13/09)** : voir `REVIEW.md` (trois revues : mod Lua, cœur Python, services + packaging). Corrigé :
 - **Mod** : la dernière commande SQLite de la session précédente n'est plus rejouée au chargement (portée de `lastCmdSeq`) ; `sell`/`buy` lisent le résultat de `TransferItem`, bornent les quantités, exigent le bon marchand, ne créent plus ni argent ni objet ; objets de quête / iconiques / équipés invendables ; `teleport` limité borne → borne ; `door_open` par `EntityID` ; garde de taille de l'état (plus d'état figé silencieux) ; erreurs du tick et des commandes journalisées ; scans larges à 4 Hz ; corps identifiés par entité.
 - **Agent** : `try/finally` et `try/except` par tour dans la boucle principale (touches relâchées, journal de fin garanti) ; arme dégainée selon l'arme réellement tenue (plus de rengainage au début du combat) ; aucune entrée envoyée hors focus, même pendant une compétence longue ; F12 arrête vraiment `--loop` ; rechargement après la mort interruptible ; états relus après un trajet ; implant non posé conservé (plus revendu à perte) ; prix inconnu = pas d'achat ; indices d'inventaire périmés invalidés (buffs) ; fin de la boucle craft → vente → craft ; `seq` monotone entre sessions ; flèches envoyées avec le drapeau étendu.
 - **Sécurité** : `agent_config.json` (dossier du jeu) limité à une liste blanche de clés (plus d'exécutable ni d'URL imposables par un fichier) ; `openai_base_url` https ou local seulement ; la release n'embarque que `init.lua`.
