@@ -41,12 +41,29 @@ def _log(msg: str) -> None:
             print(line.encode('ascii', 'replace').decode('ascii'), flush=True)
         except Exception:
             pass
+    # miroir dans le dossier du mod (chemin dont l ecriture est prouvee : agent_diag.txt y arrive) : le journal
+    # habituel restait vide pour l exe lance depuis le panneau (16/09), sans erreur rapportee
+    try:
+        if CFG.mod_dir:
+            with (CFG.mod_dir / 'agent_log.txt').open('a', encoding='utf-8') as f:
+                f.write(line + '\n')
+    except Exception as e:
+        _LOG_STATE['err_mod'] = repr(e)
+    _LOG_STATE['n'] = _LOG_STATE.get('n', 0) + 1
+    if _LOG_STATE['n'] % 50 == 0:
+        _write_diag()
     fallback = (Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent.parent) / 'brain_log.txt'
     for target in (_LOG_STATE['file'], fallback):
         try:
             with target.open('a', encoding='utf-8') as f:
                 f.write(line + '\n')
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
             _LOG_STATE['file'] = target
+            _LOG_STATE['size'] = target.stat().st_size
             return
         except Exception as e:
             _LOG_STATE['err'] = f'{target}: {e!r}'
@@ -64,6 +81,7 @@ def _write_diag() -> None:
             f"APPDATA : {os.environ.get('APPDATA')}",
             f"journal : {_LOG_STATE['file']}",
             f"erreur journal : {_LOG_STATE['err']}",
+            f"lignes ecrites : {_LOG_STATE.get('n', 0)} ; taille vue par l exe : {_LOG_STATE.get('size')} ; erreur miroir : {_LOG_STATE.get('err_mod')}",
             f"argv : {sys.argv}",
         ]) + '\n', encoding='utf-8')
     except Exception:
