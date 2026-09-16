@@ -122,6 +122,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     breach_t = None
     bd_t = None
     menu_t, menu_esc, scene_t = None, 0, None
+    shop_back_t = -999.0
     last_close_t = -999.0
     last_ft_t = -999.0
     last_overlevel_t = -999.0
@@ -239,6 +240,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         menu_esc += 1; menu_t = time.perf_counter()
                         _log(f'menu ouvert (marchand / inventaire / carte) : Echap ({menu_esc}/4)')
                         kbm.release_all(); kbm.tap('ESC', 0.09)
+                        if st.get('scene'):
+                            time.sleep(0.5); kbm.hold('S'); time.sleep(1.2); kbm.release('S')
                     time.sleep(0.4); continue
                 menu_t = None
                 # 0a5. SCENE sans choix de dialogue depuis 25 s (assis a un stand, conversation muette) : on en sort
@@ -364,6 +367,16 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 d = st.get('dialog')
                 if d and d.get('choices'):
                     sig = dialog.hub_signature(d)
+                    if dialog.is_shop_hub(d):
+                        # ecran de commerce : inutile (ventes/achats par script) et il revient tant qu on regarde le marchand
+                        if time.perf_counter() - shop_back_t > 6.0:
+                            shop_back_t = time.perf_counter()
+                            _log(f'ecran de commerce « {d.get("title")} » : on s ecarte du marchand')
+                            kbm.tap('ESC', 0.09); time.sleep(0.5)
+                            kbm.hold('S'); time.sleep(1.5); kbm.release('S')
+                            motion.turn_by(150.0, timeout=1.5, stop=stop)
+                            kbm.hold('W'); time.sleep(1.2); kbm.release('W')
+                        time.sleep(0.5); continue
                     same_hub = same_hub + 1 if sig == last_hub_sig else 1
                     last_hub_sig = sig
                     if same_hub > 6:
@@ -372,11 +385,15 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         # sortir du dialogue : choix de sortie s il existe, sinon Echap
                         quit_idx = next((i for i, c in enumerate(d['choices'])
                                          if any(w in c.lower() for w in dialog.QUIT_WORDS)), None)
+                        dialog._shop_hubs[sig] = time.perf_counter()          # on n y repondra plus pendant 10 min
                         if quit_idx is not None:
                             dialog.select_index(quit_idx); dialog.confirm()
                         else:
                             kbm.tap('ESC', 0.09)
-                        time.sleep(1.5)
+                        time.sleep(1.0)
+                        kbm.hold('S'); time.sleep(1.5); kbm.release('S')
+                        motion.turn_by(150.0, timeout=1.5, stop=stop)
+                        time.sleep(0.5)
                         nxt = quests.switch(q.get('hash'), log=_log)
                         if nxt:
                             alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}

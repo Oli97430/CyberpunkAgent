@@ -120,6 +120,11 @@ def select_index(target: int, max_steps: int = 12) -> bool:
 
 
 _tried: dict[str, set] = {}   # signature du hub -> indices deja confirmes sans effet
+_shop_hubs: dict[str, float] = {}   # signature d un hub de commerce -> derniere fois ou on a recule (on n y revient pas 10 min)
+
+
+def is_shop_hub(d: dict | None) -> bool:
+    return bool(d) and time.perf_counter() - _shop_hubs.get(hub_signature(d), -1e9) < 600.0
 
 
 def hub_signature(d: dict) -> str:
@@ -136,9 +141,16 @@ def answer_once(stop=None, log=print) -> dict | None:
         return None
     title, choices = d.get('title', '?'), d['choices']
     low_t = str(title).lower(); low_c = ' '.join(choices).lower()
-    is_stand = any(w in low_t for w in ('vendeur', 'vendor', 'marchand', 'stand', 'netrunner', 'ripperdoc', 'charcudoc', 'armurier', 'tailleur', 'médecin', 'medecin'))
-    buy_words = ('apporte-moi', 'a boire', 'à boire', 'a manger', 'à manger', 'commander', 'un verre')
-    if is_stand or all(any(w in c.lower() for w in buy_words) for c in choices):
+    is_stand = any(w in low_t for w in ('vendeur', 'vendor', 'marchand', 'stand', 'netrunner', 'ripperdoc', 'charcudoc', 'armurier', 'tailleur', 'médecin', 'medecin',
+                                       'propriétaire', 'proprietaire', 'boutique', 'shop', 'commerçant', 'commercant', 'boucher', 'fleuriste', 'pharmac', 'ripper', 'gérant', 'gerant'))
+    # un choix qui OUVRE l ecran de commerce (« Je veux voir ce que vous avez ») : la vente / l achat se font par script,
+    # l ecran ne sert a rien et le hub revient des qu on le referme -> boucle infinie (16/09 06:16, 30 fois)
+    buy_words = ('apporte-moi', 'a boire', 'à boire', 'a manger', 'à manger', 'commander', 'un verre',
+                 'voir ce que vous avez', 'ce que vous avez', 'ce que tu as', 'montre-moi', 'montrez-moi', 'marchandise', 'tes articles', 'vos articles',
+                 'je veux acheter', 'tu vends quoi', 'qu est-ce que tu vends', "qu'est-ce que tu vends", 'faire affaire', 'voir ta came', 'voir votre came')
+    is_shop_prompt = all(any(w in c.lower() for w in buy_words) for c in choices)
+    if is_stand or is_shop_prompt:
+        _shop_hubs[hub_signature(d)] = time.perf_counter()
         log(f'  [dialog] stand « {title} » : on ne commande rien, on recule')
         kbm.tap('ESC', 0.09); time.sleep(0.5)
         kbm.hold('S'); time.sleep(1.2); kbm.release('S')
