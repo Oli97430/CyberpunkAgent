@@ -153,6 +153,21 @@ def dodge(side: str) -> None:
         kbm.tap(side, 0.07); time.sleep(0.07); kbm.tap(side, 0.07)
 
 
+def sprint_pass(e: dict, st: dict, side_sign: float, dur: float = 0.8) -> None:
+    """Passe en SPRINT de biais (75 degres) autour de la cible : V regenere 60 % plus vite en sprintant (perk).
+    On tourne d abord (boucle fermee sur le cap, 0,5 s max), puis W + sprint pendant dur, puis on relache."""
+    want = motion.wrap(motion.bearing_to(st['x'], st['y'], e['x'], e['y']) + side_sign * 75.0)
+    t_turn = time.perf_counter()
+    s_t = st
+    while time.perf_counter() - t_turn < 0.5:
+        if aim_bearing(want, s_t, gain=0.8) < 12.0:
+            break
+        time.sleep(0.04)
+        s_t = motion.read_state() or s_t
+    kbm.hold('W'); kbm.act_hold('sprint'); time.sleep(dur)
+    kbm.act_release('sprint'); kbm.release('W')
+
+
 def strafe(side: str, dur: float = 0.4) -> None:
     kbm.hold(side); time.sleep(dur); kbm.release(side)
 
@@ -316,6 +331,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
              'parades': 0, 'replis': 0, 'sauts': 0, 'glissades': 0, 'cyberware': 0, 'quickhacks': 0, 'quick_melee': 0}
     t_heal = t_gren = t_cyber = t_hack = t_dodge = t_strafe = t_jump = t_slide = t_knife = -99.0
     t_wsync = -99.0
+    t_sprint = -99.0
     mode = 'melee'; shots = 0
     hack_i = 0
     last_hp, last_hp_t = None, time.perf_counter()
@@ -518,6 +534,11 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                         title = None
                     log(f"  [combat] quickhack « {title or 'par defaut'} » (a distance) sur cible a {tgt['d']:.0f} m")
                     seq = None; continue
+                if _C2.features.get('sprint', True) and now - t_sprint > (2.5 if hp < 85 else 5.0):
+                    side = 'D' if side == 'A' else 'A'
+                    sprint_pass(e, st, 1.0 if side == 'D' else -1.0, dur=0.8)   # sprint lateral = regeneration + cible mouvante
+                    t_sprint = now; stats['sprints'] = stats.get('sprints', 0) + 1
+                    seq = None; continue
                 if gap < 4:
                     kbm.mouse('right', True); time.sleep(0.15)          # viser
                     kbm.mouse_tap('left', 0.12); shots += 1; stats['tirs'] = stats.get('tirs', 0) + 1
@@ -550,8 +571,8 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 kbm.hold('W')
                 if 4.5 < e['d'] < 8.0 and now - t_dodge > DODGE_CD and gap < 20:
                     dodge('W'); t_dodge = now; stats['esquives'] += 1          # DASH d approche (dodgeDash vers l avant)
-                if e['d'] > 7.0:
-                    kbm.act_hold('sprint')
+                if e['d'] > 4.5:
+                    kbm.act_hold('sprint')                              # jusqu au contact : attaque de sprint + regeneration
                     if e['d'] < 9.0 and now - t_slide > SLIDE_CD:
                         slide(); t_slide = now; stats['glissades'] += 1
                 elif 3.0 < e['d'] < 4.5 and now - t_jump > JUMP_ATTACK_CD and gap < 15:
@@ -566,6 +587,13 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             if gap >= 25:
                 continue
             combo += 1
+            # -- SPRINT de biais (perk : +60 % de regeneration en sprintant) : regulierement au contact, plus souvent
+            #    quand la vie baisse ; pas quand 3+ ennemis collent (on ne tourne pas le dos a une meute)
+            if _C2.features.get('sprint', True) and now - t_sprint > (1.8 if hp < 70 else 3.5) and pressure < 3:
+                side = 'D' if side == 'A' else 'A'
+                sprint_pass(e, st, 1.0 if side == 'D' else -1.0, dur=0.9 if hp < 70 else 0.7)
+                t_sprint = now; stats['sprints'] = stats.get('sprints', 0) + 1
+                seq = None; continue
             if pressure >= 2 and combo % 5 == 0:
                 block(0.3); stats['parades'] += 1
             elif now - t_dodge > DODGE_CD and combo % 2 == 0:

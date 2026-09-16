@@ -143,7 +143,7 @@ class Config:
         self.language = user.get('language', 'fr')
         # comportements activables (panneau de configuration / fenetre in-game) : tout est actif par defaut
         feats = user.get('features') or {}
-        self.features = {k: bool(feats.get(k, True)) for k in ('radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'fasttravel', 'phone', 'sms', 'appearance', 'recipes')}
+        self.features = {k: bool(feats.get(k, True)) for k in ('radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'sprint', 'fasttravel', 'phone', 'sms', 'appearance', 'recipes')}
         self.minutes = int(user.get('minutes') or 20)
         # temperament : courage (prudent / equilibre / temeraire), style de combat (melee / mixte / distance),
         # agressivite (defensif = ne se bat que s il est attaque ; normal ; chasseur = attaque tout hostile en vue)
