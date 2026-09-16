@@ -99,7 +99,7 @@ def mod_is_stale() -> str | None:
     return None
 
 
-def play(minutes: float) -> bool:
+def play(minutes: float, wait_forever: bool = False) -> bool:
     """Renvoie True si F12 (arret demande par le joueur) a mis fin a la session."""
     from agent import brain, dialog, input_kbm as kbm
     stale = mod_is_stale()
@@ -112,8 +112,10 @@ def play(minutes: float) -> bool:
     print(f'Bascule vers Cyberpunk : V joue seul pendant {minutes:.0f} min des que le jeu est au premier plan (F11 = pause/reprise, F12 = arret)', flush=True)
     t1 = time.time()
     while not kbm.game_focused():
-        if time.time() - t1 > 120:
-            print('ABANDON : le jeu n est pas passe au premier plan en 2 min.'); return True
+        if time.time() - t1 > 120 and not wait_forever:
+            print('ABANDON : le jeu n est pas passe au premier plan en 2 min.', flush=True); return True
+        if wait_forever and int(time.time() - t1) % 60 == 0:
+            print(f'  en attente du jeu au premier plan ({int(time.time() - t1) // 60} min)...', flush=True)
         time.sleep(0.25)
     print('  jeu au premier plan : depart dans 2 s', flush=True); time.sleep(2)
     ks = kbm.KillSwitch()
@@ -218,7 +220,7 @@ def main() -> None:
         while True:
             n += 1
             print(f'\n===== session {n} =====', flush=True)
-            if play(a.minutes):            # F12 pendant la session : on n enchaine pas
+            if play(a.minutes, wait_forever=True):            # F12 pendant la session : on n enchaine pas
                 print('F12 : arret demande, fin de la boucle.'); break
             time.sleep(5.0)
     else:
