@@ -15,6 +15,8 @@ Tout est journalise dans brain_log.txt. F11 arrete tout (KillSwitch).
 from __future__ import annotations
 
 import math
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -25,11 +27,50 @@ LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
 ARRIVE_M = 3.0
 
 
+_LOG_STATE = {'file': LOG_FILE, 'err': None}
+
+
 def _log(msg: str) -> None:
+    """Journal : console + fichier. Jamais bloquant : une console qui refuse un caractere ou un fichier inaccessible
+    ne doit pas tuer la session (16/09 : l exe lance depuis le panneau ne laissait AUCUN journal)."""
     line = f"[{time.strftime('%H:%M:%S')}] {msg}"
-    print(line)
-    with LOG_FILE.open('a', encoding='utf-8') as f:
-        f.write(line + '\n')
+    try:
+        print(line, flush=True)
+    except Exception:
+        try:
+            print(line.encode('ascii', 'replace').decode('ascii'), flush=True)
+        except Exception:
+            pass
+    fallback = (Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent.parent) / 'brain_log.txt'
+    for target in (_LOG_STATE['file'], fallback):
+        try:
+            with target.open('a', encoding='utf-8') as f:
+                f.write(line + '
+')
+            _LOG_STATE['file'] = target
+            return
+        except Exception as e:
+            _LOG_STATE['err'] = f'{target}: {e!r}'
+
+
+def _write_diag() -> None:
+    """Fichier de diagnostic dans le dossier du mod (toujours lisible) : ou va le journal, quel exe, quel environnement."""
+    try:
+        d = (CFG.mod_dir / 'agent_diag.txt') if CFG.mod_dir else Path('agent_diag.txt')
+        d.write_text('
+'.join([
+            f"heure : {time.strftime('%d/%m %H:%M:%S')}",
+            f"exe : {sys.executable}",
+            f"frozen : {getattr(sys, 'frozen', False)}",
+            f"cwd : {Path.cwd()}",
+            f"APPDATA : {os.environ.get('APPDATA')}",
+            f"journal : {_LOG_STATE['file']}",
+            f"erreur journal : {_LOG_STATE['err']}",
+            f"argv : {sys.argv}",
+        ]) + '
+', encoding='utf-8')
+    except Exception:
+        pass
 
 
 ENGAGE_M = 25.0
@@ -154,6 +195,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             return 'exe'
     stamp = ' '.join(f"{m}={_mt(m)}"
                      for m in ('brain', 'combat', 'planner', 'motion'))
+    _write_diag()
     _log(f'=== cerveau v1 demarre ({duration_s:.0f} s max) | code : {stamp} ===')
     # auto-test : V bouge-t-il ? (touche avant 0,6 s) -> detecte tout de suite un blocage d entree
     s0 = motion.read_state()
