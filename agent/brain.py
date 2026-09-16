@@ -45,8 +45,7 @@ def _log(msg: str) -> None:
     for target in (_LOG_STATE['file'], fallback):
         try:
             with target.open('a', encoding='utf-8') as f:
-                f.write(line + '
-')
+                f.write(line + '\n')
             _LOG_STATE['file'] = target
             return
         except Exception as e:
@@ -57,8 +56,7 @@ def _write_diag() -> None:
     """Fichier de diagnostic dans le dossier du mod (toujours lisible) : ou va le journal, quel exe, quel environnement."""
     try:
         d = (CFG.mod_dir / 'agent_diag.txt') if CFG.mod_dir else Path('agent_diag.txt')
-        d.write_text('
-'.join([
+        d.write_text('\n'.join([
             f"heure : {time.strftime('%d/%m %H:%M:%S')}",
             f"exe : {sys.executable}",
             f"frozen : {getattr(sys, 'frozen', False)}",
@@ -67,8 +65,7 @@ def _write_diag() -> None:
             f"journal : {_LOG_STATE['file']}",
             f"erreur journal : {_LOG_STATE['err']}",
             f"argv : {sys.argv}",
-        ]) + '
-', encoding='utf-8')
+        ]) + '\n', encoding='utf-8')
     except Exception:
         pass
 
