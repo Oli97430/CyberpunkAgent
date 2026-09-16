@@ -1381,6 +1381,14 @@ registerForEvent('onUpdate', function(dt)
                 end
             end)
         end
+        -- ECRAN DE CHARGEMENT de voyage rapide reste ouvert (ecran noir) : diagnostic
+        local ftLoading = nil
+        pcall(function()
+            local fd = GetAllBlackboardDefs().FastTRavelSystem
+            local fb = Game.GetBlackboardSystem():Get(fd)
+            local started, finished = fb:GetBool(fd.FastTravelLoadingScreenStarted), fb:GetBool(fd.FastTravelLoadingScreenFinished)
+            if started and not finished then ftLoading = true end
+        end)
         -- MENU OUVERT (marchand, inventaire, carte...) et SCENE (V assis, dialogue) : la souris n agit plus sur la camera
         local menuOpen, inScene = nil, nil
         pcall(function()
@@ -1466,7 +1474,7 @@ registerForEvent('onUpdate', function(dt)
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
                  hp = hp, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
                  lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
-                 enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, seqEnd = seq }
+                 enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, ftLoading = ftLoading, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)
     if ok and data then
@@ -2288,7 +2296,11 @@ local function handleCommand(player, cmd)
             local bb = Game.GetBlackboardSystem():Get(bbd)
             bb:SetVariant(bbd.StartingPoint, ToVariant(TweakDBID.new('')))   -- sinon refus si on repart du dernier point d arrivee
         end)
+        -- 16/09 19:xx : PerformFastTravel appelle uiSystem.NotifyFastTravelStart() (fondu au noir / ecran de chargement gere
+        -- par la carte du jeu) ; sans cette carte ouverte l ecran est reste NOIR apres le voyage. On teleporte donc
+        -- directement au noeud de la borne (meme destination, pas de notification UI), le reste en repli.
         local tries = {
+            { 'TeleportToNode', function() Game.GetTeleportationFacility():TeleportToNode(player, p:GetMarkerRef()) end },
             { 'PerformFastTravel(player, p)', function() fts:PerformFastTravel(player, p) end },
             { 'PerformFastTravelRequest', function()
                 local req = PerformFastTravelRequest.new()
@@ -2296,7 +2308,6 @@ local function handleCommand(player, cmd)
                 req.player = player
                 fts:QueueRequest(req)
             end },
-            { 'TeleportToNode', function() Game.GetTeleportationFacility():TeleportToNode(player, p:GetMarkerRef()) end },
         }
         for _, t in ipairs(tries) do
             local okX, err = pcall(t[2])
