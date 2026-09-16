@@ -130,11 +130,23 @@ def _approach_machine(tx: float, ty: float, dist: float, log, stop) -> bool:
     return motion.approach_machine(tx, ty, dist, log, stop)
 
 
+MUTE_HOSTILES: dict = {}        # (x, y) arrondis -> instant ou un hostile a ete declare « sans reaction » (ignore 3 min)
+MUTE_S, MUTE_CLOSE_M = 180.0, 12.0
+
+
+def _muted(e: dict) -> bool:
+    """Hostile ignore : declare sans reaction il y a moins de 3 min ET pas au contact (a moins de 12 m on se bat,
+    sinon boucle « attaquer -> objectif -> trajet interrompu » 3 fois par seconde, vue le 16/09 20:34)."""
+    if (e.get('d') or 0.0) < MUTE_CLOSE_M:
+        return False
+    return time.perf_counter() - MUTE_HOSTILES.get((round(e['x']), round(e['y'])), -1e9) < MUTE_S
+
+
 def _threat_near(st: dict) -> bool:
-    """Interrompt un trajet : combat, ou hostile vivant a moins de ENGAGE_M."""
+    """Interrompt un trajet : combat, ou hostile vivant (non ignore) a moins de ENGAGE_M."""
     if st.get('combat'):
         return True
-    return any((not e.get('dead')) and (not e.get('police')) and e['d'] < ENGAGE_M
+    return any((not e.get('dead')) and (not e.get('police')) and e['d'] < ENGAGE_M and not _muted(e)
                and (e.get('z') is None or abs(e['z'] - st.get('z', e['z'])) < 3.5) for e in (st.get('enemies') or []))
 
 
@@ -183,7 +195,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_close_t = -999.0
     last_ft_t = -999.0
     last_overlevel_t = -999.0
-    mute_hostiles = {}
+    mute_hostiles = MUTE_HOSTILES
     last_ripper_t = -999.0
     money_start = None
     vendor_fail_streak = 0
@@ -720,7 +732,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 and (e.get('z') is None or abs(e['z'] - st.get('z', e['z'])) < 3.5)]
                     # hostiles « muets » : cibles qui n entrent jamais en combat (PNJ fuyards, tourelles hors portee...) ->
                     # ignorees 3 min apres un engagement sans combat, pour ne pas perdre 25 s a chaque fois
-                    hostiles = [e for e in hostiles if time.perf_counter() - mute_hostiles.get((round(e['x']), round(e['y'])), -1e9) > 180.0]
+                    hostiles = [e for e in hostiles if not _muted(e)]
                     if hostiles:
                         _log(f"V engage le combat : {len(hostiles)} hostile(s), le plus proche a {hostiles[0]['d']:.0f} m")
                         plan.note('a engage un combat')
