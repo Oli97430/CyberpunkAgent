@@ -2392,6 +2392,20 @@ local function handleCommand(player, cmd)
         if not okT then resp.reason = 'Teleport : ' .. tostring(err) end
         journal('OK   teleport : ' .. tostring(okT) .. (okT and '' or (' ' .. tostring(err))))
         return resp
+    elseif cmd.cmd == 'reload' then
+        -- ECRAN DE MORT : recharger la derniere sauvegarde comme le fait le menu de mort du jeu (deathMenu.script)
+        journal('RUN  reload')
+        local h = nil
+        pcall(function() h = Game.GetSystemRequestsHandler() end)
+        if h == nil then pcall(function() h = GetSystemRequestsHandler() end) end
+        if h == nil then resp.reason = 'SystemRequestsHandler indisponible'; journal('FAIL reload : ' .. resp.reason); return resp end
+        local has = nil
+        pcall(function() has = h:HasLastCheckpoint() end)
+        local okR, errR = pcall(function() h:LoadLastCheckpoint(true) end)
+        if not okR then pcall(function() h:LoadLastCheckpoint(false) end) end
+        resp.ok, resp.hasCheckpoint = true, has
+        journal('OK   reload : LoadLastCheckpoint (checkpoint=' .. tostring(has) .. ', err=' .. tostring(okR and '' or errR) .. ')')
+        return resp
     elseif cmd.cmd == 'vehicle_call' then
         -- APPEL D UN VEHICULE AU HASARD parmi ceux que V possede (VehicleSystem) : x = 0 hasard, 1 voiture, 2 moto.
         journal('RUN  vehicle_call ' .. tostring(cmd.x))

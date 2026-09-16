@@ -107,7 +107,13 @@ def _reload_last_save(log, stop=None) -> bool:
     if not _sleep(6.0, stop):
         return False
     for attempt in range(3):
-        kbm.act('ui_confirm', 0.1)
+        # d abord la commande du jeu (celle du menu de mort : LoadLastCheckpoint), la touche de validation en secours
+        rr = nav._wait(nav._send({'cmd': 'reload'}), timeout=5.0)
+        if rr and rr.get('ok'):
+            log('  rechargement demande au jeu (LoadLastCheckpoint)')
+        else:
+            log(f"  rechargement par la touche de validation ({(rr or {}).get('reason', 'mod muet')})")
+            kbm.act('ui_confirm', 0.1)
         t0 = time.perf_counter(); last_seq = None
         while time.perf_counter() - t0 < 60.0:
             if stop is not None and stop.is_set():
@@ -317,6 +323,20 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
 
                 # 0a4. MENU OUVERT sans raison (ecran de marchand, inventaire, carte laisses ouverts) : le monde continue
                 # mais la souris ne pilote plus la camera (« rotation initiale echouee » en boucle hier soir) -> Echap
+                # 0a3b. MORT (vie a 0) : AVANT les menus, car l ecran de mort leve menu=true (16/09 21:28 : 11 min fige)
+                hp_now = st.get('hp')
+                if hp_now is not None and hp_now <= 0.5:      # NB : `hp or 100` transformait 0 en 100 -> boucle de mort
+                    dead_since = dead_since or time.perf_counter()
+                    if time.perf_counter() - dead_since > 4.0:  # 4 s a 0 sur un etat vivant (pas un chargement)
+                        quests.mark_death(st['x'], st['y'])
+                        _log('V EST MORT : lieu memorise (objectifs a < 80 m evites) ; rechargement de la derniere sauvegarde')
+                        if _reload_last_save(_log, stop=stop):
+                            stats['morts'] = stats.get('morts', 0) + 1
+                            dead_since = None; plan.last_t = -99.0; alt_target = None; path_failures = 0
+                            time.sleep(3.0); continue
+                        _log('rechargement impossible : arret'); break
+                    time.sleep(0.3); continue
+                dead_since = None
                 if st.get('menu') and not (st.get('breach') or {}).get('state') == 1 and not (st.get('bd') or {}).get('active'):
                     if menu_t is None:
                         menu_t = time.perf_counter(); menu_esc = 0
@@ -326,6 +346,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         kbm.release_all(); kbm.tap('ESC', 0.09)
                         if st.get('scene'):
                             time.sleep(0.5); kbm.hold('S'); time.sleep(1.2); kbm.release('S')
+                    elif time.perf_counter() - menu_t > 30.0:
+                        # jamais de boucle muette : on le dit et on recommence une serie (menu de mort, chargement, carte...)
+                        _log(f"menu toujours ouvert 30 s apres 4 Echap (vie {st.get('hp')}, scene {st.get('scene')}) : nouvelle serie")
+                        menu_t = time.perf_counter(); menu_esc = 0
                     time.sleep(0.4); continue
                 menu_t = None
                 # 0a5. SCENE sans choix de dialogue depuis 25 s (assis a un stand, conversation muette) : on en sort
@@ -421,20 +445,6 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log('V est dans un vehicule et l objectif est proche : il descend')
                         driving.exit_vehicle(log=_log)
                     continue
-
-                hp_now = st.get('hp')
-                if hp_now is not None and hp_now <= 0.5:      # NB : `hp or 100` transformait 0 en 100 -> boucle de mort
-                    dead_since = dead_since or time.perf_counter()
-                    if time.perf_counter() - dead_since > 4.0:  # 4 s a 0 sur un etat vivant (pas un chargement)
-                        quests.mark_death(st['x'], st['y'])
-                        _log('V EST MORT : lieu memorise (objectifs a < 80 m evites) ; rechargement de la derniere sauvegarde')
-                        if _reload_last_save(_log, stop=stop):
-                            stats['morts'] = stats.get('morts', 0) + 1
-                            dead_since = None; plan.last_t = -99.0; alt_target = None; path_failures = 0
-                            time.sleep(3.0); continue
-                        _log('rechargement impossible : arret'); break
-                    time.sleep(0.3); continue
-                dead_since = None
 
                 q = st.get('quest') or {}
                 # FOCUS : la quete suivie (assignee par le joueur) passe avant tout le reste tant qu elle a un marqueur
