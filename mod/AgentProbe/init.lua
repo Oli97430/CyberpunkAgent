@@ -1341,7 +1341,7 @@ registerForEvent('onUpdate', function(dt)
         if not inCombat and slowScan then
             pcall(function()
                 local q = Game['TSQ_NPC;']()
-                q.maxDistance = 30.0
+                q.maxDistance = 45.0                       -- 45 m : voir les agressions autour de V (30 m ne suffisait pas)
                 q.filterObjectByDistance = true
                 pcall(function() q.testedSet = TargetingSet.Complete end)
                 local okN, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
@@ -1375,8 +1375,12 @@ registerForEvent('onUpdate', function(dt)
                             end
                         end
                     end
-                    table.sort(list, function(a, b) return a.d < b.d end)
-                    while #list > 5 do table.remove(list) end
+                    table.sort(list, function(a, b)
+                        local fa, fb = (a.aggressive or a.incombat) and 0 or 1, (b.aggressive or b.incombat) and 0 or 1
+                        if fa ~= fb then return fa < fb end          -- les combattants d abord (ils ne sortent pas de la liste)
+                        return a.d < b.d
+                    end)
+                    while #list > 8 do table.remove(list) end
                     if #list > 0 then npcs = list end
                     slowNpcs = npcs
                 end

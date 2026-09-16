@@ -4,6 +4,7 @@
 
 - Combat : les emplacements d arme a degainer sont relus APRES la reaffectation de l inventaire (V tapait « 2 » pour l arme a feu alors que le fusil venait de passer en 3 : 3 combats a 26 m avec une matraque, 0 coup, puis « combat sterile »).
 - Combat : plus d abandon apres 75 s sans resultat ; V charge d abord la cible (2 fois, sprint + sauts) avant de conclure.
+- Secours : V s implique dans toute agression a moins de 30 m (courage temeraire, sans consulter le modele, jusqu a 5 agresseurs), les trajets sont interrompus pour y aller, les agresseurs (gang / agressifs) sont frappes avant la victime, tour d horizon de 8 s a l arrivee ; export des PNJ a 45 m (8 max, combattants d abord).
 - Combat : passes de sprint de biais au contact et entre deux tirs (perk +60 % de regeneration en sprint), sprint des 4,5 m a l approche ; option « sprint » du panneau.
 - Combat : quickhacks aussi en mode arme a feu (toutes les 4 s, cibles alternees) et 2-3 hacks d ouverture avant le contact.
 - Scene sans dialogue : plus d Echap / recul / saut quand V se deplace ou se bat (15 min de boucle pendant une chasse au cyberpsycho) ; delai double a chaque echec.

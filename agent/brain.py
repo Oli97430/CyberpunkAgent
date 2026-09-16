@@ -131,6 +131,8 @@ def _approach_machine(tx: float, ty: float, dist: float, log, stop) -> bool:
 
 
 MUTE_HOSTILES: dict = {}        # (x, y) arrondis -> instant ou un hostile a ete declare « sans reaction » (ignore 3 min)
+RESCUED: dict = {}              # zone d agression (x/15, y/15) -> heure du dernier secours (pas de retour pendant 5 min)
+RESCUE_INTERRUPT_M = 30.0       # une agression a moins de 30 m interrompt le trajet en cours : V s implique
 MUTE_S, MUTE_CLOSE_M = 180.0, 12.0
 
 
@@ -142,12 +144,24 @@ def _muted(e: dict) -> bool:
     return time.perf_counter() - MUTE_HOSTILES.get((round(e['x']), round(e['y'])), -1e9) < MUTE_S
 
 
+def _rescue_pending(st: dict, max_d: float = RESCUE_INTERRUPT_M) -> bool:
+    """Une agression (PNJ agressif / en combat, hors police) a moins de max_d, pas encore traitee."""
+    if not CFG.features.get('rescue', True):
+        return False
+    for a in planner.aggressors(st):
+        if (a.get('d') or 99.0) < max_d and time.perf_counter() - RESCUED.get((round(a['x'] / 15), round(a['y'] / 15)), -9999.0) > 300.0:
+            return True
+    return False
+
+
 def _threat_near(st: dict) -> bool:
-    """Interrompt un trajet : combat, ou hostile vivant (non ignore) a moins de ENGAGE_M."""
+    """Interrompt un trajet : combat, hostile vivant (non ignore) a moins de ENGAGE_M, ou agression proche a secourir."""
     if st.get('combat'):
         return True
-    return any((not e.get('dead')) and (not e.get('police')) and e['d'] < ENGAGE_M and not _muted(e)
-               and (e.get('z') is None or abs(e['z'] - st.get('z', e['z'])) < 3.5) for e in (st.get('enemies') or []))
+    if any((not e.get('dead')) and (not e.get('police')) and e['d'] < ENGAGE_M and not _muted(e)
+           and (e.get('z') is None or abs(e['z'] - st.get('z', e['z'])) < 3.5) for e in (st.get('enemies') or [])):
+        return True
+    return _rescue_pending(st)
 
 
 def _dist_to_mappin(st: dict) -> float | None:
@@ -204,7 +218,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     alt_target = None               # marqueur de quete choisi par V (x, y, texte, t0) quand l objectif suivi est bloque
     approached: dict = {}           # (nom, zone) -> heure : PNJ deja abordes (pas de harcelement pendant 5 min)
     looted: set = set()             # objets/conteneurs deja traites (position arrondie)
-    rescued: dict = {}              # zone d agression -> heure (pas de retour sur la meme agression pendant 5 min)
+    rescued: dict = RESCUED         # zone d agression -> heure (pas de retour sur la meme agression pendant 5 min)
     def _was_rescued(aggr, crimes):
         pts = [(a['x'], a['y']) for a in aggr] + [(c['x'], c['y']) for c in crimes]
         if not pts:
@@ -644,6 +658,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                      timeout=60.0, stop=stop, log=_log, interrupt=_threat_near)
                         s2 = motion.read_state() or st
                         aggr2 = planner.aggressors(s2)
+                        t_look = time.perf_counter()
+                        while not aggr2 and time.perf_counter() - t_look < 8.0 and not (stop is not None and stop.is_set()):
+                            # personne en vue : tour d horizon (l export ne liste que les PNJ cibles) et on attend un peu
+                            motion.turn_by(90.0, timeout=1.2, stop=stop); time.sleep(0.6)
+                            s2 = motion.read_state() or s2
+                            aggr2 = planner.aggressors(s2)
                         if aggr2:
                             a = aggr2[0]
                             combat.engage({'x': a['x'], 'y': a['y'], 'd': a['d'], 'sy': a.get('sy')}, stop=stop, log=_log, rescue=True)
@@ -654,7 +674,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 lr = combat.loot_around(stop=stop, log=_log, seen=looted)
                                 stats['loot'] = stats.get('loot', 0) + lr.get('ramasses', 0)
                         else:
-                            _log('  agression terminee ou hors de vue a l arrivee')
+                            _log('  agression terminee ou hors de vue a l arrivee (8 s de tour d horizon)')
                         plan.last_t = -99.0
                         continue
                     action = 'objectif'

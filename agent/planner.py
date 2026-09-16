@@ -27,12 +27,21 @@ ACTIONS = ('objectif', 'parler', 'aborder', 'attaquer', 'secourir', 'eviter', 'c
 POLICE_AFF = ('ncpd', 'maxtac', 'police')
 
 
+GANG_AFF = ('maelstrom', 'tyger', 'valentino', 'sixth', 'animals', 'voodoo', 'scav', 'wraith', 'barghest', 'arasaka', 'militech', 'kang')
+
+
 def aggressors(st: dict) -> list:
-    """PNJ qui attaquent quelqu un (agressifs ou en combat) sans etre hostiles a V, hors police."""
+    """PNJ qui attaquent quelqu un (agressifs ou en combat) sans etre hostiles a V, hors police.
+    Les AGRESSEURS d abord (gang, IsAggressive), la victime (civil en combat) en dernier : c est eux que V frappe."""
     out = []
     for n in (st.get('npcs') or []):
         if (n.get('aggressive') or n.get('incombat')) and not any(p in (n.get('aff') or '').lower() for p in POLICE_AFF):
             out.append(n)
+    def rank(n):
+        aff = (n.get('aff') or '').lower()
+        gang = any(g in aff for g in GANG_AFF)
+        return (0 if (n.get('aggressive') or gang) else 1, n.get('d') or 99.0)
+    out.sort(key=rank)
     return out
 
 # PNJ qu on n aborde pas : passants generiques et forces de l ordre
@@ -143,6 +152,9 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
         spots = [(a['x'], a['y']) for a in aggr] + [(c['x'], c['y']) for c in crimes if c.get('x') is not None]
         if any(_q.near_danger(x, y) for x, y in spots):
             return 'objectif', 'regle : agression dans une zone deja jugee trop dangereuse -> on passe'
+        if _C.courage == 'temeraire' and (n_aggr <= 5 or hp >= 90):
+            # V s implique TOUJOURS dans une agression proche (demande du 16/09) : pas de consultation du modele
+            return 'secourir', f"regle : agression a {near:.0f} m ({n_aggr} agresseur(s)) -> V s implique"
         if (n_aggr <= 3 and hp >= T_RESCUE_HP) or (n_aggr <= 5 and hp >= 90):   # sauvetage selon le courage ; les renforts arrivent souvent
             return _decide_rescue(st, extra, n_aggr, near, timeout)
     if extra.get('dist_m') is None or (extra['dist_m'] > 3000 and not _C.focus_tracked):
