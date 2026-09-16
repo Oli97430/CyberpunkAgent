@@ -111,6 +111,7 @@ def manage(log=print) -> dict:
     # On n equipe que si l emplacement ne contient pas deja cet objet (9 re-equipements par session sinon :
     # les 3 melee et l arme a feu se chassaient l une l autre).
     in_slot = {int(sl.get('slot') or 0): str(sl.get('name') or '') for sl in (inv.get('slots') or [])}
+    final = dict(in_slot)                      # contenu REEL des emplacements apres reaffectation
     wanted = {}
     for slot, it in enumerate(melee[:2]):
         wanted[slot] = it
@@ -120,13 +121,27 @@ def manage(log=print) -> dict:
         if in_slot.get(slot + 1) == str(it.get('name')):
             continue
         if equip(it['i'], slot):
-            equipped += 1
+            equipped += 1; final[slot + 1] = str(it.get('name'))
             kind = 'arme a feu' if slot == 2 else 'melee'
             log(f"  [inventaire] {kind} « {it.get('name')} » ({it.get('type')}, dps {it.get('dps', 0):.0f}) -> emplacement {slot + 1}")
             time.sleep(0.3)
     from . import combat
-    if ranged and combat.RANGED_SLOT is None:
+    # emplacements a degainer = ceux d APRES la reaffectation (16/09 : le combat tapait « 2 » pour l arme a feu
+    # alors que le fusil venait de passer en 3 et le Mocassin en 2 -> V restait a 26 m avec une matraque, 0 coup)
+    m_by_name = {str(it.get('name')): it for it in melee}
+    r_by_name = {str(it.get('name')): it for it in ranged}
+    m_final = [(s, m_by_name[n]) for s, n in final.items() if n in m_by_name]
+    r_final = [(s, r_by_name[n]) for s, n in final.items() if n in r_by_name]
+    if m_final:
+        combat.MELEE_SLOT = str(max(m_final, key=lambda p: melee_score(p[1]))[0])
+    if r_final:
+        combat.RANGED_SLOT = str(max(r_final, key=lambda p: p[1].get('dps') or 0)[0])
+    elif combat.RANGED_SLOT is not None and final.get(int(combat.RANGED_SLOT)) in m_by_name:
+        combat.RANGED_SLOT = None                 # l ancien emplacement « distance » tient maintenant une melee
+    if ranged and combat.RANGED_SLOT is None and final.get(3) not in m_by_name:
         combat.RANGED_SLOT = '3'
+    if equipped:
+        log(f"  [inventaire] apres reaffectation : melee au {combat.MELEE_SLOT}" + (f", distance au {combat.RANGED_SLOT}" if combat.RANGED_SLOT else ', pas d arme a feu'))
     top_idx ={it['i'] for it in melee[:2]} | ({ranged[0]['i']} if ranged else set())
 
     # 1b. vetements : dans chaque emplacement (tete, visage, torse int/ext, jambes, pieds), le meilleur

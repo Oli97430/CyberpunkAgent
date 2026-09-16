@@ -178,6 +178,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     breach_t = None
     bd_t = None
     menu_t, menu_esc, scene_t = None, 0, None
+    scene_pos, scene_wait = None, 25.0
     shop_back_t = -999.0
     last_close_t = -999.0
     last_ft_t = -999.0
@@ -303,11 +304,16 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 menu_t = None
                 # 0a5. SCENE sans choix de dialogue depuis 25 s (assis a un stand, conversation muette) : on en sort
                 if st.get('scene') and not (st.get('dialog') or {}).get('choices') and not (st.get('bd') or {}).get('active'):
-                    if scene_t is None:
-                        scene_t = time.perf_counter()
-                    elif time.perf_counter() - scene_t > 25.0:
-                        scene_t = time.perf_counter() - 10.0
-                        _log('scene sans dialogue depuis 25 s : V s en extrait (Echap, recul, saut)')
+                    _hostile_near = bool(st.get('combat')) or any(not e.get('dead') and (e.get('d') or 99) < 30.0 for e in (st.get('enemies') or []))
+                    _moved = scene_pos is not None and st.get('x') is not None and math.hypot(st['x'] - scene_pos[0], st['y'] - scene_pos[1]) > 3.0
+                    if scene_t is None or _moved or _hostile_near:
+                        # V se deplace ou se bat : la « scene » ne le bloque pas (16/09 : chasse au cyberpsycho, 15 min
+                        # d Echap / recul / saut toutes les 30 s en plein combat) -> on ne touche a rien
+                        scene_t = time.perf_counter(); scene_pos = (st.get('x'), st.get('y'))
+                    elif time.perf_counter() - scene_t > scene_wait:
+                        scene_t = time.perf_counter(); scene_pos = (st.get('x'), st.get('y'))
+                        _log(f'scene sans dialogue depuis {scene_wait:.0f} s, V immobile : il s en extrait (Echap, recul, saut)')
+                        scene_wait = min(300.0, scene_wait * 2)     # si ca ne marche pas, on insiste de moins en moins
                         kbm.tap('ESC', 0.09); time.sleep(0.8)
                         s_e = motion.read_state() or {}
                         if s_e.get('menu'):
@@ -317,7 +323,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         stats['scenes_quittees'] = stats.get('scenes_quittees', 0) + 1
                         continue
                 else:
-                    scene_t = None
+                    scene_t, scene_pos, scene_wait = None, None, 25.0
 
                 # 0b. etat FIGE (pause, menu, carte, chargement) : le mod ne tourne plus -> on ne touche a rien
                 if st.get('seq') != frozen_seq:

@@ -34,7 +34,8 @@ local pollCommands
 local CMD_PERIOD = 0.25
 local cmdAcc, lastCmdSeq = 0.0, -1      -- AVANT onInit (sinon globale nil -> derniere commande rejouee au demarrage)
 local lastStateErr = nil                 -- derniere erreur du tick d etat (journalisee une fois)
-local slowT, slowLoot, slowVehicles, slowNpcs, slowTraffic = -99.0, nil, nil, nil, 0   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
+local slowT, slowLoot, slowVehicles, slowNpcs, slowTraffic = -99.0, nil, nil, nil, 0
+local vehCallT = -999.0                       -- os.clock() du dernier vehicle_call : export des vehicules de V a 400 m pendant 45 s   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
 local breachCtrl = nil                   -- HackingMinigameGameController capture a l ouverture du Breach Protocol
@@ -1277,7 +1278,7 @@ registerForEvent('onUpdate', function(dt)
         if not inCombat and slowScan then
             pcall(function()
                 local qv = Game['TSQ_ALL;']()
-                qv.maxDistance = 150.0
+                qv.maxDistance = (os.clock() - vehCallT < 45.0) and 400.0 or 150.0   -- apres un appel, sa moto peut arriver de loin
                 qv.filterObjectByDistance = true
                 pcall(function() qv.testedSet = TargetingSet.Complete end)
                 local okV, partsV = Game.GetTargetingSystem():GetTargetParts(player, qv)
@@ -2418,7 +2419,20 @@ local function handleCommand(player, cmd)
         pcall(function() cooldown = vs:IsActivePlayerVehicleOnCooldown(typeEnum) end)
         local restricted = nil
         pcall(function() restricted = VehicleSystem.IsSummoningVehiclesRestricted(GetGameInstance()) end)
-        if pcall(function() vs:TogglePlayerActiveVehicle(pick.v, typeEnum, true) end) then did[#did + 1] = 'TogglePlayerActiveVehicle' end
+        -- identifiant garage (le script du jeu passe recordID par cast implicite ; en Lua on construit / resout)
+        local gid = nil
+        pcall(function() gid = GarageVehicleID.Resolve(TDBID.ToStringDEBUG(pick.v.recordID)) end)
+        if gid == nil then pcall(function() gid = GarageVehicleID.new({ recordID = pick.v.recordID }) end) end
+        local toggled = false
+        if gid ~= nil then toggled = pcall(function() vs:TogglePlayerActiveVehicle(gid, typeEnum, true) end) end
+        if not toggled then toggled = pcall(function() vs:TogglePlayerActiveVehicle(pick.v.recordID, typeEnum, true) end) end
+        if not toggled then toggled = pcall(function() vs:TogglePlayerActiveVehicle(pick.v, typeEnum, true) end) end
+        if toggled then did[#did + 1] = 'TogglePlayerActiveVehicle' end
+        -- l exemplaire deja dans le monde (appel precedent, abandonne loin) empeche un nouveau spawn : on le retire
+        if gid ~= nil and pcall(function() vs:DespawnPlayerVehicle(gid) end) then did[#did + 1] = 'Despawn' end
+        pcall(function() resp.restrictions = vs:GetVehicleRestrictions() end)
+        pcall(function() resp.vcooldown = vs:IsPlayerVehicleOnCooldown(typeEnum, pick.v.recordID) end)
+        vehCallT = os.clock()
         local spawned = false
         local okS, rS = pcall(function() return vs:SpawnPlayerVehicle(typeEnum, pick.v.recordID, true) end)   -- sur une VOIE valide d abord
         if okS then did[#did + 1] = 'SpawnPlayerVehicle(route)=' .. tostring(rS); spawned = (rS == true) end

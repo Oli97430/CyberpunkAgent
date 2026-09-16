@@ -86,7 +86,7 @@ def summon_and_board(stop=None, log=print) -> bool:
     # on ira le rejoindre par le maillage
     car = None
     t0 = time.perf_counter()
-    while time.perf_counter() - t0 < 30.0:
+    while time.perf_counter() - t0 < 40.0:
         if stop is not None and stop.is_set():
             return False
         s2 = motion.read_state() or {}
@@ -97,7 +97,7 @@ def summon_and_board(stop=None, log=print) -> bool:
         # (pas de repli sur une voiture garee d un inconnu : il faudrait la forcer, et c est long)
         time.sleep(0.5)
     if not car:
-        log('  [conduite] aucun vehicule du joueur arrive en 30 s (zone sans route proche ?)'); return False
+        log(f"  [conduite] aucun vehicule du joueur arrive en 40 s (methodes {(rv or {}).get('methodes')}, restrictions {(rv or {}).get('restrictions')}, cooldown {(rv or {}).get('vcooldown')})"); return False
     log(f"  [conduite] vehicule « {car.get('name', '?')} » a {car['d']:.0f} m")
     t_stop = time.perf_counter()
     while time.perf_counter() - t_stop < 8.0 and (car.get('speed') or 0) > 0.5:      # il finit sa manoeuvre : on ne court pas apres

@@ -31,7 +31,7 @@ RANGED_MIN_M, RANGED_MAX_M = 12.0, 45.0   # on passe a l arme a feu au-dela de 1
 RANGED_BACK_M = 7.0                       # au corps a corps sous 7 m : au CAC, c est le katana (Olivier, 13/09)
 CYBERWARE_CD = 18.0                       # touche : kbm.K('iconic') (F chez ce joueur)
 # quick melee : kbm.K('quickmelee') (~ chez ce joueur)
-QUICKHACK_CD = 5.0
+QUICKHACK_CD = 4.0
 KNIFE_CD = 4.0
 HACK_ROTATION = (0, 1, 2)     # on alterne les 3 premiers hacks du panneau (le meilleur n est pas forcement le 1er)
 DODGE_CD, STRAFE_CD, JUMP_ATTACK_CD, SLIDE_CD = 1.4, 1.6, 6.0, 8.0   # esquive/dash toutes les 1,4 s max (Olivier : « plus d esquives »)
@@ -228,6 +228,7 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
     crouched = False
     last_pos = {'x': target.get('x'), 'y': target.get('y')}
     struck = 0
+    hacks_done, t_hack0 = 0, -99.0
     if stealth:
         kbm.act('crouch', 0.1); crouched = True; time.sleep(0.3)
         log('  [combat] approche en discretion (accroupi)')
@@ -274,8 +275,16 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
             if stealth is False and _C3.features.get('stealth', True) and not rescue and not crouched and e['d'] <= STEALTH_MAX_M and d_init > STEALTH_MAX_M and not st.get('swim'):
                 kbm.act_release('sprint'); kbm.act('crouch', 0.1); crouched = True; stealth = True; time.sleep(0.2)
                 log('  [combat] a portee : approche en discretion (accroupi)')
-            if not hacked and e['d'] > 6.0 and gap < 8 and time.perf_counter() - t0 > 1.0:
-                quickhack_first(); hacked = True; seq = None; continue
+            # HACKS D OUVERTURE : avant le contact, V pirate a distance jusqu a 3 hostiles differents (RAM permettant)
+            if hacks_done < 3 and e['d'] > 6.0 and gap < 8 and time.perf_counter() - t0 > 1.0 and time.perf_counter() - t_hack0 > 2.5:
+                vis = [x for x in (alive if len(alive) > 1 else [e])]
+                tgt = vis[hacks_done % len(vis)]
+                if tgt is not e:
+                    aim_at(tgt, st)
+                title = quickhack_best(log=log)
+                hacks_done += 1; hacked = True; t_hack0 = time.perf_counter(); seq = None
+                log(f"  [combat] hack d ouverture « {title or 'par defaut'} » sur cible a {tgt['d']:.0f} m ({hacks_done}/3)")
+                continue
             # DECLENCHER le combat : a distance, quelques tirs alignes (style mixte / distance) ; au contact, un coup
             if RANGED_SLOT and _C3.style != 'melee' and 5.0 < e['d'] < RANGED_MAX_M and gap < 6 and struck < 3 and time.perf_counter() - t0 > 1.0:
                 kbm.release('W'); kbm.act_release('sprint')
@@ -317,6 +326,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     flee_until, last_flee_end = 0.0, -999.0
     t_buff = -999.0
     sterile_sig, sterile_t = None, time.perf_counter()
+    sterile_charges = 0
     last_retreat_end = -99.0
     no_target_logged = False
     police_logged = False
@@ -359,8 +369,27 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             sig = (len(alive), hp >= 90)
             if sig != sterile_sig:
                 sterile_sig, sterile_t = sig, now
+            elif hp >= 90 and alive and sterile_charges < 2 and now - sterile_t > 40.0:
+                # rien ne bouge depuis 40 s : la cible est hors de portee (distance, etage, vitre). V n est pas un
+                # couard : il CHARGE (sprint droit dessus, saut sur les obstacles) avant de conclure quoi que ce soit
+                sterile_charges += 1; sterile_t = now
+                log(f"  [combat] combat sterile depuis 40 s : V charge la cible a {alive[0]['d']:.0f} m ({sterile_charges}/2)")
+                if mode == 'ranged':
+                    kbm.tap(MELEE_SLOT, 0.08); mode = 'melee'; time.sleep(0.3)
+                t_ch, t_j = time.perf_counter(), -99.0
+                while time.perf_counter() - t_ch < 8.0 and not (stop is not None and stop.is_set()):
+                    s_ch = motion.read_state() or st
+                    a_ch = _alive(s_ch.get('enemies'))
+                    if not a_ch or a_ch[0]['d'] < MELEE_RANGE or float(s_ch.get('hp') or 100) < 60:
+                        break
+                    aim_at(a_ch[0], s_ch); kbm.hold('W'); kbm.act_hold('sprint')
+                    if time.perf_counter() - t_j > 2.0:
+                        kbm.act('jump', 0.1); t_j = time.perf_counter()
+                    time.sleep(0.15)
+                kbm.release('W'); kbm.act_release('sprint')
+                seq = None; continue
             elif hp >= 90 and now - sterile_t > 75.0:
-                log(f'  [combat] combat sterile : {len(alive)} hostile(s) intouchable(s) depuis 75 s -> on laisse tomber')
+                log(f'  [combat] combat sterile : {len(alive)} hostile(s) intouchable(s) depuis 75 s malgre {sterile_charges} charge(s) -> on laisse tomber')
                 stats['sterile'] = True; break
             if not alive:
                 kbm.release('W'); kbm.act_release('sprint')
@@ -479,6 +508,16 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                     kbm.tap(RANGED_SLOT, 0.08); t_wsync = now; log(f'  [combat] arme tenue {wt} : on degaine l arme a feu (emplacement {RANGED_SLOT})')
             if mode == 'ranged':
                 kbm.release('W'); kbm.act_release('sprint')
+                # hacks A DISTANCE entre deux rafales : cible alternee (hack_i) pour ne pas empiler sur le meme
+                if e['d'] > 3.0 and now - t_hack > QUICKHACK_CD:
+                    tgt = alive[hack_i % len(alive)]; hack_i += 1
+                    if tgt is not e:
+                        aim_at(tgt, st)
+                    title = quickhack_best(log=log); t_hack = now; stats['quickhacks'] += 1
+                    if title and str(title).startswith('userdata'):
+                        title = None
+                    log(f"  [combat] quickhack « {title or 'par defaut'} » (a distance) sur cible a {tgt['d']:.0f} m")
+                    seq = None; continue
                 if gap < 4:
                     kbm.mouse('right', True); time.sleep(0.15)          # viser
                     kbm.mouse_tap('left', 0.12); shots += 1; stats['tirs'] = stats.get('tirs', 0) + 1
@@ -491,6 +530,9 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
 
             # -- quickhack a distance
             if e['d'] > 3.0 and gap < 8 and now - t_hack > QUICKHACK_CD:
+                tgt = alive[hack_i % len(alive)]; hack_i += 1
+                if tgt is not e and tgt['d'] > 3.0:
+                    aim_at(tgt, st); e = tgt
                 title = quickhack_best(log=log); t_hack = now; stats['quickhacks'] += 1
                 if title and str(title).startswith('userdata'):
                     title = None

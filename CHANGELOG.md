@@ -2,6 +2,11 @@
 
 ## 0.1.1 — 2026-09-15 — revue de code, Breach Protocol, danse sensorielle
 
+- Combat : les emplacements d arme a degainer sont relus APRES la reaffectation de l inventaire (V tapait « 2 » pour l arme a feu alors que le fusil venait de passer en 3 : 3 combats a 26 m avec une matraque, 0 coup, puis « combat sterile »).
+- Combat : plus d abandon apres 75 s sans resultat ; V charge d abord la cible (2 fois, sprint + sauts) avant de conclure.
+- Combat : quickhacks aussi en mode arme a feu (toutes les 4 s, cibles alternees) et 2-3 hacks d ouverture avant le contact.
+- Scene sans dialogue : plus d Echap / recul / saut quand V se deplace ou se bat (15 min de boucle pendant une chasse au cyberpsycho) ; delai double a chaque echec.
+- Vehicule : l exemplaire precedent est retire avant le rappel (le 2e appel echouait et la moto « venait » de trop loin) ; export des vehicules de V a 400 m pendant 45 s apres un appel ; attente 40 s.
 - **Breach Protocol** : résolveur intégré (lecture de la grille et des séquences dans l'interface du mini-jeu, combinaison des daemons, clics souris) ; le mod continue de répondre pendant la pause du jeu. À valider en jeu.
 - **Danse sensorielle** : V prend l'éditeur en main (indices de la timeline, couches, saut dans la timeline par script, analyse des indices, sortie). À valider en jeu.
 - **Sortie d'îlot** : voyage rapide par le système du jeu (utilisable sans borne), tentative de sortie même pour une cible lointaine ; appel de véhicule : résultat du spawn et cooldown lus.
