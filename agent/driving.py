@@ -50,6 +50,23 @@ def summon_and_board(stop=None, log=print) -> bool:
     import random
     from . import nav
     want = random.choice((0, 1, 2))                      # 0 = n importe lequel, 1 = voiture, 2 = moto
+    # VOIE LIBRE : on n appelle pas le vehicule au milieu de la circulation (il arrive sur la route la plus proche et
+    # se fait bloquer / percuter) : on attend que plus aucun vehicule d inconnu ne roule a moins de 30 m (12 s max),
+    # et si ca ne se calme pas, V s ecarte de quelques metres avant d appeler
+    t_wait = time.perf_counter(); waited = False
+    while time.perf_counter() - t_wait < 12.0:
+        if stop is not None and stop.is_set():
+            return False
+        s_t = motion.read_state() or {}
+        if int(s_t.get('traffic') or 0) == 0:
+            break
+        if not waited:
+            waited = True; log(f"  [conduite] circulation ({s_t.get('traffic')} vehicule(s) en mouvement a < 30 m) : on attend une voie libre")
+        time.sleep(0.5)
+    else:
+        log('  [conduite] circulation persistante : V s ecarte de la voie avant d appeler')
+        motion.turn_by(90.0, timeout=1.5, stop=stop)
+        kbm.hold('W'); time.sleep(1.6); kbm.release('W')
     rv = nav._wait(nav._send({'cmd': 'vehicle_call', 'x': want}), timeout=5.0)
     if rv and rv.get('ok') and rv.get('spawned', True):
         log(f"  [conduite] V appelle « {rv.get('name')} » ({rv.get('vtype')}) parmi ses {rv.get('total')} vehicules")
@@ -82,6 +99,11 @@ def summon_and_board(stop=None, log=print) -> bool:
     if not car:
         log('  [conduite] aucun vehicule du joueur arrive en 30 s (zone sans route proche ?)'); return False
     log(f"  [conduite] vehicule « {car.get('name', '?')} » a {car['d']:.0f} m")
+    t_stop = time.perf_counter()
+    while time.perf_counter() - t_stop < 8.0 and (car.get('speed') or 0) > 0.5:      # il finit sa manoeuvre : on ne court pas apres
+        time.sleep(0.4)
+        s_c = motion.read_state() or {}
+        car = next((v for v in (s_c.get('vehicles') or []) if v.get('player')), car)
     if car['d'] > 2.5:                                    # deja a portee sinon (les poses gerent 1-2 m)
         # le vehicule arrive sur la ROUTE la plus proche : V y va par le maillage (nav.goto), puis tout droit
         from . import nav

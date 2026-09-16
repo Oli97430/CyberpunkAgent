@@ -34,7 +34,7 @@ local pollCommands
 local CMD_PERIOD = 0.25
 local cmdAcc, lastCmdSeq = 0.0, -1      -- AVANT onInit (sinon globale nil -> derniere commande rejouee au demarrage)
 local lastStateErr = nil                 -- derniere erreur du tick d etat (journalisee une fois)
-local slowT, slowLoot, slowVehicles, slowNpcs = -99.0, nil, nil, nil   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
+local slowT, slowLoot, slowVehicles, slowNpcs, slowTraffic = -99.0, nil, nil, nil, 0   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
 local breachCtrl = nil                   -- HackingMinigameGameController capture a l ouverture du Breach Protocol
@@ -1273,6 +1273,7 @@ registerForEvent('onUpdate', function(dt)
         end)
         -- VEHICULES proches (< 25 m) : pour monter dans la voiture appelee
         local vehicles = nil
+        local traffic = 0                                   -- vehicules d inconnus EN MOUVEMENT a < 30 m (voie occupee)
         if not inCombat and slowScan then
             pcall(function()
                 local qv = Game['TSQ_ALL;']()
@@ -1296,6 +1297,8 @@ registerForEvent('onUpdate', function(dt)
                                     local rec = { x = vp.x, y = vp.y, z = vp.z, d = math.sqrt((vp.x - pos.x) ^ 2 + (vp.y - pos.y) ^ 2) }
                                     pcall(function() rec.name = GetLocalizedText(tostring(ent:GetDisplayName())) end)
                                     pcall(function() rec.player = ent:IsPlayerVehicle() end)
+                                    pcall(function() rec.speed = math.floor(math.abs(ent:GetCurrentSpeed()) * 10 + 0.5) / 10 end)
+                                    if not rec.player and rec.d <= 30.0 and (rec.speed or 0) > 1.0 then traffic = traffic + 1 end
                                     if rec.player or rec.d <= 25.0 then list[#list + 1] = rec end   -- les voitures des inconnus : 25 m ; la sienne : 150 m
                                 end
                             end
@@ -1305,6 +1308,7 @@ registerForEvent('onUpdate', function(dt)
                     while #list > 4 do table.remove(list) end
                     if #list > 0 then vehicles = list end
                     slowVehicles = vehicles
+                    slowTraffic = traffic
                 end
             end)
         end
@@ -1419,7 +1423,7 @@ registerForEvent('onUpdate', function(dt)
                 end
             end)
         end
-        if not inCombat and not slowScan then loot, vehicles, npcs = slowLoot, slowVehicles, slowNpcs end
+        if not inCombat and not slowScan then loot, vehicles, npcs, traffic = slowLoot, slowVehicles, slowNpcs, slowTraffic or 0 end
         if inCombat then slowLoot, slowVehicles, slowNpcs = nil, nil, nil end
         -- CORPS : les requetes de ciblage excluent souvent les morts. On memorise la derniere
         -- position de chaque ennemi vu (cle = position arrondie) ; quand il n est plus
@@ -1461,7 +1465,7 @@ registerForEvent('onUpdate', function(dt)
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
                  hp = hp, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
-                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
+                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
                  enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)
@@ -2405,8 +2409,12 @@ local function handleCommand(player, cmd)
         pcall(function() restricted = VehicleSystem.IsSummoningVehiclesRestricted(GetGameInstance()) end)
         if pcall(function() vs:TogglePlayerActiveVehicle(pick.v, typeEnum, true) end) then did[#did + 1] = 'TogglePlayerActiveVehicle' end
         local spawned = false
-        local okS, rS = pcall(function() return vs:SpawnPlayerVehicle(typeEnum, pick.v.recordID, false) end)
-        if okS then did[#did + 1] = 'SpawnPlayerVehicle=' .. tostring(rS); spawned = (rS == true) end
+        local okS, rS = pcall(function() return vs:SpawnPlayerVehicle(typeEnum, pick.v.recordID, true) end)   -- sur une VOIE valide d abord
+        if okS then did[#did + 1] = 'SpawnPlayerVehicle(route)=' .. tostring(rS); spawned = (rS == true) end
+        if not spawned then
+            local okS2, rS2 = pcall(function() return vs:SpawnPlayerVehicle(typeEnum, pick.v.recordID, false) end)
+            if okS2 then did[#did + 1] = 'SpawnPlayerVehicle=' .. tostring(rS2); spawned = (rS2 == true) end
+        end
         if not spawned then
             local okA, rA = pcall(function() return vs:SpawnActivePlayerVehicle(typeEnum) end)
             if okA then did[#did + 1] = 'SpawnActivePlayerVehicle=' .. tostring(rA); spawned = spawned or (rA == true) end
