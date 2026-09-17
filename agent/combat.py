@@ -197,6 +197,42 @@ def centroid(enemies) -> tuple[float, float]:
     return (sum(e['x'] for e in enemies) / len(enemies), sum(e['y'] for e in enemies) / len(enemies))
 
 
+LAST_CALIB = {'t': -1e9, 'map': {}, 'sig': None}
+
+
+def calibrate_slots(log=print, listing_sig=None, force: bool = False) -> dict:
+    """VERITE DES TOUCHES : appuie sur 1, 2, 3 (hors combat) et lit le type d arme reellement en main apres chacune.
+    Le listing des emplacements du mod ne correspond pas aux touches (17/09 : la touche 3 sortait le fusil que le
+    listing placait en 2). Fixe MELEE_SLOT / RANGED_SLOT. Au plus toutes les 10 min, ou si le listing change."""
+    global MELEE_SLOT, RANGED_SLOT
+    from .inventory import MELEE_TYPES as _MT
+    now = time.perf_counter()
+    if not force and now - LAST_CALIB['t'] < 600.0 and (listing_sig is None or listing_sig == LAST_CALIB['sig']):
+        return LAST_CALIB['map']
+    st0 = motion.read_state() or {}
+    if st0.get('combat') or st0.get('menu') or st0.get('vehicle') or st0.get('scene') or st0.get('swim') or (st0.get('hp') or 100) <= 0.5:
+        return LAST_CALIB['map']
+    found = {}
+    for k in ('1', '2', '3'):
+        kbm.tap(k, 0.1); time.sleep(0.7)
+        wt = (motion.read_state() or {}).get('weapon') or ''
+        if wt in ('', 'Wea_Fists', 'None'):                 # la touche a RENGAINE (arme deja en main) : on la ressort
+            kbm.tap(k, 0.1); time.sleep(0.7)
+            wt = (motion.read_state() or {}).get('weapon') or ''
+        found[k] = wt
+    melee_keys = [k for k, wt in found.items() if wt in _MT and wt != 'Wea_Fists']
+    ranged_keys = [k for k, wt in found.items() if wt.startswith('Wea_') and wt not in _MT]
+    if melee_keys:
+        MELEE_SLOT = melee_keys[0]
+    RANGED_SLOT = ranged_keys[0] if ranged_keys else None
+    LAST_CALIB.update(t=now, map=found, sig=listing_sig)
+    log('  [armes] calibrage des touches : ' + ', '.join(f'{k}={wt or "rien"}' for k, wt in found.items())
+        + f' -> melee {MELEE_SLOT}, distance {RANGED_SLOT}')
+    if melee_keys and found.get(melee_keys[0]) != ((motion.read_state() or {}).get('weapon') or ''):
+        kbm.tap(MELEE_SLOT, 0.1); time.sleep(0.4)             # on repart la melee en main
+    return found
+
+
 def _ensure_weapon(slot, melee: bool) -> None:
     """Degaine l arme de l emplacement demande SEULEMENT si elle n est pas deja en main : la touche est une
     bascule, un appui de trop RENGAINE (engage() puis fight() appuyaient tous les deux). Poings = rien en main."""
@@ -396,7 +432,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             sig = (len(alive), hp >= 90)
             if sig != sterile_sig:
                 sterile_sig, sterile_t = sig, now
-            elif hp >= 90 and alive and sterile_charges < 2 and now - sterile_t > 40.0:
+            elif (hp >= 90 or stats['coups'] + stats.get('tirs', 0) == 0) and alive and sterile_charges < 2 and now - sterile_t > 40.0:
                 # rien ne bouge depuis 40 s : la cible est hors de portee (distance, etage, vitre). V n est pas un
                 # couard : il CHARGE (sprint droit dessus, saut sur les obstacles) avant de conclure quoi que ce soit
                 sterile_charges += 1; sterile_t = now
@@ -415,7 +451,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                     time.sleep(0.15)
                 kbm.release('W'); kbm.act_release('sprint')
                 seq = None; continue
-            elif hp >= 90 and now - sterile_t > 75.0:
+            elif (hp >= 90 or stats['coups'] + stats.get('tirs', 0) == 0) and now - sterile_t > 75.0:
                 log(f'  [combat] combat sterile : {len(alive)} hostile(s) intouchable(s) depuis 75 s malgre {sterile_charges} charge(s) -> on laisse tomber')
                 stats['sterile'] = True; break
             if not alive:

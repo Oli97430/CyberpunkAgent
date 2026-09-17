@@ -165,6 +165,11 @@ def manage(log=print) -> dict:
         combat.RANGED_SLOT = '3'
     if equipped:
         log(f"  [inventaire] apres reaffectation : melee au {combat.MELEE_SLOT}" + (f", distance au {combat.RANGED_SLOT}" if combat.RANGED_SLOT else ', pas d arme a feu'))
+    # verite des TOUCHES (le listing ne correspond pas aux touches 1/2/3) : calibrage empirique hors combat
+    try:
+        combat.calibrate_slots(log=log, listing_sig=tuple(sorted((k, v) for k, v in final.items())))
+    except Exception as e:
+        log(f'  [armes] calibrage impossible : {e}')
     top_idx ={it['i'] for it in melee[:2]} | ({ranged[0]['i']} if ranged else set())
 
     # 1b. vetements : dans chaque emplacement (tete, visage, torse int/ext, jambes, pieds), le meilleur
