@@ -37,91 +37,50 @@ def _dist(st, tx, ty):
     return math.hypot(st['x'] - tx, st['y'] - ty)
 
 
-def summon_and_board(stop=None, log=print) -> bool:
-    """Appelle le vehicule et monte dedans. True si V est en vehicule a la fin."""
-    st = motion.read_state()
-    if not st:
-        return False
-    if st.get('vehicle'):
+def _refresh(car: dict, vs: list) -> dict:
+    """Le meme vehicule dans un export plus recent (par position, a moins de 6 m), sinon l ancien."""
+    best = None
+    for v in vs:
+        dd = math.hypot((v.get('x') or 0) - car['x'], (v.get('y') or 0) - car['y'])
+        if dd < 6.0 and (best is None or dd < best[0]):
+            best = (dd, v)
+    return best[1] if best else car
+
+
+def _police_near(st: dict, max_d: float = 30.0) -> bool:
+    if any(e.get('police') and not e.get('dead') and (e.get('d') or 99) < max_d for e in (st.get('enemies') or [])):
         return True
-    if st.get('combat'):
-        # en combat le mod ne scanne pas les vehicules (export vide) et V a mieux a faire
-        log('  [conduite] en combat : pas d appel de vehicule'); return False
-    if not kbm.ACTIONS.get('callvehicle'):
-        log('  [conduite] pas de touche « appeler le vehicule »'); return False
-    # au hasard : une voiture ou une moto parmi celles de V (VehicleSystem) ; a defaut la touche d appel
-    import random
-    from . import nav
-    want = random.choice((0, 1, 2))                      # 0 = n importe lequel, 1 = voiture, 2 = moto
-    # VOIE LIBRE : on n appelle pas le vehicule au milieu de la circulation (il arrive sur la route la plus proche et
-    # se fait bloquer / percuter) : on attend que plus aucun vehicule d inconnu ne roule a moins de 30 m (12 s max),
-    # et si ca ne se calme pas, V s ecarte de quelques metres avant d appeler
-    t_wait = time.perf_counter(); waited = False
-    while time.perf_counter() - t_wait < 12.0:
-        if stop is not None and stop.is_set():
-            return False
-        s_t = motion.read_state() or {}
-        if int(s_t.get('traffic') or 0) == 0:
-            break
-        if not waited:
-            waited = True; log(f"  [conduite] circulation ({s_t.get('traffic')} vehicule(s) en mouvement a < 30 m) : on attend une voie libre")
-        time.sleep(0.5)
-    else:
-        log('  [conduite] circulation persistante : V s ecarte de la voie avant d appeler')
-        motion.turn_by(90.0, timeout=1.5, stop=stop)
-        kbm.hold('W'); time.sleep(1.6); kbm.release('W')
-    seq_v = nav._send({'cmd': 'vehicle_call', 'x': want})
-    rv = nav._wait(seq_v, timeout=5.0)
-    if rv is None:
-        # le mod ne repond pas en 5 s : souvent un menu / une scene qui suspend ses mises a jour ; il traitera l appel
-        # des la reprise (vu le 17/09 : « mod muet » puis spawn reel 20 s plus tard) -> on attend encore avant la touche
-        s_m = motion.read_state() or {}
-        log(f"  [conduite] le mod ne repond pas (menu={s_m.get('menu')}, scene={s_m.get('scene')}) : on lui laisse 8 s de plus")
-        rv = nav._wait(seq_v, timeout=8.0)
-    # NB : rv['restrictions'] est le CATALOGUE statique des tags (m_restrictionTags), pas les restrictions actives :
-    # seul rv['restricted'] (IsSummoningVehiclesRestricted) fait foi
-    if rv and rv.get('ok') and rv.get('restricted') is True:
-        log('  [conduite] appel de vehicule interdit ici par le jeu (IsSummoningVehiclesRestricted) : on n attend pas')
-        return False
-    if rv and rv.get('ok') and rv.get('existing'):
-        log(f"  [conduite] « {rv.get('name')} » est deja la, a {float(rv.get('dist') or 0):.0f} m : V le rejoint")
-    elif rv and rv.get('ok') and rv.get('spawned', True):
-        log(f"  [conduite] V appelle « {rv.get('name')} » ({rv.get('vtype')}) parmi ses {rv.get('total')} vehicules")
-    elif rv and rv.get('ok'):
-        # le systeme a refuse le spawn (cooldown, zone sans route, restriction de scene) : inutile d attendre 30 s
-        log(f"  [conduite] vehicule « {rv.get('name')} » : {rv.get('reason')} -> touche d appel en secours")
-        kbm.act('callvehicle', 0.15)
-        if rv.get('cooldown') or rv.get('restricted'):
-            time.sleep(1.5)
-            s0 = motion.read_state() or {}
-            if not [v for v in (s0.get('vehicles') or []) if v.get('player')]:
-                return False
-    else:
-        log(f"  [conduite] appel du vehicule (touche) : {(rv or {}).get('reason', 'mod muet')}")
-        kbm.act('callvehicle', 0.15)
-    # attendre la voiture (jusqu a 30 s) : le vehicule du joueur arrive sur la ROUTE la plus proche (jusqu a 150 m) ;
-    # on ira le rejoindre par le maillage
-    car = None
-    t0 = time.perf_counter()
-    while time.perf_counter() - t0 < 40.0:
-        if stop is not None and stop.is_set():
-            return False
-        s2 = motion.read_state() or {}
-        vs = s2.get('vehicles') or []
-        mine = [v for v in vs if v.get('player')]
-        if mine:
-            car = mine[0]; break
-        # (pas de repli sur une voiture garee d un inconnu : il faudrait la forcer, et c est long)
-        time.sleep(0.5)
+    return any(any(p in (n.get('aff') or '').lower() for p in ('ncpd', 'police', 'maxtac')) and (n.get('d') or 99) < max_d
+               for n in (st.get('npcs') or []))
+
+
+def steal_candidate(st: dict, max_d: float = 30.0) -> dict | None:
+    """Voiture / moto d inconnu ARRETEE la plus proche (< max_d), hors combat et sans police a moins de 30 m."""
+    from .config import CFG as _C
+    if not _C.features.get('steal', True) or st.get('combat') or st.get('vehicle') or _police_near(st):
+        return None
+    cands = [v for v in (st.get('vehicles') or []) if not v.get('player') and (v.get('d') or 99) <= max_d and (v.get('speed') or 0) <= 0.5]
+    return min(cands, key=lambda v: v['d']) if cands else None
+
+
+def steal_nearby(stop=None, log=print, max_d: float = 30.0) -> bool:
+    """V vole le vehicule arrete le plus proche : marche jusqu a lui, force l ouverture (F maintenu), monte."""
+    st = motion.read_state() or {}
+    car = steal_candidate(st, max_d=max_d)
     if not car:
-        seen = [(v.get('name'), round(v.get('d') or 0), v.get('player')) for v in ((motion.read_state() or {}).get('vehicles') or [])]
-        log(f"  [conduite] aucun vehicule du joueur arrive en 40 s (methodes {(rv or {}).get('methodes')}, restrictions {(rv or {}).get('restrictions')}, cooldown {(rv or {}).get('vcooldown')}) ; vus : {seen}"); return False
+        return False
+    log(f"  [conduite] V VOLE « {car.get('name', '?')} » a {car['d']:.0f} m")
+    return _board(car, stop=stop, log=log, steal=True)
+
+
+def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
+    """Rejoint le vehicule (maillage puis ligne droite) et monte par poses (F ; F maintenu pour un vol)."""
     log(f"  [conduite] vehicule « {car.get('name', '?')} » a {car['d']:.0f} m")
     t_stop = time.perf_counter()
     while time.perf_counter() - t_stop < 8.0 and (car.get('speed') or 0) > 0.5:      # il finit sa manoeuvre : on ne court pas apres
         time.sleep(0.4)
         s_c = motion.read_state() or {}
-        car = next((v for v in (s_c.get('vehicles') or []) if v.get('player')), car)
+        car = _refresh(car, s_c.get('vehicles') or [])
     if car['d'] > 2.5:                                    # deja a portee sinon (les poses gerent 1-2 m)
         # le vehicule arrive sur la ROUTE la plus proche : V y va par le maillage (nav.goto), puis tout droit
         from . import nav
@@ -164,9 +123,9 @@ def summon_and_board(stop=None, log=print) -> bool:
         choice = str((inter.get('choices') or [''])[0])
         if any(w in choice.lower() for w in ('saisir', 'porter', 'contr', 'pirater')):
             continue                                      # pas E sur « saisir » / « prendre le controle »
-        kbm.act('interact', 0.4)
+        kbm.act('interact', 1.4 if steal else 0.4)         # voler = « Forcer » / « Ouvrir » : F maintenu
         t_e = time.perf_counter()
-        while time.perf_counter() - t_e < 1.6:
+        while time.perf_counter() - t_e < (3.0 if steal else 1.6):
             time.sleep(0.2)
             if (motion.read_state() or {}).get('vehicle'):
                 time.sleep(3.0)
@@ -174,6 +133,95 @@ def summon_and_board(stop=None, log=print) -> bool:
                 return True
     look_smooth(0, -2400); time.sleep(0.1); look_smooth(0, 1900)   # regard a peu pres a l horizon
     log('  [conduite] aucune invite pour monter'); return False
+
+
+def summon_and_board(stop=None, log=print) -> bool:
+    """Appelle le vehicule et monte dedans. True si V est en vehicule a la fin."""
+    st = motion.read_state()
+    if not st:
+        return False
+    if st.get('vehicle'):
+        return True
+    if st.get('combat'):
+        # en combat le mod ne scanne pas les vehicules (export vide) et V a mieux a faire
+        log('  [conduite] en combat : pas d appel de vehicule'); return False
+    import random
+    if random.random() < 0.25 and steal_candidate(st, max_d=15.0):
+        log('  [conduite] une voiture arretee est juste la : V a envie de la voler')
+        if steal_nearby(stop=stop, log=log, max_d=15.0):
+            return True
+    if not kbm.ACTIONS.get('callvehicle'):
+        log('  [conduite] pas de touche « appeler le vehicule »')
+        return steal_nearby(stop=stop, log=log)
+    # au hasard : une voiture ou une moto parmi celles de V (VehicleSystem) ; a defaut la touche d appel
+    import random
+    from . import nav
+    want = random.choice((0, 1, 2))                      # 0 = n importe lequel, 1 = voiture, 2 = moto
+    # VOIE LIBRE : on n appelle pas le vehicule au milieu de la circulation (il arrive sur la route la plus proche et
+    # se fait bloquer / percuter) : on attend que plus aucun vehicule d inconnu ne roule a moins de 30 m (12 s max),
+    # et si ca ne se calme pas, V s ecarte de quelques metres avant d appeler
+    t_wait = time.perf_counter(); waited = False
+    while time.perf_counter() - t_wait < 12.0:
+        if stop is not None and stop.is_set():
+            return False
+        s_t = motion.read_state() or {}
+        if int(s_t.get('traffic') or 0) == 0:
+            break
+        if not waited:
+            waited = True; log(f"  [conduite] circulation ({s_t.get('traffic')} vehicule(s) en mouvement a < 30 m) : on attend une voie libre")
+        time.sleep(0.5)
+    else:
+        log('  [conduite] circulation persistante : V s ecarte de la voie avant d appeler')
+        motion.turn_by(90.0, timeout=1.5, stop=stop)
+        kbm.hold('W'); time.sleep(1.6); kbm.release('W')
+    seq_v = nav._send({'cmd': 'vehicle_call', 'x': want})
+    rv = nav._wait(seq_v, timeout=5.0)
+    if rv is None:
+        # le mod ne repond pas en 5 s : souvent un menu / une scene qui suspend ses mises a jour ; il traitera l appel
+        # des la reprise (vu le 17/09 : « mod muet » puis spawn reel 20 s plus tard) -> on attend encore avant la touche
+        s_m = motion.read_state() or {}
+        log(f"  [conduite] le mod ne repond pas (menu={s_m.get('menu')}, scene={s_m.get('scene')}) : on lui laisse 8 s de plus")
+        rv = nav._wait(seq_v, timeout=8.0)
+    # NB : rv['restrictions'] est le CATALOGUE statique des tags (m_restrictionTags), pas les restrictions actives :
+    # seul rv['restricted'] (IsSummoningVehiclesRestricted) fait foi
+    if rv and rv.get('ok') and rv.get('restricted') is True:
+        log('  [conduite] appel de vehicule interdit ici par le jeu (IsSummoningVehiclesRestricted) : on n attend pas')
+        return steal_nearby(stop=stop, log=log)
+    if rv and rv.get('ok') and rv.get('existing'):
+        log(f"  [conduite] « {rv.get('name')} » est deja la, a {float(rv.get('dist') or 0):.0f} m : V le rejoint")
+    elif rv and rv.get('ok') and rv.get('spawned', True):
+        log(f"  [conduite] V appelle « {rv.get('name')} » ({rv.get('vtype')}) parmi ses {rv.get('total')} vehicules")
+    elif rv and rv.get('ok'):
+        # le systeme a refuse le spawn (cooldown, zone sans route, restriction de scene) : inutile d attendre 30 s
+        log(f"  [conduite] vehicule « {rv.get('name')} » : {rv.get('reason')} -> touche d appel en secours")
+        kbm.act('callvehicle', 0.15)
+        if rv.get('cooldown') or rv.get('restricted'):
+            time.sleep(1.5)
+            s0 = motion.read_state() or {}
+            if not [v for v in (s0.get('vehicles') or []) if v.get('player')]:
+                return steal_nearby(stop=stop, log=log)
+    else:
+        log(f"  [conduite] appel du vehicule (touche) : {(rv or {}).get('reason', 'mod muet')}")
+        kbm.act('callvehicle', 0.15)
+    # attendre la voiture (jusqu a 30 s) : le vehicule du joueur arrive sur la ROUTE la plus proche (jusqu a 150 m) ;
+    # on ira le rejoindre par le maillage
+    car = None
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < 40.0:
+        if stop is not None and stop.is_set():
+            return False
+        s2 = motion.read_state() or {}
+        vs = s2.get('vehicles') or []
+        mine = [v for v in vs if v.get('player')]
+        if mine:
+            car = mine[0]; break
+        # (pas de repli sur une voiture garee d un inconnu : il faudrait la forcer, et c est long)
+        time.sleep(0.5)
+    if not car:
+        seen = [(v.get('name'), round(v.get('d') or 0), v.get('player')) for v in ((motion.read_state() or {}).get('vehicles') or [])]
+        log(f"  [conduite] aucun vehicule du joueur arrive en 40 s (methodes {(rv or {}).get('methodes')}, restrictions {(rv or {}).get('restrictions')}, cooldown {(rv or {}).get('vcooldown')}) ; vus : {seen}"))
+        return steal_nearby(stop=stop, log=log)                  # a defaut, V vole ce qui est gare a cote
+    return _board(car, stop=stop, log=log)
 
 
 def autodrive_to(tx: float, ty: float, stop=None, log=print) -> dict:

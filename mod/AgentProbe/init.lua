@@ -2880,7 +2880,7 @@ end
 local ui = { open = false, provider = 1, key = '', model = 'llama3.2:latest', openai_model = 'gpt-4o-mini',
              anthropic_model = 'claude-haiku-4-5-20251001', minutes = 20, saved = '',
              radio = true, driving = true, rescue = true, sell = true, ripperdoc = true, buffs = true,
-             stealth = true, fasttravel = true, phone = true, sms = true, appearance = true, recipes = true, courage = 3, style = 1, aggro = 2 }
+             stealth = true, fasttravel = true, phone = true, sms = true, appearance = true, recipes = true, sprint = true, steal = true, courage = 3, style = 1, aggro = 2 }
 local uiCourage = { 'prudent', 'equilibre', 'temeraire' }
 local uiStyle = { 'melee', 'mixte', 'distance' }
 local uiAggro = { 'defensif', 'normal', 'chasseur' }
@@ -2898,7 +2898,7 @@ local function uiLoad()
     ui.anthropic_model = d.anthropic_model or ui.anthropic_model
     ui.minutes = d.minutes or ui.minutes
     if type(d.features) == 'table' then
-        for _, k in ipairs({ 'radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'fasttravel', 'phone', 'sms', 'appearance', 'recipes' }) do
+        for _, k in ipairs({ 'radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'fasttravel', 'phone', 'sms', 'appearance', 'recipes', 'sprint', 'steal' }) do
             if d.features[k] ~= nil then ui[k] = d.features[k] end
         end
     end
@@ -2911,7 +2911,8 @@ local function uiSave()
                 anthropic_model = ui.anthropic_model, minutes = ui.minutes,
                 courage = uiCourage[ui.courage], style = uiStyle[ui.style], aggro = uiAggro[ui.aggro],
                 features = { radio = ui.radio, driving = ui.driving, rescue = ui.rescue, sell = ui.sell, ripperdoc = ui.ripperdoc, buffs = ui.buffs,
-                             stealth = ui.stealth, fasttravel = ui.fasttravel, phone = ui.phone, sms = ui.sms, appearance = ui.appearance, recipes = ui.recipes } }
+                             stealth = ui.stealth, fasttravel = ui.fasttravel, phone = ui.phone, sms = ui.sms, appearance = ui.appearance, recipes = ui.recipes,
+                             sprint = ui.sprint, steal = ui.steal } }
     local f = io.open('agent_config.json', 'w')
     if f then f:write(json.encode(d)); f:close(); ui.saved = 'enregistre ' .. os.date('%H:%M:%S') else ui.saved = 'echec d ecriture' end
 end
@@ -2964,6 +2965,8 @@ registerForEvent('onDraw', function()
         ui.ripperdoc = ImGui.Checkbox('Charcudoc (cyberware)', ui.ripperdoc)
         ui.buffs = ImGui.Checkbox('Buffs avant le combat', ui.buffs)
         ui.stealth = ImGui.Checkbox('Discretion (approche accroupie, elimination furtive)', ui.stealth)
+        ui.sprint = ImGui.Checkbox('Sprinter sans cesse en combat (regeneration)', ui.sprint)
+        ui.steal = ImGui.Checkbox('Voler une voiture arretee si besoin ou par envie', ui.steal)
         ui.fasttravel = ImGui.Checkbox('Voyage rapide (bornes)', ui.fasttravel)
         ui.phone = ImGui.Checkbox('Repondre aux appels', ui.phone)
         ui.sms = ImGui.Checkbox('Lire et repondre aux SMS', ui.sms)
