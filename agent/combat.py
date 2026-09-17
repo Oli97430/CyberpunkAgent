@@ -242,11 +242,21 @@ def calibrate_slots(log=print, listing_sig=None, force: bool = False) -> dict:
     return found
 
 
-def draw_slot(slot) -> None:
+def _holding(melee: bool) -> bool:
+    """V tient-il une arme de la categorie demandee (melee / a feu) ?"""
+    from .inventory import MELEE_TYPES as _MT
+    wt = (motion.read_state() or {}).get('weapon') or ''
+    if melee:
+        return wt in _MT and wt != 'Wea_Fists'
+    return wt.startswith('Wea_') and wt not in _MT
+
+
+def draw_slot(slot, melee: bool | None = None) -> bool:
     """Degaine l arme de la touche `slot` : d abord par la requete du jeu (mod, commande weapon_slot : le chemin exact des
-    touches, sans clavier ni focus), la touche en repli si le mod ne repond pas."""
+    touches, sans clavier ni focus), puis la TOUCHE si l arme en main n est pas de la categorie voulue (17/09 : la
+    requete laissait la matraque en main et la touche ne partait que les mains vides). Vrai si la categorie est bonne."""
     if not slot:
-        return
+        return False
     r = None
     try:
         r = nav._wait(nav._send({'cmd': 'weapon_slot', 'x': int(slot)}), timeout=0.8)
@@ -254,11 +264,10 @@ def draw_slot(slot) -> None:
         r = None
     if r and r.get('ok'):
         time.sleep(0.5)
-        wt0 = (motion.read_state() or {}).get('weapon') or ''
-        if wt0 in ('', 'Wea_Fists', 'None'):
-            kbm.tap(str(slot), 0.08)                      # la requete n a rien sorti : la touche en repli
-    else:
-        kbm.tap(str(slot), 0.08)
+        if melee is None or _holding(melee):
+            return True
+    kbm.tap(str(slot), 0.08); time.sleep(0.6)
+    return melee is None or _holding(melee)
 
 
 def _ensure_weapon(slot, melee: bool) -> None:
@@ -272,7 +281,7 @@ def _ensure_weapon(slot, melee: bool) -> None:
     if (melee and holding_melee) or (not melee and holding_ranged):
         return
     if slot:
-        draw_slot(slot); time.sleep(0.35)
+        draw_slot(slot, melee); time.sleep(0.2)
 
 
 # ---- engagement (avant que le jeu ne passe en combat) -----------------------------------
@@ -408,6 +417,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     t_wsync = -99.0
     t_sprint = -99.0
     wsync_fail = 0                                     # degainages sans effet (zone a mains nues, arme restreinte)
+    blind_hacks = 0                                    # hacks « par defaut » de suite (liste du panneau illisible)
     mode = 'melee'; shots = 0
     hack_i = 0
     last_hp, last_hp_t = None, time.perf_counter()
@@ -467,7 +477,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 sterile_charges += 1; sterile_t = now
                 log(f"  [combat] combat sterile depuis 40 s : V charge la cible a {alive[0]['d']:.0f} m ({sterile_charges}/2)")
                 if mode == 'ranged':
-                    draw_slot(MELEE_SLOT); mode = 'melee'; time.sleep(0.3)
+                    draw_slot(MELEE_SLOT, True); mode = 'melee'; time.sleep(0.3)
                 t_ch, t_j = time.perf_counter(), -99.0
                 while time.perf_counter() - t_ch < 8.0 and not (stop is not None and stop.is_set()):
                     s_ch = motion.read_state() or st
@@ -582,45 +592,54 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 rmin, rback = RANGED_MIN_M, RANGED_BACK_M  # melee : arme a feu seulement loin / en hauteur
             want_ranged = RANGED_SLOT is not None and (high or rmin < e['d'] < RANGED_MAX_M)
             if want_ranged and mode != 'ranged':
-                draw_slot(RANGED_SLOT); mode = 'ranged'; shots = 0; time.sleep(0.5)
+                if draw_slot(RANGED_SLOT, False):
+                    mode = 'ranged'; shots = 0; time.sleep(0.3)
+                else:
+                    wsync_fail += 1                                    # l arme a feu ne sort pas : on reste melee et on fonce
                 log(f"  [combat] arme a distance (cible a {e['d']:.0f} m{', en hauteur' if high else ''})")
             elif mode == 'ranged' and e['d'] <= rback and not high:
-                draw_slot(MELEE_SLOT); mode = 'melee'; time.sleep(0.4)
+                draw_slot(MELEE_SLOT, True); mode = 'melee'; time.sleep(0.4)
                 log('  [combat] retour au corps a corps')
             # l arme REELLEMENT tenue (export du mod) : si elle ne correspond pas au mode, on corrige (la touche
             # d emplacement est une bascule : un appui de trop rengainait, ou laissait la mitrailleuse au CAC)
-            wt = st.get('weapon')
+            wt = st.get('weapon') or ''
+            from .inventory import MELEE_TYPES as _MT
+            holding_ranged = wt.startswith('Wea_') and wt not in _MT
+            holding_melee = wt in _MT and wt != 'Wea_Fists'         # poings = rien en main
+            if mode == 'ranged' and not holding_ranged and wsync_fail >= 3:
+                mode = 'melee'; log('  [combat] l arme a feu ne sort pas : retour au corps a corps, on fonce')
             if wt and now - t_wsync > 1.5:
-                from .inventory import MELEE_TYPES as _MT
-                holding_ranged = wt.startswith('Wea_') and wt not in _MT
-                holding_melee = wt in _MT and wt != 'Wea_Fists'     # poings = rien en main
                 if (mode == 'melee' and holding_melee) or (mode == 'ranged' and holding_ranged):
                     wsync_fail = 0
                 elif wsync_fail >= 3:
                     if wsync_fail == 3:
                         wsync_fail = 4; log(f'  [combat] arme indisponible ici (tenue : {wt}) : combat a mains nues / avec ce qu il y a')
                 elif mode == 'melee' and not holding_melee:
-                    draw_slot(MELEE_SLOT); t_wsync = now; wsync_fail += 1; log(f'  [combat] arme tenue {wt} : on degaine la melee (emplacement {MELEE_SLOT})')
+                    ok_d = draw_slot(MELEE_SLOT, True); t_wsync = now; wsync_fail = 0 if ok_d else wsync_fail + 1; log(f'  [combat] arme tenue {wt} : on degaine la melee (emplacement {MELEE_SLOT}) -> {"ok" if ok_d else "sans effet"}')
                 elif mode == 'ranged' and RANGED_SLOT and not holding_ranged:
-                    draw_slot(RANGED_SLOT); t_wsync = now; wsync_fail += 1; log(f'  [combat] arme tenue {wt} : on degaine l arme a feu (emplacement {RANGED_SLOT})')
+                    ok_d = draw_slot(RANGED_SLOT, False); t_wsync = now; wsync_fail = 0 if ok_d else wsync_fail + 1; log(f'  [combat] arme tenue {wt} : on degaine l arme a feu (emplacement {RANGED_SLOT}) -> {"ok" if ok_d else "sans effet"}')
             if mode == 'ranged':
                 kbm.release('W'); kbm.act_release('sprint')
                 # hacks A DISTANCE entre deux rafales : cible alternee (hack_i) pour ne pas empiler sur le meme
-                if e['d'] > 3.0 and gap < 8 and now - t_hack > QUICKHACK_CD:      # vise d abord (apres un sprint de biais l ecart est de 45 deg)
+                if e['d'] > 3.0 and gap < 8 and now - t_hack > 2 * QUICKHACK_CD and blind_hacks < 3:   # vise d abord ; 8 s entre deux hacks
                     tgt = alive[hack_i % len(alive)]; hack_i += 1
                     if tgt is not e:
                         aim_at(tgt, st)
-                    title = quickhack_best(log=log); t_hack = now; stats['quickhacks'] += 1
+                    title = quickhack_best(log=log); stats['quickhacks'] += 1
+                    t_hack = time.perf_counter()                        # le delai court APRES le hack (il dure ~4 s)
                     if title and str(title).startswith('userdata'):
                         title = None
+                    blind_hacks = 0 if title else blind_hacks + 1
                     log(f"  [combat] quickhack « {title or 'par defaut'} » (a distance) sur cible a {tgt['d']:.0f} m")
+                    if blind_hacks >= 3:
+                        log('  [combat] 3 hacks a l aveugle de suite (liste illisible) : on arrete les hacks, on tire')
                     seq = None; continue
                 if _C2.features.get('sprint', True) and now - t_sprint > (2.5 if hp < 85 else 5.0):
                     side = 'D' if side == 'A' else 'A'
                     sprint_pass(e, st, 1.0 if side == 'D' else -1.0, dur=0.8)   # sprint lateral = regeneration + cible mouvante
                     t_sprint = now; stats['sprints'] = stats.get('sprints', 0) + 1
                     seq = None; continue
-                if gap < 4:
+                if gap < 4 and holding_ranged:
                     kbm.mouse('right', True); time.sleep(0.15)          # viser
                     kbm.mouse_tap('left', 0.12); shots += 1; stats['tirs'] = stats.get('tirs', 0) + 1
                     kbm.mouse('right', False)
@@ -631,11 +650,13 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 time.sleep(0.15); continue
 
             # -- quickhack a distance
-            if e['d'] > 3.0 and gap < 8 and now - t_hack > QUICKHACK_CD:
+            if e['d'] > 3.0 and gap < 8 and now - t_hack > QUICKHACK_CD and blind_hacks < 3:
                 tgt = alive[hack_i % len(alive)]; hack_i += 1
                 if tgt is not e and tgt['d'] > 3.0:
                     aim_at(tgt, st); e = tgt
-                title = quickhack_best(log=log); t_hack = now; stats['quickhacks'] += 1
+                title = quickhack_best(log=log); stats['quickhacks'] += 1
+                t_hack = time.perf_counter()
+                blind_hacks = 0 if (title and not str(title).startswith('userdata')) else blind_hacks + 1
                 if title and str(title).startswith('userdata'):
                     title = None
                 log(f"  [combat] quickhack « {title or 'par defaut'} » sur cible a {e['d']:.0f} m")
