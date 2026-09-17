@@ -211,6 +211,10 @@ Attach these three files to any bug report.
 
 ---
 
+## Streaming it live
+
+Guide for streaming the mod on YouTube (OBS scenes, journal overlay, what never to show, run of show, chat FAQ): [youtube.en.md](youtube.en.md) (French: [youtube.md](youtube.md)).
+
 ## Known limits
 
 - **Races** (Beat on the Brat by car, street races): autodrive does not race.

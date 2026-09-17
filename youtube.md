@@ -1,5 +1,7 @@
 # Diffuser le mod en direct sur YouTube
 
+*English version: [youtube.en.md](youtube.en.md)*
+
 Guide pratique pour streamer **CyberpunkAgent** (V piloté par une IA) sur YouTube : ce qu'il faut montrer, comment
 préparer OBS, quoi dire au chat, quoi ne jamais montrer, et une check-list avant le direct.
 
