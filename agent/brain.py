@@ -140,14 +140,16 @@ MUTE_HOSTILES: dict = {}        # (x, y) arrondis -> instant ou un hostile a ete
 RESCUED: dict = {}              # zone d agression (x/15, y/15) -> heure du dernier secours (pas de retour pendant 5 min)
 RESCUE_INTERRUPT_M = 30.0       # une agression a moins de 30 m interrompt le trajet en cours : V s implique
 MUTE_S, MUTE_CLOSE_M = 180.0, 12.0
+MUTE_FAILS: dict = {}           # cellule -> nombre d engagements sans reaction (17/09 05:27-05:41 : 34 assauts a 1 m sur un intouchable)
 
 
 def _muted(e: dict) -> bool:
     """Hostile ignore : declare sans reaction il y a moins de 3 min ET pas au contact (a moins de 12 m on se bat,
     sinon boucle « attaquer -> objectif -> trajet interrompu » 3 fois par seconde, vue le 16/09 20:34)."""
-    if (e.get('d') or 0.0) < MUTE_CLOSE_M:
-        return False
-    return time.perf_counter() - MUTE_HOSTILES.get((round(e['x']), round(e['y'])), -1e9) < MUTE_S
+    k = (round(e['x']), round(e['y']))
+    if (e.get('d') or 0.0) < MUTE_CLOSE_M and MUTE_FAILS.get(k, 0) < 2:
+        return False                                # au contact on retente une fois ; au 2e echec c est un intouchable
+    return time.perf_counter() - MUTE_HOSTILES.get(k, -1e9) < MUTE_S
 
 
 RESCUE_STATE = {'last_interrupt': -9999.0}
@@ -802,7 +804,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             plan.last_t = -99.0; plan.action = 'attaquer'
                             continue
                         if not engaged and not s_now.get('combat'):
-                            mute_hostiles[(round(hostiles[0]['x']), round(hostiles[0]['y']))] = time.perf_counter()
+                            _mk = (round(hostiles[0]['x']), round(hostiles[0]['y']))
+                            mute_hostiles[_mk] = time.perf_counter(); MUTE_FAILS[_mk] = MUTE_FAILS.get(_mk, 0) + 1
                             _log('  cible sans reaction : ignoree 3 min')
                             plan.last_t = -99.0; plan.action = 'objectif'
                             continue

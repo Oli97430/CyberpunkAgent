@@ -325,6 +325,9 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
                 if gap < 25:
                     _ensure_weapon(MELEE_SLOT, melee=True)
                     heavy_attack(); struck += 1; time.sleep(0.2)
+                    if struck >= 5 and not rescue:
+                        log(f"  [combat] {struck} coups au contact sans reaction : cible intouchable (vitre, autre niveau, scene)")
+                        return False
     finally:
         kbm.release_all()
         if crouched:

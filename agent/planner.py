@@ -35,7 +35,8 @@ def aggressors(st: dict) -> list:
     Les AGRESSEURS d abord (gang, IsAggressive), la victime (civil en combat) en dernier : c est eux que V frappe."""
     out = []
     for n in (st.get('npcs') or []):
-        if (n.get('aggressive') or n.get('incombat')) and not any(p in (n.get('aff') or '').lower() for p in POLICE_AFF):
+        # agression EN COURS = PNJ en combat ; « agressif » seul = posture (videurs Moxes, gardes) : pas une raison d attaquer
+        if n.get('incombat') and not any(p in (n.get('aff') or '').lower() for p in POLICE_AFF):
             out.append(n)
     def rank(n):
         aff = (n.get('aff') or '').lower()
