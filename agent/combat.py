@@ -216,7 +216,7 @@ def calibrate_slots(log=print, listing_sig=None, force: bool = False) -> dict:
         return LAST_CALIB['map']
     found = {}
     for k in ('1', '2', '3'):
-        kbm.tap(k, 0.1); time.sleep(0.7)
+        kbm.tap(k, 0.1); time.sleep(0.9)
         wt = (motion.read_state() or {}).get('weapon') or ''
         if wt in ('', 'Wea_Fists', 'None'):                 # la touche a RENGAINE (arme deja en main) : on la ressort
             kbm.tap(k, 0.1); time.sleep(0.7)
@@ -224,9 +224,16 @@ def calibrate_slots(log=print, listing_sig=None, force: bool = False) -> dict:
         found[k] = wt
     melee_keys = [k for k, wt in found.items() if wt in _MT and wt != 'Wea_Fists']
     ranged_keys = [k for k, wt in found.items() if wt.startswith('Wea_') and wt not in _MT]
+    if len(set(found.values())) <= 1:
+        # les trois touches donnent la meme chose : zone sans armes, scene, ou lecture figee -> NON CONCLUANT, on garde
+        # les emplacements actuels et on reessaie dans 5 min (17/09 12:21 : 1=2=3=matraque -> distance None, faux)
+        LAST_CALIB.update(t=now - 300.0, map=found, sig=listing_sig)
+        log(f"  [armes] calibrage non concluant ({found.get('1') or 'rien'} pour les trois touches) : on garde melee {MELEE_SLOT}, distance {RANGED_SLOT}")
+        return found
     if melee_keys:
         MELEE_SLOT = melee_keys[0]
-    RANGED_SLOT = ranged_keys[0] if ranged_keys else None
+    if ranged_keys:
+        RANGED_SLOT = ranged_keys[0]
     LAST_CALIB.update(t=now, map=found, sig=listing_sig)
     log('  [armes] calibrage des touches : ' + ', '.join(f'{k}={wt or "rien"}' for k, wt in found.items())
         + f' -> melee {MELEE_SLOT}, distance {RANGED_SLOT}')

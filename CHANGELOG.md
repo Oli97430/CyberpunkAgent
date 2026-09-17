@@ -4,6 +4,7 @@
 
 - Combat : les emplacements d arme a degainer sont relus APRES la reaffectation de l inventaire (V tapait « 2 » pour l arme a feu alors que le fusil venait de passer en 3 : 3 combats a 26 m avec une matraque, 0 coup, puis « combat sterile »).
 - Combat : plus d abandon apres 75 s sans resultat ; V charge d abord la cible (2 fois, sprint + sauts) avant de conclure.
+- Terminal PIRATE PAR SCRIPT le 17/09 12:23 (connexion sans bouger, grille 6x6 resolue en 6 s). Calibrage des touches : non concluant si les trois touches donnent la meme arme (zone sans armes) -> emplacements conserves, nouvel essai 5 min plus tard.
 - Terminaux : connexion par script tentee AVANT de bouger (portee du Breach a distance), marche tout droit s il n y a pas de chemin a moins de 15 m, nouvel essai par script une fois a cote.
 - Vues d appareil (longue-vue, cameras) : Retour arriere avant Echap pour en sortir, dans la sortie de scene et dans la fermeture des menus (Echap y ouvrait le menu pause).
 - Armes : CALIBRAGE des touches 1/2/3 hors combat (type reellement en main apres chaque touche, toutes les 10 min ou si l inventaire change) : le listing du mod ne correspond pas aux touches (la 3 sortait le fusil place en 2 -> 8 combats de 3 min a 0 coup le 17/09). Combat sterile : charge et abandon des 40 s sans coup ni tir, quelle que soit la vie.
