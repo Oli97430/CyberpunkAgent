@@ -2474,6 +2474,16 @@ local function handleCommand(player, cmd)
         if not toggled then toggled = pcall(function() vs:TogglePlayerActiveVehicle(pick.v.recordID, typeEnum, true) end) end
         if not toggled then toggled = pcall(function() vs:TogglePlayerActiveVehicle(pick.v, typeEnum, true) end) end
         if toggled then did[#did + 1] = 'TogglePlayerActiveVehicle' end
+        -- un vehicule de V deja exporte a moins de 150 m : inutile de le retirer / rappeler, V le rejoint
+        if slowVehicles then
+            for _, sv in ipairs(slowVehicles) do
+                if sv.player and (sv.d or 999) <= 150.0 then
+                    resp.ok, resp.spawned, resp.existing, resp.name, resp.vtype, resp.dist, resp.total = true, true, true, sv.name or pick.name, pick.vtype, sv.d, #list
+                    journal(string.format('OK   vehicle_call : deja present %s a %.0f m', tostring(sv.name), sv.d))
+                    return resp
+                end
+            end
+        end
         -- l exemplaire deja dans le monde (appel precedent, abandonne loin) empeche un nouveau spawn : on le retire
         if gid ~= nil and pcall(function() vs:DespawnPlayerVehicle(gid) end) then did[#did + 1] = 'Despawn' end
         -- restrictions : tableau de CName -> chaines (un CName brut fait echouer l encodage JSON de TOUTE la reponse :

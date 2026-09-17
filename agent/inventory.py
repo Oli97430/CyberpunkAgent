@@ -58,7 +58,7 @@ def disassemble(index: int, qty: int = 1) -> bool:
 def sell_all(log=print) -> dict:
     """Chez un marchand (< 6 m) : vend les objets marques a vendre, un par un (commande Lua sell)."""
     global SELLABLE
-    total, n = 0, 0
+    total, n, echecs, streak = 0, 0, 0, 0
     inv = fetch()                      # indices frais
     if not inv or not inv.get('ok'):
         return {'ok': False}
@@ -73,9 +73,15 @@ def sell_all(log=print) -> dict:
             log(f"  [vente] « {cur.get('name')} » -> {r.get('total')} eddies")
             inv = fetch(); fresh = {i2.get('name'): i2 for i2 in ((inv or {}).get('items') or [])}
         else:
-            log(f"  [vente] echec : {(r or {}).get('reason')}"); break
+            # un objet refuse (absent pour le jeu, protege...) n arrete pas la vente des autres (17/09 : 16 objets, 0 vendu)
+            echecs += 1; streak += 1
+            log(f"  [vente] echec « {cur.get('name')} » : {(r or {}).get('reason')}")
+            if streak >= 3:
+                log('  [vente] 3 echecs de suite : on arrete la vente ici'); break
+            continue
+        streak = 0
     SELLABLE = []
-    return {'ok': True, 'vendus': n, 'eddies': total}
+    return {'ok': True, 'vendus': n, 'eddies': total, 'echecs': echecs}
 
 
 def manage(log=print) -> dict:

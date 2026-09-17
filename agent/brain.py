@@ -597,7 +597,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 # 3a-ter. COURSES : assez d objets a vendre OU soins bas (craft insuffisant) -> marchand a portee
                 need_heals = inventory.HEALS < 2
                 rich_sale = inventory.SELL_VALUE >= 1000          # assez a encaisser pour que le detour vaille le coup
-                if CFG.features.get('sell', True) and (len(inventory.SELLABLE) >= 8 or need_heals or rich_sale) and time.perf_counter() - last_sell_t > 600.0 \
+                if CFG.features.get('sell', True) and not _threat_near(st) and (len(inventory.SELLABLE) >= 8 or need_heals or rich_sale) and time.perf_counter() - last_sell_t > 600.0 \
                         and (not focus or need_heals):    # en focus, seules les courses de soins passent avant la quete
                     last_sell_t = time.perf_counter()
                     vendor.MAX_VENDOR_M = 700.0 if (len(inventory.SELLABLE) >= 20 or need_heals or rich_sale) else 250.0   # on accepte d aller plus loin
@@ -630,12 +630,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 inventory.HEALS += br['achetes']
                                 _log(f"achat : {br['achetes']} soin(s) pour {br.get('eddies', 0)} eddies")
                                 stats['achats'] = stats.get('achats', 0) + br['achetes']
-                            if sr.get('ok') and br.get('ok') and had_sellable and not sr.get('vendus') and not br.get('achetes') and not sp.get('achats') and not rp.get('appris'):
+                            if sr.get('ok') and br.get('ok') and had_sellable and not sr.get('vendus') and not sr.get('echecs') and not br.get('achetes') and not sp.get('achats') and not rp.get('appris'):
                                 vendor.mark_useless(vend, 'rien vendu ni achete', days=1.0, log=_log)
                         continue
 
                 # 3a-quater. CHARCUDOC : assez d eddies -> V s optimise lui-meme (meilleur cyberware abordable, pose par script)
-                if CFG.features.get('ripperdoc', True) and inventory.MONEY >= 6000 and time.perf_counter() - last_ripper_t > 1800.0 and not st.get('combat') and not focus:
+                if CFG.features.get('ripperdoc', True) and inventory.MONEY >= 6000 and time.perf_counter() - last_ripper_t > 1800.0 and not st.get('combat') and not _threat_near(st) and not focus:
                     last_ripper_t = time.perf_counter()
                     vendor.MAX_VENDOR_M = 700.0
                     rip = vendor.pick_vendor(vendor.list_vendors(), prefer='ripper')

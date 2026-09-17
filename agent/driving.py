@@ -44,6 +44,9 @@ def summon_and_board(stop=None, log=print) -> bool:
         return False
     if st.get('vehicle'):
         return True
+    if st.get('combat'):
+        # en combat le mod ne scanne pas les vehicules (export vide) et V a mieux a faire
+        log('  [conduite] en combat : pas d appel de vehicule'); return False
     if not kbm.ACTIONS.get('callvehicle'):
         log('  [conduite] pas de touche « appeler le vehicule »'); return False
     # au hasard : une voiture ou une moto parmi celles de V (VehicleSystem) ; a defaut la touche d appel
@@ -80,7 +83,9 @@ def summon_and_board(stop=None, log=print) -> bool:
     if rv and rv.get('ok') and rv.get('restricted') is True:
         log('  [conduite] appel de vehicule interdit ici par le jeu (IsSummoningVehiclesRestricted) : on n attend pas')
         return False
-    if rv and rv.get('ok') and rv.get('spawned', True):
+    if rv and rv.get('ok') and rv.get('existing'):
+        log(f"  [conduite] « {rv.get('name')} » est deja la, a {float(rv.get('dist') or 0):.0f} m : V le rejoint")
+    elif rv and rv.get('ok') and rv.get('spawned', True):
         log(f"  [conduite] V appelle « {rv.get('name')} » ({rv.get('vtype')}) parmi ses {rv.get('total')} vehicules")
     elif rv and rv.get('ok'):
         # le systeme a refuse le spawn (cooldown, zone sans route, restriction de scene) : inutile d attendre 30 s
