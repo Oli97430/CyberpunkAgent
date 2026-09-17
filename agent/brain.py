@@ -604,14 +604,17 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
 
                 # 3a-ter. COURSES : assez d objets a vendre OU soins bas (craft insuffisant) -> marchand a portee
                 need_heals = inventory.HEALS < 2
-                rich_sale = inventory.SELL_VALUE >= 1000          # assez a encaisser pour que le detour vaille le coup
-                if CFG.features.get('sell', True) and not _threat_near(st) and (len(inventory.SELLABLE) >= 8 or need_heals or rich_sale) and time.perf_counter() - last_sell_t > 600.0 \
+                # PRAGMATIQUE (Olivier, 17/09) : on ne va chez le marchand que l inventaire PLEIN ou presque (>= 85 % du poids
+                # portable), ou pour des soins (survie). Plus de detour pour 8 babioles ou 1000 eddies.
+                inv_full = inventory.WEIGHT >= inventory.FULL_RATIO * inventory.CARRY and len(inventory.SELLABLE) > 0
+                rich_sale = inv_full
+                if CFG.features.get('sell', True) and not _threat_near(st) and (inv_full or need_heals) and time.perf_counter() - last_sell_t > 600.0 \
                         and (not focus or need_heals):    # en focus, seules les courses de soins passent avant la quete
                     last_sell_t = time.perf_counter()
-                    vendor.MAX_VENDOR_M = 700.0 if (len(inventory.SELLABLE) >= 20 or need_heals or rich_sale) else 250.0   # on accepte d aller plus loin
+                    vendor.MAX_VENDOR_M = 700.0                        # plein ou en manque de soins : on accepte d aller plus loin
                     vend = vendor.pick_vendor(vendor.list_vendors())
                     if vend:
-                        _log(f"courses : {len(inventory.SELLABLE)} objets a vendre, soins {inventory.HEALS}, marchand a {vend['dist']:.0f} m")
+                        _log(f"courses : poids {inventory.WEIGHT:.0f}/{inventory.CARRY:.0f}, {len(inventory.SELLABLE)} objets a vendre, soins {inventory.HEALS}, marchand a {vend['dist']:.0f} m")
                         tr = vendor.sell_trip(vend, stop=stop, log=_log)
                         if not tr.get('ok'):
                             _log(f"courses : marchand non atteint ({tr.get('reason')}) : ecarte 15 min, on essaiera un autre")

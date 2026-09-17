@@ -29,6 +29,8 @@ def melee_score(it: dict) -> float:
 MAX_DISASSEMBLE = 12
 equip_attempts: dict = {}      # index d objet -> tentatives d equipement (evite de re-equiper en boucle)
 SELLABLE: list = []          # rempli par manage() ; consomme par sell_all() chez un marchand
+WEIGHT, CARRY = 0.0, 260.0   # poids porte (somme des objets : la stat Weight du joueur vaut toujours 0) / capacite
+FULL_RATIO = 0.85            # « inventaire plein ou presque » : courses a partir de 85 % de la capacite
 SELL_VALUE: int = 0          # estimation des eddies a encaisser
 MONEY: int = 0               # eddies a la derniere passe
 HEALS: int = 99              # soins en stock (MaxDoc + Bounce Back) a la derniere passe manage()
@@ -90,7 +92,7 @@ def sell_all(log=print) -> dict:
 
 
 def manage(log=print) -> dict:
-    global HEALS, SELL_VALUE, MONEY, SELLABLE, EQUIP_BROKEN
+    global HEALS, SELL_VALUE, MONEY, SELLABLE, EQUIP_BROKEN, WEIGHT, CARRY
     t0 = time.perf_counter()
     inv = fetch()
     if not inv or not inv.get('ok'):
@@ -98,7 +100,9 @@ def manage(log=print) -> dict:
         return {'ok': False}
     items = inv.get('items') or []
     MONEY = int(inv.get('money') or 0)
-    log(f"  [inventaire] {len(items)} objets, {inv.get('money', '?')} eddies, poids {inv.get('weight', '?')}/{inv.get('carry', '?')}")
+    WEIGHT = float(sum((it.get('weight') or 0) * int(it.get('qty') or 1) for it in items))
+    CARRY = float(inv.get('carry') or CARRY or 260.0)
+    log(f"  [inventaire] {len(items)} objets, {inv.get('money', '?')} eddies, poids {WEIGHT:.0f}/{CARRY:.0f}" + (' (PLEIN ou presque)' if WEIGHT >= FULL_RATIO * CARRY else ''))
     # 0. meilleur emplacement d arme (par DPS) -> c est celui que le combat degainera
     slots = [s for s in (inv.get('slots') or []) if (s.get('dps') or 0) > 0]
     if slots:
