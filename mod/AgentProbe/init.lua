@@ -39,7 +39,8 @@ local playerVehRecs, playerVehRecsT = {}, -999.0   -- records (TweakDB) des vehi
 local vehCallT = -999.0                       -- os.clock() du dernier vehicle_call : export des vehicules de V a 400 m pendant 45 s   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
-local breachCtrl = nil                   -- HackingMinigameGameController capture a l ouverture du Breach Protocol
+local breachCtrl = nil
+local breachSel = nil                        -- { x, y, n, t } : derniere selection signalee par le jeu                   -- HackingMinigameGameController capture a l ouverture du Breach Protocol
 local bdClues, bdLastClueSig, bdFocusCache = {}, '', nil   -- danse sensorielle : indices de la timeline vus, entites-indices
 local lastUpdateClock, lastDrawClock = 0.0, 0.0   -- onUpdate s arrete dans les menus (dont le mini-jeu) : onDraw prend le relais
 local lastExport = nil                   -- derniere table d etat ecrite (reutilisee par onDraw pendant le mini-jeu)
@@ -731,6 +732,7 @@ local function breachInfo(cmd)
     local info = { ok = false }
     info.state, info.timer = breachState()
     info.last = breachLastPos()
+    info.sel = breachSel                          -- derniere case selectionnee (OnPositionSelected) + compteur
     pcall(function()
         local def = GetAllBlackboardDefs().HackingMinigame
         local bb = Game.GetBlackboardSystem():Get(def)
@@ -822,7 +824,16 @@ registerForEvent('onInit', function()
     local okO, errO = pcall(function()
         Observe('HackingMinigameGameController', 'OnInitialize', function(self)
             breachCtrl = self
+            breachSel = { n = 0 }
             journal('BREACH ouvert : controleur capture')
+        end)
+        -- chaque case choisie par le joueur (ou par l agent) : le jeu appelle OnPositionSelected(Vector2)
+        Observe('HackingMinigameGameController', 'OnPositionSelected', function(self, position)
+            local x, y = nil, nil
+            pcall(function() x, y = position.X, position.Y end)
+            if x == nil then pcall(function() x, y = position.x, position.y end) end
+            breachSel = { x = x, y = y, n = ((breachSel and breachSel.n) or 0) + 1, t = os.clock() }
+            journal(string.format('BREACH selection #%d : (%s, %s)', breachSel.n, tostring(x), tostring(y)))
         end)
         Observe('HackingMinigameGameController', 'OnUninitialize', function(self)
             breachCtrl = nil

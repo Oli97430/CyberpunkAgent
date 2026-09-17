@@ -135,7 +135,8 @@ def _merge(seqs: list[list[str]]) -> tuple[list[str], list[bool]]:
     return target, free
 
 
-def _find_path(grid: list[list[str]], target: list[str], free: list[bool], buffer: int) -> list[tuple[int, int]] | None:
+def _find_path(grid: list[list[str]], target: list[str], free: list[bool], buffer: int,
+               prefix: list[tuple[int, int]] | None = None) -> list[tuple[int, int]] | None:
     """DFS : chemin (ligne 0 d abord, puis colonne/ligne alternees, cases uniques, <= buffer coups) qui epelle la cible.
     Des coups perdus sont permis avant la cible et aux frontieres `free`, tant qu il reste des coups."""
     n = len(grid)
@@ -175,12 +176,29 @@ def _find_path(grid: list[list[str]], target: list[str], free: list[bool], buffe
                 path.pop(); used.discard(cell)
         return False
 
+    if prefix:
+        # cases deja jouees : on repart de la (le tampon consomme, l alternance ligne/colonne, les symboles deja epeles)
+        syms = [grid[r][c] for r, c in prefix]
+        pos = 0
+        for k in range(min(len(syms), len(target)), 0, -1):
+            if syms[-k:] == target[:k]:
+                pos = k
+                break
+        wasted = len(prefix) - pos
+        slack_left = buffer - len(target) - wasted
+        if slack_left < 0:                        # les coups perdus du prefixe sont tous AVANT la cible (free[0])
+            return None
+        path = list(prefix)
+        if pos == len(target):
+            return path
+        dfs(pos, prefix[-1], len(prefix) % 2 == 0, set(prefix), path, slack_left)
+        return best
     dfs(0, None, True, set(), [], slack)
     return best
 
 
 def solve(grid: list[list[str]], seqs: list[list[str]], buffer: int, weights: list[float] | None = None,
-          skip: set[int] | None = None) -> dict:
+          skip: set[int] | None = None, prefix: list[tuple[int, int]] | None = None) -> dict:
     """Meilleure combinaison de daemons realisable. Renvoie {'path': [(r,c)...], 'daemons': [i...], 'value', 'symbols'}."""
     idx = [i for i in range(len(seqs)) if seqs[i] and not (skip and i in skip)]
     w = weights or [1.0 + 0.5 * i for i in range(len(seqs))]          # plus bas dans la liste = plus precieux
@@ -198,7 +216,7 @@ def solve(grid: list[list[str]], seqs: list[list[str]], buffer: int, weights: li
         if key in seen:
             continue
         seen.add(key)
-        path = _find_path(grid, target, free, buffer)
+        path = _find_path(grid, target, free, buffer, prefix=prefix)
         if path:
             return {'path': path, 'daemons': list(order), 'value': value, 'symbols': [grid[r][c] for r, c in path], 'target': target}
     return {'path': [], 'daemons': [], 'value': 0.0, 'symbols': [], 'target': []}
@@ -224,40 +242,42 @@ def _click_cell(cell_xy: tuple[float, float], root: dict, client, log) -> tuple[
     return sx, sy
 
 
-def _selection_registered(before: dict, cell: tuple[int, int], log, conv: list) -> tuple[bool, dict | None]:
-    """Attend que la selection soit prise en compte : LastPlayerHackPosition == case (convention apprise) ou un texte
-    hexadecimal de plus (le tampon s est rempli)."""
+def _sel_of(inf: dict | None) -> tuple[int, tuple[int, int] | None]:
+    """(compteur de selections, derniere case (ligne, colonne)) d apres le mod : OnPositionSelected(Vector2) est appele
+    par le jeu a chaque case choisie ; d apres le tutoriel du jeu (0,0)->(4,0)->(4,1)->(2,1), X = ligne et Y = colonne."""
+    sel = (inf or {}).get('sel') or {}
+    n = int(sel.get('n') or 0)
+    if sel.get('x') is None or sel.get('y') is None:
+        return n, None
+    return n, (int(round(float(sel['x']))), int(round(float(sel['y']))))
+
+
+def _wait_selection(n_before: int, timeout: float = VERIFY_TIMEOUT_S) -> tuple[tuple[int, int] | None, dict | None]:
+    """Attend une NOUVELLE selection signalee par le mod. Renvoie (case, info) ou (None, derniere info)."""
     t0 = time.perf_counter()
-    r, c = cell
-    while time.perf_counter() - t0 < VERIFY_TIMEOUT_S:
+    inf = None
+    while time.perf_counter() - t0 < timeout:
         inf = info(timeout=1.0)
         if inf and inf.get('ok'):
-            last = inf.get('last') or {}
-            lx, ly = last.get('x'), last.get('y')
-            if lx is not None and ly is not None:
-                if conv and conv[0] == 'xy' and int(round(lx)) == c and int(round(ly)) == r:
-                    return True, inf
-                if conv and conv[0] == 'yx' and int(round(lx)) == r and int(round(ly)) == c:
-                    return True, inf
-                if not conv:                       # convention (x=colonne,y=ligne ou l inverse) apprise au 1er coup
-                    if int(round(lx)) == c and int(round(ly)) == r:
-                        if c != r:
-                            conv.append('xy')
-                        return True, inf
-                    if int(round(lx)) == r and int(round(ly)) == c:
-                        if c != r:
-                            conv.append('yx')
-                        return True, inf
-            if len(inf.get('texts') or []) > (before.get('n_hex') or 0):
-                return True, inf
+            n, cell = _sel_of(inf)
+            if n > n_before and cell is not None:
+                return cell, inf
             if int(inf.get('state') or 0) in (2, 3):
-                return True, inf
-        time.sleep(0.15)
-    return False, None
+                return None, inf
+        time.sleep(0.12)
+    return None, inf
+
+
+# decalages ecran essayes pour le PREMIER clic (libre : n importe quelle case de la ligne 0, et un clic rate ne coute rien
+# tant que le timer n a pas demarre) : d abord horizontaux (barres noires / mise a l echelle), puis verticaux
+SCAN_OFFSETS = [(0, 0)] + [(dx, 0) for dx in (64, -64, 128, -128, 192, -192, 256, -256, 384, -384, 512, -512, 768, -768, 960, -960)] \
+    + [(0, dy) for dy in (32, -32, 64, -64, 96, -96)] + [(dx, dy) for dy in (32, -32, 64, -64) for dx in (128, -128, 256, -256)]
 
 
 def run(stop=None, log=print, dry: bool = False) -> dict:
-    """Resout et joue le Breach Protocol ouvert. dry=True : analyse + solution seulement, aucun clic."""
+    """Resout et joue le Breach Protocol ouvert. dry=True : analyse + solution seulement, aucun clic.
+    Le mod signale chaque case reellement selectionnee (OnPositionSelected) : le premier clic (libre) sert a apprendre le
+    decalage entre le canevas ink et l ecran, les suivants sont verifies un par un et le chemin est recalcule si besoin."""
     t0 = time.perf_counter()
     inf = None
     for _ in range(8):                                   # le mod capture le controleur a l ouverture ; on lui laisse 2 s
@@ -298,26 +318,84 @@ def run(stop=None, log=print, dry: bool = False) -> dict:
     if not client:
         return {'ok': False, 'reason': 'fenetre du jeu introuvable (pas au premier plan ?)'}
     log(f"  [breach] fenetre {client}, canevas {p['root']}")
-    conv: list = []
-    before = p
-    done = 0
-    for i, cell in enumerate(sol['path']):
+    has_sel = 'sel' in inf                               # mod recent : selections signalees ; sinon ancien comportement
+    if not has_sel:
+        log('  [breach] mod sans signal de selection : clics non verifies')
+    delta = [0, 0]                                       # correction ecran apprise (px)
+    done: list[tuple[int, int]] = []                     # cases reellement selectionnees
+    n_sel, _ = _sel_of(inf)
+    target_path = list(sol['path'])
+
+    def click(cell, extra=(0, 0)):
+        sx, sy = _to_screen(p['cells'][cell][0], p['cells'][cell][1], p['root'], client)
+        sx, sy = sx + delta[0] + extra[0], sy + delta[1] + extra[1]
+        kbm.move_abs(sx, sy); time.sleep(CLICK_SETTLE_S)
+        kbm.move_abs(sx + 1, sy); time.sleep(0.03)
+        kbm.mouse_tap('left', 0.08)
+        return sx, sy
+
+    # ---- 1er clic : libre (ligne 0). On balaye des decalages jusqu a ce que le jeu signale une selection.
+    first = target_path[0]
+    got = None
+    if has_sel:
+        for k, extra in enumerate(SCAN_OFFSETS):
+            if stop is not None and stop.is_set():
+                return {'ok': False, 'reason': 'arret', 'clics': 0}
+            sx, sy = click(first, extra)
+            cell, inf2 = _wait_selection(n_sel, timeout=0.7 if k else VERIFY_TIMEOUT_S)
+            if cell is not None:
+                got = (cell, extra, (sx, sy)); n_sel, _ = _sel_of(inf2)
+                break
+        if got is None:
+            return {'ok': False, 'reason': 'aucun clic pris en compte (calibrage impossible)', 'clics': 0, 'solution': sol}
+        cell, extra, (sx, sy) = got
+        # decalage reel : le point clique correspond a la case `cell` ; on corrige tous les clics suivants
+        ex, ey = _to_screen(p['cells'][cell][0], p['cells'][cell][1], p['root'], client)
+        delta = [sx - ex, sy - ey]
+        log(f"  [breach] 1er clic : case {cell} ({grid[cell[0]][cell[1]]}) prise en compte, decalage ecran appris {delta} px"
+            + (f" (balayage {extra})" if extra != (0, 0) else ''))
+        done.append(cell)
+        if cell != first:
+            sol2 = solve(grid, seqs, buffer, skip=skip, prefix=done)
+            if not sol2['path']:
+                log('  [breach] plus aucun daemon realisable depuis cette case : on remplit le tampon')
+                target_path = list(done)
+            else:
+                sol = sol2; target_path = list(sol2['path'])
+                log(f"  [breach] chemin recalcule : {' '.join(sol['symbols'])} -> daemons {sol['daemons']}, cases {target_path}")
+    else:
+        click(first); done.append(first); time.sleep(0.6)
+
+    # ---- clics suivants : verifies un par un
+    i = len(done)
+    while i < len(target_path):
         if stop is not None and stop.is_set():
-            return {'ok': False, 'reason': 'arret', 'clics': done}
+            return {'ok': False, 'reason': 'arret', 'clics': len(done)}
+        cell = target_path[i]
         ok = False
         for attempt in range(MAX_RETRY_CLICK + 1):
-            sx, sy = _click_cell(p['cells'][cell], p['root'], client, log)
-            ok, inf2 = _selection_registered(before, cell, log, conv)
-            if ok:
-                if inf2:
-                    before = {'n_hex': len(inf2.get('texts') or [])}
+            sx, sy = click(cell)
+            if not has_sel:
+                time.sleep(0.6); ok = True; got_cell = cell; break
+            got_cell, inf2 = _wait_selection(n_sel)
+            if got_cell is not None:
+                n_sel, _ = _sel_of(inf2); ok = True
                 break
-            log(f"  [breach] case {cell} ({sol['symbols'][i]}) non prise en compte (ecran {sx},{sy}), essai {attempt + 2}")
-            time.sleep(0.3)
+            log(f"  [breach] case {cell} ({grid[cell[0]][cell[1]]}) non prise en compte (ecran {sx},{sy}), essai {attempt + 2}")
+            time.sleep(0.25)
         if not ok:
-            return {'ok': False, 'reason': f'selection {cell} refusee', 'clics': done, 'solution': sol}
-        done += 1
-        log(f"  [breach] {i + 1}/{len(sol['path'])} : {sol['symbols'][i]} en {cell}")
+            return {'ok': False, 'reason': f'selection {cell} refusee', 'clics': len(done), 'solution': sol}
+        done.append(got_cell)
+        log(f"  [breach] {len(done)}/{len(target_path)} : {grid[got_cell[0]][got_cell[1]]} en {got_cell}")
+        if got_cell != cell:
+            # le jeu a pris une autre case (decalage) : on recorrige et on recalcule la suite depuis les cases jouees
+            ex, ey = _to_screen(p['cells'][got_cell][0], p['cells'][got_cell][1], p['root'], client)
+            delta = [sx - ex, sy - ey]
+            sol2 = solve(grid, seqs, buffer, skip=skip, prefix=done)
+            log(f"  [breach] case inattendue : decalage {delta} px, chemin recalcule -> {sol2['path'] or 'aucun daemon'}")
+            target_path = list(sol2['path']) if sol2['path'] else list(done)
+            sol = sol2 if sol2['path'] else sol
+        i = len(done)
         if inf2 and int(inf2.get('state') or 0) in (2, 3):
             break
     # fin du mini-jeu : il se termine seul quand le tampon est plein ou tous les daemons valides ; sinon on comble le tampon
@@ -328,26 +406,25 @@ def run(stop=None, log=print, dry: bool = False) -> dict:
         state = int((inf3 or {}).get('state') or 0)
         if state in (2, 3) or not inf3:
             break
-        if state == 1 and inf3.get('ok'):
-            # il reste des coups et le jeu attend : on joue une case autorisee au hasard pour remplir le tampon
-            p3 = parse(inf3)
-            if p3.get('ok') and len(p3.get('buffer_filled') or []) < buffer:
-                last = sol['path'][-1] if sol['path'] else None
-                horizontal = (len(sol['path']) % 2 == 0)
-                used = set(sol['path'])
-                cands = ([(last[0], c) for c in range(n)] if (last and horizontal) else
-                         [(r, last[1]) for r in range(n)] if last else [(0, c) for c in range(n)])
-                cands = [c for c in cands if c not in used]
-                if cands:
-                    cell = cands[0]
-                    _click_cell(p3['cells'][cell], p3['root'], client, log)
-                    sol['path'].append(cell)
-                    log(f"  [breach] coup de remplissage en {cell}")
-                    time.sleep(0.6)
-                    continue
+        if state == 1 and inf3.get('ok') and len(done) < buffer:
+            last = done[-1] if done else None
+            horizontal = (len(done) % 2 == 0)
+            used = set(done)
+            cands = ([(last[0], c) for c in range(n)] if (last and horizontal) else
+                     [(r, last[1]) for r in range(n)] if last else [(0, c) for c in range(n)])
+            cands = [c for c in cands if c not in used]
+            if cands:
+                cell = cands[0]
+                click(cell)
+                got_cell, inf2 = _wait_selection(n_sel, timeout=1.0) if has_sel else (cell, None)
+                if got_cell is not None:
+                    n_sel, _ = _sel_of(inf2) if inf2 else (n_sel, None)
+                    done.append(got_cell)
+                    log(f"  [breach] coup de remplissage en {got_cell}")
+                continue
         time.sleep(0.4)
     res = 'reussi' if state == 2 else ('echoue' if state == 3 else f'etat {state}')
-    log(f"  [breach] {res} en {time.perf_counter() - t0:.1f} s ({done} selections)")
+    log(f"  [breach] {res} en {time.perf_counter() - t0:.1f} s ({len(done)} selections)")
     # ecran de resultat : il se ferme seul ou sur une touche ; on attend que le mod reprenne (etat non 'paused')
     t2 = time.perf_counter()
     while time.perf_counter() - t2 < 8.0:
@@ -357,4 +434,4 @@ def run(stop=None, log=print, dry: bool = False) -> dict:
         time.sleep(0.3)
     else:
         kbm.tap('ESC', 0.08); time.sleep(1.0)
-    return {'ok': state == 2, 'state': state, 'clics': done, 'solution': sol, 'seconds': time.perf_counter() - t0}
+    return {'ok': state == 2, 'state': state, 'clics': len(done), 'solution': sol, 'seconds': time.perf_counter() - t0}
