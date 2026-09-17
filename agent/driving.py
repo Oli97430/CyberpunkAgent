@@ -67,7 +67,14 @@ def summon_and_board(stop=None, log=print) -> bool:
         log('  [conduite] circulation persistante : V s ecarte de la voie avant d appeler')
         motion.turn_by(90.0, timeout=1.5, stop=stop)
         kbm.hold('W'); time.sleep(1.6); kbm.release('W')
-    rv = nav._wait(nav._send({'cmd': 'vehicle_call', 'x': want}), timeout=5.0)
+    seq_v = nav._send({'cmd': 'vehicle_call', 'x': want})
+    rv = nav._wait(seq_v, timeout=5.0)
+    if rv is None:
+        # le mod ne repond pas en 5 s : souvent un menu / une scene qui suspend ses mises a jour ; il traitera l appel
+        # des la reprise (vu le 17/09 : « mod muet » puis spawn reel 20 s plus tard) -> on attend encore avant la touche
+        s_m = motion.read_state() or {}
+        log(f"  [conduite] le mod ne repond pas (menu={s_m.get('menu')}, scene={s_m.get('scene')}) : on lui laisse 8 s de plus")
+        rv = nav._wait(seq_v, timeout=8.0)
     if rv and rv.get('ok') and rv.get('spawned', True):
         log(f"  [conduite] V appelle « {rv.get('name')} » ({rv.get('vtype')}) parmi ses {rv.get('total')} vehicules")
     elif rv and rv.get('ok'):
@@ -97,7 +104,8 @@ def summon_and_board(stop=None, log=print) -> bool:
         # (pas de repli sur une voiture garee d un inconnu : il faudrait la forcer, et c est long)
         time.sleep(0.5)
     if not car:
-        log(f"  [conduite] aucun vehicule du joueur arrive en 40 s (methodes {(rv or {}).get('methodes')}, restrictions {(rv or {}).get('restrictions')}, cooldown {(rv or {}).get('vcooldown')})"); return False
+        seen = [(v.get('name'), round(v.get('d') or 0), v.get('player')) for v in ((motion.read_state() or {}).get('vehicles') or [])]
+        log(f"  [conduite] aucun vehicule du joueur arrive en 40 s (methodes {(rv or {}).get('methodes')}, restrictions {(rv or {}).get('restrictions')}, cooldown {(rv or {}).get('vcooldown')}) ; vus : {seen}"); return False
     log(f"  [conduite] vehicule « {car.get('name', '?')} » a {car['d']:.0f} m")
     t_stop = time.perf_counter()
     while time.perf_counter() - t_stop < 8.0 and (car.get('speed') or 0) > 0.5:      # il finit sa manoeuvre : on ne court pas apres

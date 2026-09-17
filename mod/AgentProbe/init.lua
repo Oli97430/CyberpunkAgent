@@ -35,6 +35,7 @@ local CMD_PERIOD = 0.25
 local cmdAcc, lastCmdSeq = 0.0, -1      -- AVANT onInit (sinon globale nil -> derniere commande rejouee au demarrage)
 local lastStateErr = nil                 -- derniere erreur du tick d etat (journalisee une fois)
 local slowT, slowLoot, slowVehicles, slowNpcs, slowTraffic = -99.0, nil, nil, nil, 0
+local playerVehRecs, playerVehRecsT = {}, -999.0   -- records (TweakDB) des vehicules de V, rafraichis toutes les 15 s
 local vehCallT = -999.0                       -- os.clock() du dernier vehicle_call : export des vehicules de V a 400 m pendant 45 s   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
@@ -1277,6 +1278,15 @@ registerForEvent('onUpdate', function(dt)
         local traffic = 0                                   -- vehicules d inconnus EN MOUVEMENT a < 30 m (voie occupee)
         if not inCombat and slowScan then
             pcall(function()
+                if os.clock() - playerVehRecsT > 15.0 then
+                    playerVehRecsT = os.clock()
+                    local okU, ul = pcall(function() return Game.GetVehicleSystem():GetPlayerUnlockedVehicles() end)
+                    if okU and type(ul) == 'table' then
+                        local set = {}
+                        for i = 1, #ul do pcall(function() set[TDBID.ToStringDEBUG(ul[i].recordID)] = true end) end
+                        playerVehRecs = set
+                    end
+                end
                 local qv = Game['TSQ_ALL;']()
                 qv.maxDistance = (os.clock() - vehCallT < 45.0) and 400.0 or 150.0   -- apres un appel, sa moto peut arriver de loin
                 qv.filterObjectByDistance = true
@@ -1298,6 +1308,8 @@ registerForEvent('onUpdate', function(dt)
                                     local rec = { x = vp.x, y = vp.y, z = vp.z, d = math.sqrt((vp.x - pos.x) ^ 2 + (vp.y - pos.y) ^ 2) }
                                     pcall(function() rec.name = GetLocalizedText(tostring(ent:GetDisplayName())) end)
                                     pcall(function() rec.player = ent:IsPlayerVehicle() end)
+                                    -- IsPlayerVehicle() repond faux pour la voiture de V garee (17/09) : on compare le record
+                                    if not rec.player then pcall(function() rec.player = (playerVehRecs[TDBID.ToStringDEBUG(ent:GetRecordID())] == true) end) end
                                     pcall(function() rec.speed = math.floor(math.abs(ent:GetCurrentSpeed()) * 10 + 0.5) / 10 end)
                                     if not rec.player and rec.d <= 30.0 and (rec.speed or 0) > 1.0 then traffic = traffic + 1 end
                                     if rec.player or rec.d <= 25.0 then list[#list + 1] = rec end   -- les voitures des inconnus : 25 m ; la sienne : 150 m
