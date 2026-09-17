@@ -1674,6 +1674,7 @@ local function computePath(player, target, avoid)
     return path, nil, partial
 end
 
+local lastEffectNames = {}                   -- noms TweakDB des effets listes par `effects` (pour effect_remove x=index)
 local lastAps = {}                           -- entites des points d acces du dernier access_points
 local lastDoors = {}                         -- entites porte/dispositif par index de la derniere liste `doors`
 local lastFastTravel = {}                    -- points de voyage rapide par index
@@ -2661,6 +2662,46 @@ local function handleCommand(player, cmd)
         resp.ok = okE
         if not okE then resp.reason = 'requete refusee : ' .. tostring(errE) end
         journal((okE and 'OK   ' or 'FAIL ') .. 'weapon_slot ' .. tostring(n) .. (okE and '' or (' : ' .. tostring(errE))))
+        return resp
+    elseif cmd.cmd == 'effects' then
+        -- DIAGNOSTIC : effets de statut appliques a V (restrictions de gameplay incluses : « Action impossible »)
+        local out, restr = {}, {}
+        lastEffectNames = {}
+        pcall(function()
+            local list = Game.GetStatusEffectSystem():GetAppliedEffects(player:GetEntityID())
+            for i = 1, #list do
+                local e = list[i]
+                local name, tags = '?', {}
+                pcall(function() name = TDBID.ToStringDEBUG(e:GetRecord():GetID()) end)
+                pcall(function()
+                    local t = e:GetRecord():GameplayTags()
+                    for j = 1, #t do tags[#tags + 1] = Game.NameToString(t[j]) end
+                end)
+                local rem = nil
+                pcall(function() rem = e:GetRemainingDuration() end)
+                out[#out + 1] = { i = i, name = name, tags = tags, remaining = rem }
+                lastEffectNames[i] = name
+            end
+        end)
+        for _, tag in ipairs({ 'NoCombat', 'NoWeapons', 'NoMovement', 'NoJump', 'NoScanning', 'NoQuickHacks', 'InScene', 'NoDriving',
+                               'NoPhone', 'PhoneCall', 'NoCameraControl', 'NoZooming', 'NoDodge', 'NoSprint', 'FistFight', 'VehicleNoSummoning',
+                               'NoCrouch', 'NoWorldInteractions', 'NoInteractions', 'Braindance', 'Restricted', 'VehicleNoInteraction', 'NoAiming' }) do
+            local ok, v = pcall(function() return StatusEffectSystem.ObjectHasTag(player, CName.new(tag)) end)
+            if ok and v == true then restr[#restr + 1] = tag end
+        end
+        local inScene = nil
+        pcall(function() inScene = Game.GetSceneSystem():GetScriptInterface():IsEntityInScene(player:GetEntityID()) end)
+        resp.ok, resp.effects, resp.restrictions, resp.inScene = true, out, restr, inScene
+        journal(string.format('OK   effects : %d effet(s), restrictions [%s], scene=%s', #out, table.concat(restr, ','), tostring(inScene)))
+        return resp
+    elseif cmd.cmd == 'effect_remove' then
+        -- retirer un effet de statut : x = index dans la derniere liste `effects`
+        local name = lastEffectNames[math.floor(tonumber(cmd.x) or -1)]
+        if not name then resp.reason = 'index inconnu (refaire effects)'; return resp end
+        local okR, errR = pcall(function() Game.GetStatusEffectSystem():RemoveStatusEffect(player:GetEntityID(), TweakDBID.new(name)) end)
+        resp.ok = okR
+        if not okR then resp.reason = tostring(errR) end
+        journal((okR and 'OK   ' or 'FAIL ') .. 'effect_remove ' .. name .. (okR and '' or (' : ' .. tostring(errR))))
         return resp
     elseif cmd.cmd == 'access_points' then
         -- POINTS D ACCES (terminaux du Breach Protocol) a < 40 m, avec leur etat pirate
