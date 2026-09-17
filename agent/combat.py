@@ -210,7 +210,9 @@ def calibrate_slots(log=print, listing_sig=None, force: bool = False) -> dict:
     if not force and now - LAST_CALIB['t'] < 600.0 and (listing_sig is None or listing_sig == LAST_CALIB['sig']):
         return LAST_CALIB['map']
     st0 = motion.read_state() or {}
-    if st0.get('combat') or st0.get('menu') or st0.get('vehicle') or st0.get('scene') or st0.get('swim') or (st0.get('hp') or 100) <= 0.5:
+    # NB : pas de condition sur `scene` (souvent vrai en exterieur, 17/09 11:40 : calibrage jamais lance)
+    if st0.get('combat') or st0.get('menu') or st0.get('vehicle') or st0.get('swim') or (st0.get('hp') or 100) <= 0.5:
+        log('  [armes] calibrage reporte (combat / menu / vehicule)')
         return LAST_CALIB['map']
     found = {}
     for k in ('1', '2', '3'):
