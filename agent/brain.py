@@ -379,8 +379,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         menu_t = time.perf_counter(); menu_esc = 0
                     elif time.perf_counter() - menu_t > 2.5 and menu_esc < 4:
                         menu_esc += 1; menu_t = time.perf_counter()
-                        _log(f'menu ouvert (marchand / inventaire / carte) : Echap ({menu_esc}/4)')
-                        kbm.release_all(); kbm.tap('ESC', 0.09)
+                        _log(f'menu ouvert (marchand / inventaire / carte) : Retour arriere puis Echap ({menu_esc}/4)')
+                        kbm.release_all(); kbm.tap('BACKSPACE', 0.09); time.sleep(0.6)      # vues d appareil (longue-vue...) : Retour arriere
+                        if (motion.read_state() or {}).get('menu'):
+                            kbm.tap('ESC', 0.09)
                         if menu_esc >= 2:
                             # un editeur (apparence, personnalisation) repond a Echap par « quitter sans sauvegarder ? » :
                             # on confirme ; sur le menu pause la meme touche = « Reprendre »
@@ -407,10 +409,15 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         scene_t = time.perf_counter(); scene_pos = (st.get('x'), st.get('y'))
                     elif time.perf_counter() - scene_t > scene_wait:
                         scene_t = time.perf_counter(); scene_pos = (st.get('x'), st.get('y'))
-                        _log(f'scene sans dialogue depuis {scene_wait:.0f} s, V immobile : il s en extrait (Echap, recul, saut)')
+                        _log(f'scene sans dialogue depuis {scene_wait:.0f} s, V immobile : il s en extrait (Retour arriere, Echap, recul, saut)')
                         scene_wait = min(300.0, scene_wait * 2)     # si ca ne marche pas, on insiste de moins en moins
-                        kbm.tap('ESC', 0.09); time.sleep(0.8)
+                        # d abord RETOUR ARRIERE : c est la touche qui quitte les vues d appareil (longue-vue, cameras, scanner) ;
+                        # Echap y ouvrirait le menu pause (Olivier, 17/09)
+                        kbm.release_all(); kbm.tap('BACKSPACE', 0.09); time.sleep(0.8)
                         s_e = motion.read_state() or {}
+                        if s_e.get('scene') and not (s_e.get('dialog') or {}).get('choices') and not s_e.get('menu'):
+                            kbm.tap('ESC', 0.09); time.sleep(0.8)
+                            s_e = motion.read_state() or {}
                         if s_e.get('menu'):
                             kbm.tap('ESC', 0.09); time.sleep(0.6)
                         kbm.hold('S'); time.sleep(1.5); kbm.release('S')
