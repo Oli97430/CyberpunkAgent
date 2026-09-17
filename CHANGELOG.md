@@ -4,6 +4,7 @@
 
 - Combat : les emplacements d arme a degainer sont relus APRES la reaffectation de l inventaire (V tapait « 2 » pour l arme a feu alors que le fusil venait de passer en 3 : 3 combats a 26 m avec une matraque, 0 coup, puis « combat sterile »).
 - Combat : plus d abandon apres 75 s sans resultat ; V charge d abord la cible (2 fois, sprint + sauts) avant de conclure.
+- Vehicule : si le jeu interdit l appel ici (VehicleNoSummoning / NoInteraction), on n attend plus 40 s ; quete assignee inaccessible 3 fois de suite : V fait une autre quete avant d y revenir.
 - Marchands : memoire persistante (vendors_skip.json) des charcudocs / marchands inutiles : rien en stock ou ne parle pas -> ecartes 7 jours ; rien vendu ni achete, ou injoignable deux fois -> 1 jour (V retournait chez Nurse et Fingers toutes les 30 min).
 - Vehicule : la reponse du mod a l appel etait perdue depuis la veille (liste de restrictions en CName non encodable en JSON -> « mod muet » a chaque appel) ; corrige.
 - Vehicule : la voiture de V est reconnue par son record TweakDB (IsPlayerVehicle repondait faux : 4 appels « sans arrivee » alors que la Galena etait a 23 m) ; si le mod ne repond pas en 5 s (menu), on attend 8 s de plus avant la touche d appel.

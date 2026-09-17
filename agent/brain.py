@@ -205,6 +205,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     same_hub, last_hub_sig = 0, None
     no_mappin_since = None
     path_failures = 0
+    focus_insist_n = 0              # « on insiste » consecutifs sur la quete assignee inaccessible
     rot_failures = 0
     swim_logged = False
     straight_tried = False
@@ -948,7 +949,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             moved = math.hypot(s2['x'] - st['x'], s2['y'] - st['y'])
                             _log(f"  ligne droite : {'ok' if rw.get('ok') else rw.get('reason')}, {moved:.0f} m parcourus")
                             if moved > 8.0:
-                                path_failures = 0
+                                path_failures = 0; focus_insist_n = 0
                                 continue
                             # toujours coince : V cherche une SORTIE (portes, invites, sondes dans 8 directions)
                             _log('ilot ferme : recherche d une sortie (portes, invites, sondes)')
@@ -958,8 +959,18 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             if re.get('ok'):
                                 path_failures = 0
                             continue
+                        if path_failures >= 5 and focus and focus_insist_n >= 3:
+                            # 3 fois de suite sans progres (17/09 : 40 min coince pres de « Parler a Johnny ») : V fait autre chose un moment
+                            focus_insist_n = 0; path_failures = 0; straight_tried = False
+                            nxt = quests.switch(q.get('hash'), log=_log)
+                            if nxt:
+                                _log(f"quete assignee inaccessible 3 fois de suite : V fait autre chose (« {nxt.get('text')} ») avant d y revenir")
+                                alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                                stats['changements_quete'] = stats.get('changements_quete', 0) + 1
+                                continue
                         if path_failures >= 5 and focus:
-                            _log('objectif inaccessible pour l instant, mais c est la quete assignee : on insiste (pause 45 s, puis vehicule / voyage rapide)')
+                            focus_insist_n += 1
+                            _log(f'objectif inaccessible pour l instant, mais c est la quete assignee : on insiste ({focus_insist_n}/3 ; pause 45 s, puis vehicule / voyage rapide)')
                             path_failures = 0; straight_tried = False
                             last_drive_t = -999.0; last_ft_t = -999.0          # debloque les tentatives de vehicule et de voyage rapide
                             t_w = time.perf_counter()
