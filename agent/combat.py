@@ -614,6 +614,10 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 elif wsync_fail >= 3:
                     if wsync_fail == 3:
                         wsync_fail = 4; log(f'  [combat] arme indisponible ici (tenue : {wt}) : combat a mains nues / avec ce qu il y a')
+                        if max_s < 600.0:
+                            # MATCH A MAINS NUES (Vaincre X, boxe) : partir avant la fin laisse le jeu en « match en cours » et bloque
+                            # les armes ensuite (« Action impossible », 17/09) : on va jusqu au bout, 10 min s il le faut
+                            max_s = 600.0; log('  [combat] match a mains nues : on va jusqu au bout (10 min max)')
                 elif mode == 'melee' and not holding_melee:
                     ok_d = draw_slot(MELEE_SLOT, True); t_wsync = now; wsync_fail = 0 if ok_d else wsync_fail + 1; log(f'  [combat] arme tenue {wt} : on degaine la melee (emplacement {MELEE_SLOT}) -> {"ok" if ok_d else "sans effet"}')
                 elif mode == 'ranged' and RANGED_SLOT and not holding_ranged:
