@@ -4,6 +4,7 @@
 
 - Combat : les emplacements d arme a degainer sont relus APRES la reaffectation de l inventaire (V tapait « 2 » pour l arme a feu alors que le fusil venait de passer en 3 : 3 combats a 26 m avec une matraque, 0 coup, puis « combat sterile »).
 - Combat : plus d abandon apres 75 s sans resultat ; V charge d abord la cible (2 fois, sprint + sauts) avant de conclure.
+- Dialogues : les choix qui ouvrent un editeur (« changer d apparence » chez le charcudoc) sont ecartes ; un menu qui resiste a 2 Echap recoit la touche de confirmation (« quitter sans sauvegarder ? »).
 - Hostile intouchable au contact (vitre, autre niveau, scene) : 5 coups sans reaction suffisent, et apres 2 echecs il est ignore 3 min meme a 1 m (34 assauts en boucle le 17/09) ; une agression = PNJ EN COMBAT (les videurs « agressifs » ne sont plus des cibles de secours).
 - Secours (17/09) : l approche ne s arrete plus pour 3 hacks et un tir (hacks d ouverture seulement a > 12 m, rafale), l engagement dure tant que V se rapproche, second assaut si l agresseur ne reagit pas, plus de boucle « trajet interrompu » a 3 Hz (cellules de tous les agresseurs marquees, une interruption par minute).
 - Mort hors combat : detectee AVANT le traitement des menus (l ecran de mort figeait l agent 11 min), rechargement par la commande du jeu (LoadLastCheckpoint) puis touche en secours ; un menu encore ouvert apres 4 Echap est signale toutes les 30 s et retente.

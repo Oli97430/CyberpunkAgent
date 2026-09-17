@@ -358,6 +358,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         menu_esc += 1; menu_t = time.perf_counter()
                         _log(f'menu ouvert (marchand / inventaire / carte) : Echap ({menu_esc}/4)')
                         kbm.release_all(); kbm.tap('ESC', 0.09)
+                        if menu_esc >= 2:
+                            # un editeur (apparence, personnalisation) repond a Echap par « quitter sans sauvegarder ? » :
+                            # on confirme ; sur le menu pause la meme touche = « Reprendre »
+                            time.sleep(0.8)
+                            if (motion.read_state() or {}).get('menu'):
+                                kbm.act('ui_confirm', 0.1); time.sleep(0.5)
+                                if (motion.read_state() or {}).get('menu'):
+                                    kbm.tap('ENTER', 0.08)
                         if st.get('scene'):
                             time.sleep(0.5); kbm.hold('S'); time.sleep(1.2); kbm.release('S')
                     elif time.perf_counter() - menu_t > 30.0:

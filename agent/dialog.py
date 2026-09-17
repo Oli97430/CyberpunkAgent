@@ -174,6 +174,10 @@ def answer_once(stop=None, log=print) -> dict | None:
     sig = hub_signature(d)
     tried = _tried.setdefault(sig, set())
     allowed = [i for i in range(len(choices)) if not inactive[i] and i not in tried]
+    # un choix qui OUVRE UN EDITEUR (apparence chez le charcudoc, personnalisation) : Echap n en sort pas sans confirmation
+    # (17/09 05:57 : 3 min bloque chez Chiyo Omoto) -> ecarte tant qu il reste autre chose
+    SCREEN_WORDS = ('apparence', 'appearance', 'changer de look', 'personnaliser', 'customize')
+    allowed = [i for i in allowed if not any(w in choices[i].lower() for w in SCREEN_WORDS)] or allowed
     if not allowed:
         allowed = [i for i in range(len(choices)) if not inactive[i]] or list(range(len(choices)))
         tried.clear()
