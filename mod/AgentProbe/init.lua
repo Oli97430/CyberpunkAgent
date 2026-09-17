@@ -2587,6 +2587,40 @@ local function handleCommand(player, cmd)
         if #did == 0 then resp.reason = 'aucune methode radio acceptee' end
         journal(string.format('OK   radio : [%s] station=%s active=%s', table.concat(did, ','), tostring(station), tostring(active)))
         return resp
+    elseif cmd.cmd == 'access_points' then
+        -- POINTS D ACCES (terminaux du Breach Protocol) a < 40 m, avec leur etat pirate
+        journal('RUN  access_points')
+        local q = Game['TSQ_ALL;']()
+        q.maxDistance = 40.0
+        q.filterObjectByDistance = true
+        pcall(function() q.testedSet = TargetingSet.Complete end)
+        local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
+        local pos = player:GetWorldPosition()
+        local out, seenEnt = {}, {}
+        if okT and parts then
+            for i = 1, #parts do
+                local comp = TS_TargetPartInfo.GetComponent(parts[i])
+                local ent = comp and comp:GetEntity() or nil
+                if ent then
+                    local okH, h = pcall(function() return ent:GetEntityID().hash end)
+                    local key = okH and tostring(h) or tostring(ent)
+                    local okA, isAp = pcall(function() return ent:IsA('AccessPoint') end)
+                    if not seenEnt[key] and okA and isAp then
+                        seenEnt[key] = true
+                        local wp = ent:GetWorldPosition()
+                        local rec = { x = wp.x, y = wp.y, z = wp.z, d = math.sqrt((wp.x - pos.x) ^ 2 + (wp.y - pos.y) ^ 2), breached = false }
+                        pcall(function() rec.name = GetLocalizedText(tostring(ent:GetDisplayName())) end)
+                        pcall(function() rec.breached = ent:GetDevicePS():IsBreached() == true end)
+                        pcall(function() rec.on = ent:GetDevicePS():IsON() end)
+                        out[#out + 1] = rec
+                    end
+                end
+            end
+        end
+        table.sort(out, function(a, b) return a.d < b.d end)
+        resp.ok, resp.points = true, out
+        journal(string.format('OK   access_points : %d point(s) d acces', #out))
+        return resp
     elseif cmd.cmd == 'doors' then
         -- PORTES / DISPOSITIFS proches (< 15 m) : pour sortir d un ilot de maillage ferme (piece, local)
         journal('RUN  doors')
@@ -2891,7 +2925,7 @@ end
 local ui = { open = false, provider = 1, key = '', model = 'llama3.2:latest', openai_model = 'gpt-4o-mini',
              anthropic_model = 'claude-haiku-4-5-20251001', minutes = 20, saved = '',
              radio = true, driving = true, rescue = true, sell = true, ripperdoc = true, buffs = true,
-             stealth = true, fasttravel = true, phone = true, sms = true, appearance = true, recipes = true, sprint = true, steal = true, courage = 3, style = 1, aggro = 2 }
+             stealth = true, fasttravel = true, phone = true, sms = true, appearance = true, recipes = true, sprint = true, steal = true, terminals = true, courage = 3, style = 1, aggro = 2 }
 local uiCourage = { 'prudent', 'equilibre', 'temeraire' }
 local uiStyle = { 'melee', 'mixte', 'distance' }
 local uiAggro = { 'defensif', 'normal', 'chasseur' }
@@ -2909,7 +2943,7 @@ local function uiLoad()
     ui.anthropic_model = d.anthropic_model or ui.anthropic_model
     ui.minutes = d.minutes or ui.minutes
     if type(d.features) == 'table' then
-        for _, k in ipairs({ 'radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'fasttravel', 'phone', 'sms', 'appearance', 'recipes', 'sprint', 'steal' }) do
+        for _, k in ipairs({ 'radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'fasttravel', 'phone', 'sms', 'appearance', 'recipes', 'sprint', 'steal', 'terminals' }) do
             if d.features[k] ~= nil then ui[k] = d.features[k] end
         end
     end
@@ -2923,7 +2957,7 @@ local function uiSave()
                 courage = uiCourage[ui.courage], style = uiStyle[ui.style], aggro = uiAggro[ui.aggro],
                 features = { radio = ui.radio, driving = ui.driving, rescue = ui.rescue, sell = ui.sell, ripperdoc = ui.ripperdoc, buffs = ui.buffs,
                              stealth = ui.stealth, fasttravel = ui.fasttravel, phone = ui.phone, sms = ui.sms, appearance = ui.appearance, recipes = ui.recipes,
-                             sprint = ui.sprint, steal = ui.steal } }
+                             sprint = ui.sprint, steal = ui.steal, terminals = ui.terminals } }
     local f = io.open('agent_config.json', 'w')
     if f then f:write(json.encode(d)); f:close(); ui.saved = 'enregistre ' .. os.date('%H:%M:%S') else ui.saved = 'echec d ecriture' end
 end
@@ -2978,6 +3012,7 @@ registerForEvent('onDraw', function()
         ui.stealth = ImGui.Checkbox('Discretion (approche accroupie, elimination furtive)', ui.stealth)
         ui.sprint = ImGui.Checkbox('Sprinter sans cesse en combat (regeneration)', ui.sprint)
         ui.steal = ImGui.Checkbox('Voler une voiture arretee si besoin ou par envie', ui.steal)
+        ui.terminals = ImGui.Checkbox('Se connecter aux points d acces (Breach Protocol)', ui.terminals)
         ui.fasttravel = ImGui.Checkbox('Voyage rapide (bornes)', ui.fasttravel)
         ui.phone = ImGui.Checkbox('Repondre aux appels', ui.phone)
         ui.sms = ImGui.Checkbox('Lire et repondre aux SMS', ui.sms)

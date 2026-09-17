@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, sms, vendor
+from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, sms, terminals, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -242,6 +242,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     inventory_done_once = False
     last_levelup_t = -999.0
     last_sell_t = -999.0
+    last_ap_scan_t = -999.0        # derniere recherche de points d acces (terminaux)
     last_phone_t = -999.0
     breach_t = None
     bd_t = None
@@ -755,6 +756,20 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         continue
                     action = 'objectif'
 
+                # 4b. TERMINAL : point d acces non pirate a portee -> V s y connecte (Breach Protocol : eddies, composants) ;
+                #     le mini-jeu ouvert est resolu par le traitement 0a2 a l iteration suivante
+                if CFG.features.get('terminals', True) and action in ('objectif', 'aborder', 'attendre') and not st.get('combat') \
+                        and not _threat_near(st) and time.perf_counter() - last_ap_scan_t > 20.0:
+                    last_ap_scan_t = time.perf_counter()
+                    ap = terminals.pick(log=_log)
+                    if ap:
+                        _log(f"terminal : point d acces « {ap.get('name')} » a {ap['d']:.0f} m : V va s y connecter")
+                        r_ap = terminals.jack_in(ap, stop=stop, log=_log)
+                        if r_ap == 'minigame':
+                            stats['terminaux'] = stats.get('terminaux', 0) + 1
+                            breach_t = None                          # pas de delai avant la resolution
+                        plan.last_t = -99.0
+                        continue
                 # 4a. environnement : objets lootables non traites a < 12 m -> on ramasse d abord
                 pending = [o for o in (st.get('loot') or []) if o['d'] < 12 and (round(o['x']), round(o['y'])) not in looted]
                 if pending and action in ('objectif', 'aborder', 'attendre'):

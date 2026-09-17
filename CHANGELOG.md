@@ -4,6 +4,7 @@
 
 - Combat : les emplacements d arme a degainer sont relus APRES la reaffectation de l inventaire (V tapait « 2 » pour l arme a feu alors que le fusil venait de passer en 3 : 3 combats a 26 m avec une matraque, 0 coup, puis « combat sterile »).
 - Combat : plus d abandon apres 75 s sans resultat ; V charge d abord la cible (2 fois, sprint + sauts) avant de conclure.
+- Terminaux (option « terminals ») : V repere les points d acces non pirates a moins de 40 m (commande access_points), s y connecte et resout le Breach Protocol ; memoire persistante terminals_skip.json (pirate 7 jours, injoignable / sans mini-jeu 1 jour).
 - Breach Protocol REUSSI le 17/09 10:06 (5 selections verifiees, 2 daemons) ; l ecran de resume est ferme par Echap apres 2,5 s au lieu d attendre 12 s.
 - Armes : les emplacements a degainer sont relus dans le JEU apres la reaffectation (equip() repondait ok sans effet : V tapait 3 pour un fusil reste en 2 et gardait sa matraque a 24 m) ; si la reaffectation est sans effet, on n insiste plus.
 - Breach Protocol (1er essai reel le 17/09 : grille et solution justes, clics a cote) : le mod signale chaque case selectionnee (OnPositionSelected) ; le 1er clic, libre, balaye des decalages ecran jusqu a une selection et apprend le decalage canevas -> ecran ; chaque clic suivant est verifie et le chemin est recalcule depuis les cases jouees si le jeu en prend une autre.
