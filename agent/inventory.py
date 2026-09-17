@@ -67,6 +67,8 @@ def sell_all(log=print) -> dict:
         return {'ok': False}
     fresh = {it.get('name'): it for it in (inv.get('items') or [])}
     for it in list(SELLABLE):
+        if not str(it.get('name') or '').strip():
+            continue                                   # objets sans nom (eclats, elements de quete) : le jeu les refuse
         cur = fresh.get(it.get('name'))
         if not cur or cur.get('equipped') or cur.get('iconic'):
             continue
@@ -233,7 +235,7 @@ def manage(log=print) -> dict:
                                        or (it.get('type') or '').startswith('Prt_')
                                        or (it.get('type') or '') == 'Gen_Misc')
                 and not it.get('iconic') and not it.get('quest') and not it.get('equipped')
-                and it['i'] not in dis_idx]
+                and str(it.get('name') or '').strip() and it['i'] not in dis_idx]
     # valeur estimee : prix du jeu s il est connu (le stat Price est souvent nul), sinon par qualite
     QVAL = {'Legendary': 2500, 'Epic': 1000, 'Rare': 400, 'Uncommon': 150, 'Common': 50}
     def _val(it):

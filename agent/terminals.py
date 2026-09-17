@@ -68,6 +68,19 @@ def jack_in(ap: dict, stop=None, log=print) -> str:
                 log(f"  [terminal] injoignable ({r.get('reason')}) : ecarte 1 jour")
                 mark(ap, f"injoignable : {r.get('reason')}", 1.0, log=log)
                 return 'failed'
+    # 1. par script (action ToggleNetrunnerDive du jeu, comme le Breach a distance) : pas d invite a chercher
+    if ap.get('i') is not None:
+        rj = nav._wait(nav._send({'cmd': 'jack_in', 'x': int(ap['i'])}), timeout=4.0)
+        log(f"  [terminal] connexion par script : {(rj or {}).get('methodes') or (rj or {}).get('reason') or 'mod muet'}")
+        t_s = time.perf_counter()
+        while time.perf_counter() - t_s < 4.0:
+            b = (motion.read_state() or {}).get('breach') or {}
+            if int(b.get('state') or 0) == 1:
+                log(f"  [terminal] connecte a « {ap.get('name')} » par script : Breach Protocol ouvert")
+                mark(ap, 'pirate', 7.0, log=log)
+                return 'minigame'
+            time.sleep(0.25)
+    # 2. a pied : face au terminal, invite « Se connecter » (balayage haut / bas : panneaux muraux)
     st = motion.read_state() or {}
     dist = math.hypot(st['x'] - ap['x'], st['y'] - ap['y']) if st.get('x') is not None else 3.0
     motion.approach_machine(ap['x'], ap['y'], dist, log, stop)

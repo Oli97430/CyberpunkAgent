@@ -1634,6 +1634,7 @@ local function computePath(player, target, avoid)
     return path, nil, partial
 end
 
+local lastAps = {}                           -- entites des points d acces du dernier access_points
 local lastDoors = {}                         -- entites porte/dispositif par index de la derniere liste `doors`
 local lastFastTravel = {}                    -- points de voyage rapide par index
 local lastContacts = {}                      -- contacts du telephone (sms_list)
@@ -2495,8 +2496,8 @@ local function handleCommand(player, cmd)
                 end
             end
         end
-        -- l exemplaire deja dans le monde (appel precedent, abandonne loin) empeche un nouveau spawn : on le retire
-        if gid ~= nil and pcall(function() vs:DespawnPlayerVehicle(gid) end) then did[#did + 1] = 'Despawn' end
+        -- (plus de Despawn prealable : apres un Despawn, SpawnPlayerVehicle repondait false a chaque fois ; le seul appel
+        --  reussi etait sans. Le jeu fait venir / teleporte lui-meme l exemplaire existant.)
         -- restrictions : tableau de CName -> chaines (un CName brut fait echouer l encodage JSON de TOUTE la reponse :
         -- « mod muet » a chaque appel de vehicule depuis le 16/09 20:52)
         pcall(function()
@@ -2597,6 +2598,7 @@ local function handleCommand(player, cmd)
         local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
         local pos = player:GetWorldPosition()
         local out, seenEnt = {}, {}
+        lastAps = {}
         if okT and parts then
             for i = 1, #parts do
                 local comp = TS_TargetPartInfo.GetComponent(parts[i])
@@ -2613,13 +2615,48 @@ local function handleCommand(player, cmd)
                         pcall(function() rec.breached = ent:GetDevicePS():IsBreached() == true end)
                         pcall(function() rec.on = ent:GetDevicePS():IsON() end)
                         out[#out + 1] = rec
+                        rec.i = #out
+                        pcall(function() lastAps[#out] = ent:GetEntityID() end)
                     end
                 end
             end
         end
-        table.sort(out, function(a, b) return a.d < b.d end)
+        table.sort(out, function(a, b) return a.d < b.d end)     -- rec.i reste l index dans lastAps
         resp.ok, resp.points = true, out
         journal(string.format('OK   access_points : %d point(s) d acces', #out))
+        return resp
+    elseif cmd.cmd == 'jack_in' then
+        -- CONNEXION A UN POINT D ACCES PAR SCRIPT : l action ToggleNetrunnerDive (celle du Breach a distance) executee
+        -- sur le DevicePS ouvre le mini-jeu sans l animation de branchement (scriptableDeviceBasePS.OnActionRemoteBreach)
+        local eid = lastAps[cmd.x or -1]
+        if not eid then resp.reason = 'index inconnu (refaire access_points)'; return resp end
+        local ent = nil
+        pcall(function() ent = Game.FindEntityByID(eid) end)
+        if not ent then resp.reason = 'point d acces decharge'; return resp end
+        journal('RUN  jack_in ' .. tostring(cmd.x))
+        local ps = nil
+        pcall(function() ps = ent:GetDevicePS() end)
+        local did = {}
+        local okE, errE = pcall(function()
+            local act = ToggleNetrunnerDive.new()
+            act:SetProperties(false, false, 1, true)
+            pcall(function() act:SetUp(ps) end)
+            pcall(function() act:SetExecutor(player) end)
+            local ok1 = pcall(function() ps:ExecutePSAction(act, player) end)
+            if ok1 then did[#did + 1] = 'ExecutePSAction(act, player)' else
+                local ok2 = pcall(function() ps:ExecutePSAction(act) end)
+                if ok2 then did[#did + 1] = 'ExecutePSAction(act)' else
+                    if pcall(function() ps:OnToggleNetrunnerDive(act) end) then did[#did + 1] = 'OnToggleNetrunnerDive' end
+                end
+            end
+        end)
+        if not okE then did[#did + 1] = 'erreur action : ' .. tostring(errE) end
+        if #did == 0 or did[1]:find('erreur') then
+            if pcall(function() ent:PerformDive(1, true) end) then did[#did + 1] = 'PerformDive' end
+        end
+        resp.ok, resp.methodes = (#did > 0), did
+        if not resp.ok then resp.reason = 'aucune methode acceptee' end
+        journal('OK   jack_in : ' .. table.concat(did, ','))
         return resp
     elseif cmd.cmd == 'doors' then
         -- PORTES / DISPOSITIFS proches (< 15 m) : pour sortir d un ilot de maillage ferme (piece, local)

@@ -230,7 +230,7 @@ def approach_machine(tx: float, ty: float, dist: float, log, stop) -> bool:
             if math.hypot(s_c['x'] - tx, s_c['y'] - ty) <= 2.5:
                 break
     turn_to(bearing_to(s_c['x'], s_c['y'], tx, ty), timeout=2.0, stop=stop)
-    for dyaw, dpitch in ((0, 150), (-25, 0), (50, 0), (-25, -250), (0, 100), (0, 150)):
+    for dyaw, dpitch in ((0, 150), (0, -300), (0, 100), (-25, 0), (50, 0), (-25, -250), (0, 100), (0, 150)):   # bas, HAUT (panneaux muraux), puis balayage
         if dyaw:
             turn_by(dyaw, timeout=1.2, stop=stop)
         if dpitch:

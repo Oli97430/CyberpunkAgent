@@ -4,6 +4,7 @@
 
 - Combat : les emplacements d arme a degainer sont relus APRES la reaffectation de l inventaire (V tapait « 2 » pour l arme a feu alors que le fusil venait de passer en 3 : 3 combats a 26 m avec une matraque, 0 coup, puis « combat sterile »).
 - Combat : plus d abandon apres 75 s sans resultat ; V charge d abord la cible (2 fois, sprint + sauts) avant de conclure.
+- Terminaux : connexion par script (action ToggleNetrunnerDive du jeu, comme le Breach a distance) avant l approche a pied ; balayage vers le haut pour les panneaux muraux. Vente : objets sans nom ignores (3 refus de suite chez chaque marchand). Vehicule : plus de Despawn avant l appel.
 - Terminaux (option « terminals ») : V repere les points d acces non pirates a moins de 40 m (commande access_points), s y connecte et resout le Breach Protocol ; memoire persistante terminals_skip.json (pirate 7 jours, injoignable / sans mini-jeu 1 jour).
 - Breach Protocol REUSSI le 17/09 10:06 (5 selections verifiees, 2 daemons) ; l ecran de resume est ferme par Echap apres 2,5 s au lieu d attendre 12 s.
 - Armes : les emplacements a degainer sont relus dans le JEU apres la reaffectation (equip() repondait ok sans effet : V tapait 3 pour un fusil reste en 2 et gardait sa matraque a 24 m) ; si la reaffectation est sans effet, on n insiste plus.
