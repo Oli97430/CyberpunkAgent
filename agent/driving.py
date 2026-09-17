@@ -219,7 +219,7 @@ def summon_and_board(stop=None, log=print) -> bool:
         time.sleep(0.5)
     if not car:
         seen = [(v.get('name'), round(v.get('d') or 0), v.get('player')) for v in ((motion.read_state() or {}).get('vehicles') or [])]
-        log(f"  [conduite] aucun vehicule du joueur arrive en 40 s (methodes {(rv or {}).get('methodes')}, restrictions {(rv or {}).get('restrictions')}, cooldown {(rv or {}).get('vcooldown')}) ; vus : {seen}"))
+        log(f"  [conduite] aucun vehicule du joueur arrive en 40 s (methodes {(rv or {}).get('methodes')}, restrictions {(rv or {}).get('restrictions')}, cooldown {(rv or {}).get('vcooldown')}) ; vus : {seen}")
         return steal_nearby(stop=stop, log=log)                  # a defaut, V vole ce qui est gare a cote
     return _board(car, stop=stop, log=log)
 
