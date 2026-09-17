@@ -536,7 +536,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             if mode == 'ranged':
                 kbm.release('W'); kbm.act_release('sprint')
                 # hacks A DISTANCE entre deux rafales : cible alternee (hack_i) pour ne pas empiler sur le meme
-                if e['d'] > 3.0 and now - t_hack > QUICKHACK_CD:
+                if e['d'] > 3.0 and gap < 8 and now - t_hack > QUICKHACK_CD:      # vise d abord (apres un sprint de biais l ecart est de 45 deg)
                     tgt = alive[hack_i % len(alive)]; hack_i += 1
                     if tgt is not e:
                         aim_at(tgt, st)

@@ -1317,7 +1317,11 @@ registerForEvent('onUpdate', function(dt)
                             end
                         end
                     end
-                    table.sort(list, function(a, b) return a.d < b.d end)
+                    table.sort(list, function(a, b)
+                        local pa, pb = a.player and 0 or 1, b.player and 0 or 1
+                        if pa ~= pb then return pa < pb end          -- les vehicules de V d abord (jamais evinces par 4 inconnus)
+                        return a.d < b.d
+                    end)
                     while #list > 4 do table.remove(list) end
                     if #list > 0 then vehicles = list end
                     slowVehicles = vehicles
@@ -1387,12 +1391,21 @@ registerForEvent('onUpdate', function(dt)
                             end
                         end
                     end
-                    table.sort(list, function(a, b)
-                        local fa, fb = (a.aggressive or a.incombat) and 0 or 1, (b.aggressive or b.incombat) and 0 or 1
-                        if fa ~= fb then return fa < fb end          -- les combattants d abord (ils ne sortent pas de la liste)
-                        return a.d < b.d
-                    end)
-                    while #list > 8 do table.remove(list) end
+                    table.sort(list, function(a, b) return a.d < b.d end)
+                    -- les 5 plus proches (PNJ de quete a cote de V) restent TOUJOURS ; les combattants plus loin completent jusqu a 8
+                    if #list > 8 then
+                        local keep = {}
+                        for i = 1, 5 do keep[#keep + 1] = list[i] end
+                        for i = 6, #list do
+                            if #keep >= 8 then break end
+                            if list[i].incombat then keep[#keep + 1] = list[i] end
+                        end
+                        for i = 6, #list do
+                            if #keep >= 8 then break end
+                            if not list[i].incombat then keep[#keep + 1] = list[i] end
+                        end
+                        list = keep
+                    end
                     if #list > 0 then npcs = list end
                     slowNpcs = npcs
                 end
@@ -2414,8 +2427,10 @@ local function handleCommand(player, cmd)
         local has = nil
         pcall(function() has = h:HasLastCheckpoint() end)
         local okR, errR = pcall(function() h:LoadLastCheckpoint(true) end)
-        if not okR then pcall(function() h:LoadLastCheckpoint(false) end) end
-        resp.ok, resp.hasCheckpoint = true, has
+        local okR2 = false
+        if not okR then okR2 = pcall(function() h:LoadLastCheckpoint(false) end) end
+        resp.ok, resp.hasCheckpoint = (okR or okR2) and (has ~= false), has
+        if not resp.ok then resp.reason = (has == false) and 'aucun checkpoint' or ('LoadLastCheckpoint : ' .. tostring(errR)) end
         journal('OK   reload : LoadLastCheckpoint (checkpoint=' .. tostring(has) .. ', err=' .. tostring(okR and '' or errR) .. ')')
         return resp
     elseif cmd.cmd == 'vehicle_call' then
@@ -2449,6 +2464,7 @@ local function handleCommand(player, cmd)
         pcall(function() cooldown = vs:IsActivePlayerVehicleOnCooldown(typeEnum) end)
         local restricted = nil
         pcall(function() restricted = VehicleSystem.IsSummoningVehiclesRestricted(GetGameInstance()) end)
+        if restricted == nil then pcall(function() restricted = Game['VehicleSystem::IsSummoningVehiclesRestricted;GameInstance'](GetGameInstance()) end) end
         -- identifiant garage (le script du jeu passe recordID par cast implicite ; en Lua on construit / resout)
         local gid = nil
         pcall(function() gid = GarageVehicleID.Resolve(TDBID.ToStringDEBUG(pick.v.recordID)) end)

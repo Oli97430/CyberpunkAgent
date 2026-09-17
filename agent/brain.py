@@ -140,14 +140,35 @@ MUTE_HOSTILES: dict = {}        # (x, y) arrondis -> instant ou un hostile a ete
 RESCUED: dict = {}              # zone d agression (x/15, y/15) -> heure du dernier secours (pas de retour pendant 5 min)
 RESCUE_INTERRUPT_M = 30.0       # une agression a moins de 30 m interrompt le trajet en cours : V s implique
 MUTE_S, MUTE_CLOSE_M = 180.0, 12.0
-MUTE_FAILS: dict = {}           # cellule -> nombre d engagements sans reaction (17/09 05:27-05:41 : 34 assauts a 1 m sur un intouchable)
+MUTE_FAILS: dict = {}           # cellule -> (nombre d engagements sans reaction, heure) ; 34 assauts a 1 m sur un intouchable le 17/09
+MUTE_CELL_M, MUTE_FAILS_S = 3.0, 600.0   # cellule de 3 m (l hostile bouge un peu) ; echecs oublies apres 10 min
+
+
+def _mute_key(e: dict) -> tuple:
+    return (round(e['x'] / MUTE_CELL_M), round(e['y'] / MUTE_CELL_M))
+
+
+def _mute_fail(e: dict, n: int = 1) -> None:
+    k = _mute_key(e)
+    c, t = MUTE_FAILS.get(k, (0, 0.0))
+    now = time.perf_counter()
+    if now - t > MUTE_FAILS_S:
+        c = 0
+    MUTE_FAILS[k] = (c + n, now)
+    MUTE_HOSTILES[k] = now
+    if len(MUTE_FAILS) > 200:                     # purge : on garde les 100 plus recents
+        for old in sorted(MUTE_FAILS, key=lambda kk: MUTE_FAILS[kk][1])[:100]:
+            MUTE_FAILS.pop(old, None); MUTE_HOSTILES.pop(old, None)
 
 
 def _muted(e: dict) -> bool:
     """Hostile ignore : declare sans reaction il y a moins de 3 min ET pas au contact (a moins de 12 m on se bat,
     sinon boucle « attaquer -> objectif -> trajet interrompu » 3 fois par seconde, vue le 16/09 20:34)."""
-    k = (round(e['x']), round(e['y']))
-    if (e.get('d') or 0.0) < MUTE_CLOSE_M and MUTE_FAILS.get(k, 0) < 2:
+    k = _mute_key(e)
+    c, t = MUTE_FAILS.get(k, (0, 0.0))
+    if time.perf_counter() - t > MUTE_FAILS_S:
+        c = 0
+    if (e.get('d') or 0.0) < MUTE_CLOSE_M and c < 2:
         return False                                # au contact on retente une fois ; au 2e echec c est un intouchable
     return time.perf_counter() - MUTE_HOSTILES.get(k, -1e9) < MUTE_S
 
@@ -377,7 +398,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 menu_t = None
                 # 0a5. SCENE sans choix de dialogue depuis 25 s (assis a un stand, conversation muette) : on en sort
                 if st.get('scene') and not (st.get('dialog') or {}).get('choices') and not (st.get('bd') or {}).get('active'):
-                    _hostile_near = bool(st.get('combat')) or any(not e.get('dead') and (e.get('d') or 99) < 30.0 for e in (st.get('enemies') or []))
+                    _hostile_near = _threat_near(st)          # meme regle que les trajets (police, autre niveau, intouchables exclus)
                     _moved = scene_pos is not None and st.get('x') is not None and math.hypot(st['x'] - scene_pos[0], st['y'] - scene_pos[1]) > 3.0
                     if scene_t is None or _moved or _hostile_near:
                         # V se deplace ou se bat : la « scene » ne le bloque pas (16/09 : chasse au cyberpsycho, 15 min
@@ -594,6 +615,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 last_sell_t = time.perf_counter() - 480.0   # nouvel essai (autre marchand) dans 2 min
                         if tr.get('ok'):
                             vendor_fail_streak = 0
+                            had_sellable = len(inventory.SELLABLE) > 0
                             sr = inventory.sell_all(log=_log)
                             _log(f"vente : {sr.get('vendus', 0)} objet(s) pour {sr.get('eddies', 0)} eddies")
                             stats['ventes'] = stats.get('ventes', 0) + sr.get('vendus', 0)
@@ -608,7 +630,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 inventory.HEALS += br['achetes']
                                 _log(f"achat : {br['achetes']} soin(s) pour {br.get('eddies', 0)} eddies")
                                 stats['achats'] = stats.get('achats', 0) + br['achetes']
-                            if not sr.get('vendus') and not br.get('achetes') and not sp.get('achats') and not rp.get('appris'):
+                            if sr.get('ok') and br.get('ok') and had_sellable and not sr.get('vendus') and not br.get('achetes') and not sp.get('achats') and not rp.get('appris'):
                                 vendor.mark_useless(vend, 'rien vendu ni achete', days=1.0, log=_log)
                         continue
 
@@ -624,9 +646,9 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             rr = vendor.ripperdoc_shop(log=_log)
                             _log(f"charcudoc : {rr.get('poses', 0)} implant(s) pose(s) pour {rr.get('eddies', 0)} eddies ({rr.get('reason') or 'ok'})")
                             stats['implants'] = stats.get('implants', 0) + rr.get('poses', 0)
-                            if not rr.get('poses'):
+                            if rr.get('useless'):
                                 # rien a poser ici (pas de stock, ne parle pas, stock illisible) : on n y revient pas de sitot
-                                vendor.mark_useless(rip, rr.get('useless') or rr.get('reason') or 'rien a poser', days=7.0 if rr.get('useless') else 1.0, log=_log)
+                                vendor.mark_useless(rip, rr['useless'], days=7.0, log=_log)
                         else:
                             _log(f"charcudoc : non atteint ({tr.get('reason')})"); vendor.mark_failed(rip, log=_log)
                         continue
@@ -818,16 +840,17 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             plan.last_t = -99.0; plan.action = 'attaquer'
                             continue
                         if not engaged and not s_now.get('combat'):
-                            _mk = (round(hostiles[0]['x']), round(hostiles[0]['y']))
-                            mute_hostiles[_mk] = time.perf_counter(); MUTE_FAILS[_mk] = MUTE_FAILS.get(_mk, 0) + 1
+                            _mute_fail(hostiles[0])
                             _log('  cible sans reaction : ignoree 3 min')
                             plan.last_t = -99.0; plan.action = 'objectif'
                             continue
                         r = combat.fight(stop=stop, log=_log)
                         stats['combats'] = stats.get('combats', 0) + 1
                         if r.get('sterile'):
+                            # intouchables (vitre, autre niveau) : ignores 3 min meme a 1 m (2 echecs d un coup)
                             for e in (motion.read_state() or {}).get('enemies') or []:
-                                mute_hostiles[(round(e['x']), round(e['y']))] = time.perf_counter()
+                                if not e.get('dead'):
+                                    _mute_fail(e, n=2)
                         if not r.get('mort'):
                             lr = combat.loot_around(stop=stop, log=_log, seen=looted)
                             _log(f"loot : {lr.get('ramasses', 0)}/{lr.get('objets', 0)} objets ramasses")
