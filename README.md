@@ -218,7 +218,7 @@ En cas de problème, joignez ces trois fichiers à votre rapport.
 ## Limites connues
 
 - **Courses de compétition** (Beat on the Brat en voiture, courses de rue) : l'autodrive ne fait pas la course.
-- **Breach Protocol** et **danse sensorielle** : résolveur et pilotage de l'éditeur intégrés depuis 0.1.1, encore en cours de validation en jeu (les cas non gérés se terminent par Échap).
+- **Breach Protocol** : résolveur validé en jeu le 17/09/2026 (points d'accès piratés par script, grilles 5×5 et 6×6 réussies). **Danse sensorielle** : pilotage de l'éditeur intégré, encore en cours de validation en jeu (les cas non gérés se terminent par Échap).
 - **Intérieurs complexes** (ascenseurs, portes verrouillées) : la sortie d'îlot fonctionne souvent, pas toujours.
 - **Zones de haut niveau** : V fuit et évite ensuite la zone, mais il peut mourir s'il est pris entre plusieurs groupes.
 - **Langue** : les mots-clés des invites sont en français. Les autres langues demandent d'adapter `DOOR_WORDS`, `NO_GRAB`, `HEAL_WORDS`, `ALCOHOL`.
