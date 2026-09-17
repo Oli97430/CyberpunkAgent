@@ -215,6 +215,10 @@ En cas de problème, joignez ces trois fichiers à votre rapport.
 
 ---
 
+## Diffuser en direct
+
+Guide pour streamer le mod sur YouTube (scènes OBS, journal en incrustation, ce qu'il ne faut jamais montrer, déroulé, FAQ du chat) : [youtube.md](youtube.md).
+
 ## Limites connues
 
 - **Courses de compétition** (Beat on the Brat en voiture, courses de rue) : l'autodrive ne fait pas la course.
