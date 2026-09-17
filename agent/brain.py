@@ -925,12 +925,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         if _approach_machine(tx, ty, dist, _log, stop):
                             stats['interactions'] += 1
                         continue
-                if dist is not None and dist > 500.0 and alt_target is None and kbm.ACTIONS.get('autodrive') and CFG.features.get('driving', True) \
+                if dist is not None and dist > 500.0 and kbm.ACTIONS.get('autodrive') and CFG.features.get('driving', True) \
                         and time.perf_counter() - last_drive_t > 240.0:
                     last_drive_t = time.perf_counter()
                     _log(f'objectif a {dist:.0f} m : V prend la voiture (autodrive)')
                     plan.note('a pris la voiture')
-                    q0 = st.get('quest') or {}
+                    # aussi vers une cible alternative (19/09 : 2 200 m a pied parce que la quete etait « alternative »)
+                    q0 = {'mx': alt_target['x'], 'my': alt_target['y']} if alt_target is not None else (st.get('quest') or {})
                     r = driving.drive_to(q0.get('mx'), q0.get('my'), stop=stop, log=_log)
                     stats['conduites'] = stats.get('conduites', 0) + 1
                     _log(f"conduite : {'arrive' if r.get('ok') else r.get('reason')}")

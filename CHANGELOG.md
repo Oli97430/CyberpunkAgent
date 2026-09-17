@@ -4,6 +4,7 @@
 
 - Combat : les emplacements d arme a degainer sont relus APRES la reaffectation de l inventaire (V tapait « 2 » pour l arme a feu alors que le fusil venait de passer en 3 : 3 combats a 26 m avec une matraque, 0 coup, puis « combat sterile »).
 - Combat : plus d abandon apres 75 s sans resultat ; V charge d abord la cible (2 fois, sprint + sauts) avant de conclure.
+- Conduite aussi vers une cible alternative (V faisait 2 200 m a pied) ; SMS : un meme dernier message n est journalise qu une fois.
 - Match a mains nues (boxe) : V va jusqu au bout (10 min max) au lieu de partir apres 3 min, ce qui laissait le jeu en « match en cours » et bloquait les armes (« Action impossible »). Mod : commandes effects / effect_remove pour diagnostiquer et lever une restriction.
 - Combat a distance (17/09 17:18 : 40 hacks, 1 tir, 0 coup) : le delai entre deux hacks court APRES le hack (8 s en mode distance), 3 hacks a l aveugle de suite arretent les hacks ; degainage verifie par categorie (melee / a feu) avec la touche en repli ; si l arme a feu ne sort pas apres 3 essais, retour au corps a corps ; pas de tir avec une arme de melee en main.
 - Vehicule : le mod exporte l etat de l appel du jeu (VehicleSummonData : en route / deja appele / echec de trajet / arrive) et la position du vehicule appele ; l agent attend selon cet etat (60 s), va au vehicule des qu il est a moins de 60 m, et renonce tout de suite sur « echec de trajet ». Touches : la zone WeaponWheel brute est lue (l arme en main n etait pas listee).

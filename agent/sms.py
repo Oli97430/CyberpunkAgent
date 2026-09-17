@@ -13,6 +13,9 @@ _last = {'t': -999.0, 'hash': None}
 PERIOD_S = 180.0
 
 
+_LOGGED: dict = {}               # contact -> dernier message deja journalise (plus de repetition toutes les 3 min)
+
+
 def check_and_reply(st: dict, log=print, force: bool = False) -> int:
     ph = st.get('phone') or {}
     now = time.perf_counter()
@@ -36,7 +39,8 @@ def check_and_reply(st: dict, log=print, force: bool = False) -> int:
         msgs = m.get('messages') or []
         choices = m.get('choices') or []
         last_txt = (msgs[-1].get('text') if msgs else '') or ''
-        if msgs:
+        if msgs and _LOGGED.get(c.get('name')) != last_txt:
+            _LOGGED[c.get('name')] = last_txt                    # le meme dernier message n est journalise qu une fois
             log(f"  [sms] « {c.get('name')} » : {len(msgs)} message(s), dernier : « {last_txt[:90]} »")
         if not choices:
             continue
