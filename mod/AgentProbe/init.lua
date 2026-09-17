@@ -2755,12 +2755,16 @@ local function handleCommand(player, cmd)
             data.slotName = CName.new('seat_front_left')
             data.mountParentEntityId = target:GetEntityID()
             data.entryAnimName = CName.new('forcedTransition')
+            -- structures = valeurs : on remplit des copies locales puis on les affecte (une affectation imbriquee serait perdue)
+            local slot = MountingSlotId.new()
+            slot.id = CName.new('seat_front_left')
+            local info = MountingInfo.new()
+            info.childId = player:GetEntityID()
+            info.parentId = target:GetEntityID()
+            info.slotId = slot
             local req = MountingRequest.new()
-            req.lowLevelMountingInfo = MountingInfo.new()
-            req.lowLevelMountingInfo.childId = player:GetEntityID()
-            req.lowLevelMountingInfo.parentId = target:GetEntityID()
-            req.lowLevelMountingInfo.slotId = MountingSlotId.new()
-            req.lowLevelMountingInfo.slotId.id = CName.new('seat_front_left')
+            req.lowLevelMountingInfo = info
+            req.preservePositionAfterMounting = false
             req.mountData = data
             Game.GetMountingFacility():Mount(req)
         end)
