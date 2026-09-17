@@ -252,7 +252,12 @@ def draw_slot(slot) -> None:
         r = nav._wait(nav._send({'cmd': 'weapon_slot', 'x': int(slot)}), timeout=0.8)
     except Exception:
         r = None
-    if not (r and r.get('ok')):
+    if r and r.get('ok'):
+        time.sleep(0.5)
+        wt0 = (motion.read_state() or {}).get('weapon') or ''
+        if wt0 in ('', 'Wea_Fists', 'None'):
+            kbm.tap(str(slot), 0.08)                      # la requete n a rien sorti : la touche en repli
+    else:
         kbm.tap(str(slot), 0.08)
 
 
@@ -402,6 +407,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     t_heal = t_gren = t_cyber = t_hack = t_dodge = t_strafe = t_jump = t_slide = t_knife = -99.0
     t_wsync = -99.0
     t_sprint = -99.0
+    wsync_fail = 0                                     # degainages sans effet (zone a mains nues, arme restreinte)
     mode = 'melee'; shots = 0
     hack_i = 0
     last_hp, last_hp_t = None, time.perf_counter()
@@ -588,10 +594,15 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 from .inventory import MELEE_TYPES as _MT
                 holding_ranged = wt.startswith('Wea_') and wt not in _MT
                 holding_melee = wt in _MT and wt != 'Wea_Fists'     # poings = rien en main
-                if mode == 'melee' and not holding_melee:
-                    draw_slot(MELEE_SLOT); t_wsync = now; log(f'  [combat] arme tenue {wt} : on degaine la melee (emplacement {MELEE_SLOT})')
+                if (mode == 'melee' and holding_melee) or (mode == 'ranged' and holding_ranged):
+                    wsync_fail = 0
+                elif wsync_fail >= 3:
+                    if wsync_fail == 3:
+                        wsync_fail = 4; log(f'  [combat] arme indisponible ici (tenue : {wt}) : combat a mains nues / avec ce qu il y a')
+                elif mode == 'melee' and not holding_melee:
+                    draw_slot(MELEE_SLOT); t_wsync = now; wsync_fail += 1; log(f'  [combat] arme tenue {wt} : on degaine la melee (emplacement {MELEE_SLOT})')
                 elif mode == 'ranged' and RANGED_SLOT and not holding_ranged:
-                    draw_slot(RANGED_SLOT); t_wsync = now; log(f'  [combat] arme tenue {wt} : on degaine l arme a feu (emplacement {RANGED_SLOT})')
+                    draw_slot(RANGED_SLOT); t_wsync = now; wsync_fail += 1; log(f'  [combat] arme tenue {wt} : on degaine l arme a feu (emplacement {RANGED_SLOT})')
             if mode == 'ranged':
                 kbm.release('W'); kbm.act_release('sprint')
                 # hacks A DISTANCE entre deux rafales : cible alternee (hack_i) pour ne pas empiler sur le meme
