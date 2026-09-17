@@ -150,12 +150,24 @@ def _muted(e: dict) -> bool:
     return time.perf_counter() - MUTE_HOSTILES.get((round(e['x']), round(e['y'])), -1e9) < MUTE_S
 
 
+RESCUE_STATE = {'last_interrupt': -9999.0}
+
+
+def _rescue_cell(a: dict) -> tuple:
+    return (round(a['x'] / 15), round(a['y'] / 15))
+
+
 def _rescue_pending(st: dict, max_d: float = RESCUE_INTERRUPT_M) -> bool:
-    """Une agression (PNJ agressif / en combat, hors police) a moins de max_d, pas encore traitee."""
+    """Une agression (PNJ agressif / en combat, hors police) a moins de max_d, pas encore traitee.
+    Au plus une interruption de trajet par minute (17/09 04:47 : boucle a 3 Hz quand le planificateur refusait)."""
     if not CFG.features.get('rescue', True):
         return False
+    now = time.perf_counter()
+    if now - RESCUE_STATE['last_interrupt'] < 60.0:
+        return False
     for a in planner.aggressors(st):
-        if (a.get('d') or 99.0) < max_d and time.perf_counter() - RESCUED.get((round(a['x'] / 15), round(a['y'] / 15)), -9999.0) > 300.0:
+        if (a.get('d') or 99.0) < max_d and now - RESCUED.get(_rescue_cell(a), -9999.0) > 300.0:
+            RESCUE_STATE['last_interrupt'] = now
             return True
     return False
 
@@ -226,11 +238,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     looted: set = set()             # objets/conteneurs deja traites (position arrondie)
     rescued: dict = RESCUED         # zone d agression -> heure (pas de retour sur la meme agression pendant 5 min)
     def _was_rescued(aggr, crimes):
-        pts = [(a['x'], a['y']) for a in aggr] + [(c['x'], c['y']) for c in crimes]
+        # traitee = TOUTES les cellules des agresseurs / marqueurs vues il y a moins de 5 min (meme regle que _rescue_pending)
+        pts = [(a['x'], a['y']) for a in aggr] + [(c['x'], c['y']) for c in crimes if c.get('x') is not None]
         if not pts:
             return True
-        k = (round(pts[0][0] / 15), round(pts[0][1] / 15))
-        return time.perf_counter() - rescued.get(k, -9999.0) < 300.0
+        return all(time.perf_counter() - rescued.get((round(x / 15), round(y / 15)), -9999.0) < 300.0 for x, y in pts)
     def _was_approached(n):
         k = (n.get('name'), round(n['x'] / 8), round(n['y'] / 8))
         return time.perf_counter() - approached.get(k, -9999.0) < 300.0
@@ -660,7 +672,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     crimes = st.get('crimes') or []
                     tgt = aggr[0] if aggr else (crimes[0] if crimes else None)
                     if tgt:
-                        k = (round(tgt['x'] / 15), round(tgt['y'] / 15)); rescued[k] = time.perf_counter()
+                        for _a in aggr + [c for c in crimes if c.get('x') is not None]:
+                            rescued[_rescue_cell(_a)] = time.perf_counter()
                         _log(f"V JOUE LES SAUVEURS : {len(aggr)} agresseur(s), a {tgt['d']:.0f} m")
                         plan.note('a secouru quelqu un')
                         if tgt['d'] > 12:
@@ -676,7 +689,22 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             aggr2 = planner.aggressors(s2)
                         if aggr2:
                             a = aggr2[0]
-                            combat.engage({'x': a['x'], 'y': a['y'], 'd': a['d'], 'sy': a.get('sy')}, stop=stop, log=_log, rescue=True)
+                            engaged = combat.engage({'x': a['x'], 'y': a['y'], 'd': a['d'], 'sy': a.get('sy')}, stop=stop, log=_log, rescue=True)
+                            s3 = motion.read_state() or {}
+                            if not engaged and not s3.get('combat'):
+                                # l agresseur n a pas reagi (ou V n est pas arrive) : second assaut sur le plus proche encore visible
+                                aggr3 = planner.aggressors(s3)
+                                if aggr3:
+                                    a3 = aggr3[0]
+                                    _log(f"  agresseur sans reaction a {a3['d']:.0f} m : second assaut")
+                                    engaged = combat.engage({'x': a3['x'], 'y': a3['y'], 'd': a3['d'], 'sy': a3.get('sy')}, stop=stop, log=_log, rescue=True, max_s=15.0)
+                                    for _a in aggr3:
+                                        rescued[_rescue_cell(_a)] = time.perf_counter()
+                            s3 = motion.read_state() or {}
+                            if not engaged and not s3.get('combat'):
+                                _log('  les agresseurs ne reagissent pas : V passe son chemin (zone ignoree 5 min)')
+                                plan.last_t = -99.0
+                                continue
                             r = combat.fight(stop=stop, log=_log)
                             stats['combats'] = stats.get('combats', 0) + 1
                             stats['sauvetages'] = stats.get('sauvetages', 0) + 1

@@ -244,13 +244,19 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
     last_pos = {'x': target.get('x'), 'y': target.get('y')}
     struck = 0
     hacks_done, t_hack0 = 0, -99.0
+    max_hacks = 1 if rescue else 2                      # en secours l agresseur se bat deja : un hack, puis on FONCE
+    best_d, t_best = d_init, t0                         # progression : tant que V se rapproche, on ne renonce pas
     if stealth:
         kbm.act('crouch', 0.1); crouched = True; time.sleep(0.3)
         log('  [combat] approche en discretion (accroupi)')
     elif d_init > STEALTH_MAX_M:
         log(f"  [combat] cible a {d_init:.0f} m : V y va en courant")
     try:
-        while time.perf_counter() - t0 < max_s:
+        while True:
+            _now = time.perf_counter()
+            if _now - t0 > max_s and (_now - t_best > 5.0 or _now - t0 > 3.0 * max_s):
+                log(f"  [combat] engagement expire ({_now - t0:.0f} s, cible a {LAST_ENGAGE['d1'] or 0:.0f} m)")
+                break
             if stop is not None and stop.is_set():
                 return False
             st = motion.read_state(seq, timeout=0.3)
@@ -285,26 +291,28 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
                     return False
             e = alive[0]
             LAST_ENGAGE['d1'] = e['d']
+            if e['d'] < best_d - 1.0:
+                best_d, t_best = e['d'], time.perf_counter()
             gap = aim_at(e, st)
             # discretion : on s accroupit seulement en arrivant a portee (< 12 m), jamais pour un secours
             if stealth is False and _C3.features.get('stealth', True) and not rescue and not crouched and e['d'] <= STEALTH_MAX_M and d_init > STEALTH_MAX_M and not st.get('swim'):
                 kbm.act_release('sprint'); kbm.act('crouch', 0.1); crouched = True; stealth = True; time.sleep(0.2)
                 log('  [combat] a portee : approche en discretion (accroupi)')
             # HACKS D OUVERTURE : avant le contact, V pirate a distance jusqu a 3 hostiles differents (RAM permettant)
-            if hacks_done < 3 and e['d'] > 6.0 and gap < 8 and time.perf_counter() - t0 > 1.0 and time.perf_counter() - t_hack0 > 2.5:
+            if hacks_done < max_hacks and e['d'] > 12.0 and gap < 8 and time.perf_counter() - t0 > 1.0 and time.perf_counter() - t_hack0 > 2.5:
                 vis = [x for x in (alive if len(alive) > 1 else [e])]
                 tgt = vis[hacks_done % len(vis)]
                 if tgt is not e:
                     aim_at(tgt, st)
                 title = quickhack_best(log=log)
                 hacks_done += 1; hacked = True; t_hack0 = time.perf_counter(); seq = None
-                log(f"  [combat] hack d ouverture « {title or 'par defaut'} » sur cible a {tgt['d']:.0f} m ({hacks_done}/3)")
+                log(f"  [combat] hack d ouverture « {title or 'par defaut'} » sur cible a {tgt['d']:.0f} m ({hacks_done}/{max_hacks})")
                 continue
             # DECLENCHER le combat : a distance, quelques tirs alignes (style mixte / distance) ; au contact, un coup
-            if RANGED_SLOT and _C3.style != 'melee' and 5.0 < e['d'] < RANGED_MAX_M and gap < 6 and struck < 3 and time.perf_counter() - t0 > 1.0:
+            if RANGED_SLOT and _C3.style != 'melee' and 12.0 < e['d'] < RANGED_MAX_M and gap < 6 and struck < 2 and time.perf_counter() - t0 > 1.0:
                 kbm.release('W'); kbm.act_release('sprint')
                 _ensure_weapon(RANGED_SLOT, melee=False)
-                kbm.mouse('right', True); time.sleep(0.2); kbm.mouse_tap('left', 0.12); kbm.mouse('right', False)
+                kbm.mouse('right', True); time.sleep(0.2); kbm.mouse_tap('left', 0.35); kbm.mouse('right', False)   # rafale : un tir isole a 30 m rate
                 struck += 1; seq = None
                 if struck == 1: log(f"  [combat] ouverture du feu a {e['d']:.0f} m")
                 continue
