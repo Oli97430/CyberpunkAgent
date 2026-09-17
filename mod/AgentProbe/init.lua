@@ -934,6 +934,26 @@ registerForEvent('onUpdate', function(dt)
         local isDead = false
         pcall(function() isDead = player:IsDead() == true end)
         local playerLevel = nil
+        -- APPEL DE VEHICULE : etat et vehicule appele (blackboard VehicleSummonData), position et distance
+        local summon, summonHash = nil, nil
+        pcall(function()
+            local sd = GetAllBlackboardDefs().VehicleSummonData
+            local sb = Game.GetBlackboardSystem():Get(sd)
+            local stt = sb:GetUint(sd.SummonState)
+            summon = { state = tonumber(stt) or 0 }
+            local eid = sb:GetEntityID(sd.SummonedVehicleEntityID)
+            if eid and EntityID.IsDefined(eid) then
+                summonHash = eid.hash
+                local ent = Game.FindEntityByID(eid)
+                if ent then
+                    local p = ent:GetWorldPosition()
+                    summon.x, summon.y, summon.z = p.x, p.y, p.z
+                    summon.d = math.sqrt((p.x - pos.x) ^ 2 + (p.y - pos.y) ^ 2)
+                    pcall(function() summon.name = GetLocalizedText(tostring(ent:GetDisplayName())) end)
+                    pcall(function() summon.speed = math.floor(math.abs(ent:GetCurrentSpeed()) * 10 + 0.5) / 10 end)
+                end
+            end
+        end)
         pcall(function() playerLevel = Game.GetStatsSystem():GetStatValue(id, gamedataStatType.Level) end)
         -- NAGE : V dans l eau (IsSwimming) et oxygene restant (plongee) : ne jamais se noyer
         local swim, oxygen = nil, nil
@@ -1340,6 +1360,7 @@ registerForEvent('onUpdate', function(dt)
                                     pcall(function() rec.player = ent:IsPlayerVehicle() end)
                                     -- IsPlayerVehicle() repond faux pour la voiture de V garee (17/09) : on compare le record
                                     if not rec.player then pcall(function() rec.player = (playerVehRecs[TDBID.ToStringDEBUG(ent:GetRecordID())] == true) end) end
+                                    if not rec.player and summonHash ~= nil then pcall(function() rec.player = (ent:GetEntityID().hash == summonHash) end) end
                                     pcall(function() rec.speed = math.floor(math.abs(ent:GetCurrentSpeed()) * 10 + 0.5) / 10 end)
                                     if not rec.player and rec.d <= 30.0 and (rec.speed or 0) > 1.0 then traffic = traffic + 1 end
                                     if rec.player or rec.d <= 25.0 then list[#list + 1] = rec end   -- les voitures des inconnus : 25 m ; la sienne : 150 m
@@ -1533,7 +1554,7 @@ registerForEvent('onUpdate', function(dt)
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
                  hp = hp, dead = isDead, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
-                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
+                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, summon = summon, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
                  enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, ftLoading = ftLoading, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)
@@ -1783,7 +1804,9 @@ local function handleCommand(player, cmd)
             local hk = {}
             for n = 1, 3 do
                 local rec = { key = n }
-                local okW, wid = pcall(function() return edata:GetWeaponSlotItem(n) end)
+                -- zone WeaponWheel brute : GetWeaponSlotItem renvoie None pour l arme deja en main (bascule = rengainer)
+                local okW, wid = pcall(function() return edata:GetItemInEquipSlot(gamedataEquipmentArea.WeaponWheel, n - 1) end)
+                if not (okW and wid and ItemID.IsValid(wid)) then okW, wid = pcall(function() return edata:GetWeaponSlotItem(n) end) end
                 if okW and wid and ItemID.IsValid(wid) then
                     pcall(function() rec.name = GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(wid.id):DisplayName()) end)
                     pcall(function() rec.type = tostring(TweakDBInterface.GetItemRecord(wid.id):ItemType():Type()):gsub('gamedataItemType : ', ''):gsub(' %(%d+%)', '') end)

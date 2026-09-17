@@ -207,19 +207,32 @@ def summon_and_board(stop=None, log=print) -> bool:
     # on ira le rejoindre par le maillage
     car = None
     t0 = time.perf_counter()
-    while time.perf_counter() - t0 < 40.0:
+    SUMMON = {0: 'inactif', 1: 'en route', 2: 'deja appele', 3: 'ECHEC de trajet', 4: 'arrive'}
+    last_log, last_state = -99.0, None
+    while time.perf_counter() - t0 < 60.0:
         if stop is not None and stop.is_set():
             return False
         s2 = motion.read_state() or {}
+        sm = s2.get('summon') or {}
+        s_state = int(sm.get('state') or 0)
+        if s_state != last_state or time.perf_counter() - last_log > 10.0:
+            last_state, last_log = s_state, time.perf_counter()
+            log(f"  [conduite] appel : {SUMMON.get(s_state, s_state)}" + (f", « {sm.get('name')} » a {float(sm.get('d')):.0f} m" if sm.get('d') is not None else ''))
+        if s_state == 3:
+            log('  [conduite] le jeu ne trouve pas de trajet pour le vehicule : on fait sans'); break
         vs = s2.get('vehicles') or []
         mine = [v for v in vs if v.get('player')]
-        if mine:
+        if sm.get('x') is not None and (s_state == 4 or (sm.get('d') or 999) <= 60.0):
+            car = {'name': sm.get('name') or 'vehicule', 'x': sm['x'], 'y': sm['y'], 'z': sm.get('z'), 'd': float(sm.get('d') or 0), 'player': True, 'speed': sm.get('speed') or 0}
+            break
+        if mine and (mine[0].get('d') or 999) <= 60.0 and s_state != 1:
             car = mine[0]; break
-        # (pas de repli sur une voiture garee d un inconnu : il faudrait la forcer, et c est long)
+        if s_state == 0 and time.perf_counter() - t0 > 40.0:
+            break                                   # rien ne se passe : on ne s eternise pas
         time.sleep(0.5)
     if not car:
         seen = [(v.get('name'), round(v.get('d') or 0), v.get('player')) for v in ((motion.read_state() or {}).get('vehicles') or [])]
-        log(f"  [conduite] aucun vehicule du joueur arrive en 40 s (methodes {(rv or {}).get('methodes')}, restrictions {(rv or {}).get('restrictions')}, cooldown {(rv or {}).get('vcooldown')}) ; vus : {seen}")
+        log(f"  [conduite] aucun vehicule du joueur arrive en 60 s (methodes {(rv or {}).get('methodes')}, restrictions {(rv or {}).get('restrictions')}, cooldown {(rv or {}).get('vcooldown')}) ; vus : {seen}")
         return steal_nearby(stop=stop, log=log)                  # a defaut, V vole ce qui est gare a cote
     return _board(car, stop=stop, log=log)
 
