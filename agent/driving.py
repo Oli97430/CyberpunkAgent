@@ -75,6 +75,11 @@ def summon_and_board(stop=None, log=print) -> bool:
         s_m = motion.read_state() or {}
         log(f"  [conduite] le mod ne repond pas (menu={s_m.get('menu')}, scene={s_m.get('scene')}) : on lui laisse 8 s de plus")
         rv = nav._wait(seq_v, timeout=8.0)
+    rs = sorted({str(r) for r in ((rv or {}).get('restrictions') or [])})
+    if any(('NoSummon' in r) or ('NoInteraction' in r) for r in rs):
+        # le jeu interdit l appel ici (zone / etape de quete) : inutile d attendre 40 s, on passe au voyage rapide
+        log(f"  [conduite] appel de vehicule interdit ici par le jeu ({', '.join(rs)}) : on n attend pas")
+        return False
     if rv and rv.get('ok') and rv.get('spawned', True):
         log(f"  [conduite] V appelle « {rv.get('name')} » ({rv.get('vtype')}) parmi ses {rv.get('total')} vehicules")
     elif rv and rv.get('ok'):
