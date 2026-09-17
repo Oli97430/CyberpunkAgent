@@ -2703,6 +2703,71 @@ local function handleCommand(player, cmd)
         if not okR then resp.reason = tostring(errR) end
         journal((okR and 'OK   ' or 'FAIL ') .. 'effect_remove ' .. name .. (okR and '' or (' : ' .. tostring(errR))))
         return resp
+    elseif cmd.cmd == 'mount' then
+        -- MONTER dans un vehicule PAR SCRIPT (MountingFacility) : le vehicule appele (VehicleSummonData) s il est a < 12 m,
+        -- sinon le vehicule de V le plus proche a < 8 m. Siege conducteur. Evite l invite « Enfourcher » capricieuse.
+        journal('RUN  mount')
+        local pos = player:GetWorldPosition()
+        local target, how = nil, ''
+        pcall(function()
+            local sd = GetAllBlackboardDefs().VehicleSummonData
+            local eid = Game.GetBlackboardSystem():Get(sd):GetEntityID(sd.SummonedVehicleEntityID)
+            if eid and EntityID.IsDefined(eid) then
+                local ent = Game.FindEntityByID(eid)
+                if ent then
+                    local p = ent:GetWorldPosition()
+                    if math.sqrt((p.x - pos.x) ^ 2 + (p.y - pos.y) ^ 2) <= 12.0 then target, how = ent, 'appele' end
+                end
+            end
+        end)
+        if not target then
+            pcall(function()
+                local q = Game['TSQ_ALL;']()
+                q.maxDistance = 8.0
+                q.filterObjectByDistance = true
+                pcall(function() q.testedSet = TargetingSet.Complete end)
+                local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
+                local best, bestD = nil, 1e9
+                if okT and parts then
+                    for i = 1, #parts do
+                        local comp = TS_TargetPartInfo.GetComponent(parts[i])
+                        local ent = comp and comp:GetEntity() or nil
+                        if ent then
+                            local okV, isV = pcall(function() return ent:IsA('vehicleBaseObject') end)
+                            if okV and isV then
+                                local p = ent:GetWorldPosition()
+                                local d = math.sqrt((p.x - pos.x) ^ 2 + (p.y - pos.y) ^ 2)
+                                local mine = false
+                                pcall(function() mine = ent:IsPlayerVehicle() end)
+                                if not mine then pcall(function() mine = (playerVehRecs[TDBID.ToStringDEBUG(ent:GetRecordID())] == true) end) end
+                                if d < bestD and (mine or (cmd.x == 1)) then best, bestD = ent, d end   -- x = 1 : n importe quel vehicule (vol)
+                            end
+                        end
+                    end
+                end
+                if best then target, how = best, 'proche' end
+            end)
+        end
+        if not target then resp.reason = 'aucun vehicule a portee'; journal('FAIL mount : ' .. resp.reason); return resp end
+        local okM, errM = pcall(function()
+            local data = MountEventData.new()
+            data.isInstant = false
+            data.slotName = CName.new('seat_front_left')
+            data.mountParentEntityId = target:GetEntityID()
+            data.entryAnimName = CName.new('forcedTransition')
+            local req = MountingRequest.new()
+            req.lowLevelMountingInfo = MountingInfo.new()
+            req.lowLevelMountingInfo.childId = player:GetEntityID()
+            req.lowLevelMountingInfo.parentId = target:GetEntityID()
+            req.lowLevelMountingInfo.slotId = MountingSlotId.new()
+            req.lowLevelMountingInfo.slotId.id = CName.new('seat_front_left')
+            req.mountData = data
+            Game.GetMountingFacility():Mount(req)
+        end)
+        resp.ok, resp.how = okM, how
+        if not okM then resp.reason = 'Mount : ' .. tostring(errM) end
+        journal((okM and 'OK   ' or 'FAIL ') .. 'mount (' .. how .. ')' .. (okM and '' or (' : ' .. tostring(errM))))
+        return resp
     elseif cmd.cmd == 'access_points' then
         -- POINTS D ACCES (terminaux du Breach Protocol) a < 40 m, avec leur etat pirate
         journal('RUN  access_points')

@@ -73,8 +73,26 @@ def steal_nearby(stop=None, log=print, max_d: float = 30.0) -> bool:
     return _board(car, stop=stop, log=log, steal=True)
 
 
+def _mount_script(log=print, any_vehicle: bool = False) -> bool:
+    """Monte par script (commande mount du mod, MountingFacility). Vrai si V est en vehicule dans les 3 s."""
+    r = nav._wait(nav._send({'cmd': 'mount', 'x': 1 if any_vehicle else 0}), timeout=3.0)
+    if not (r and r.get('ok')):
+        log(f"  [conduite] montee par script refusee : {(r or {}).get('reason', 'mod muet')}")
+        return False
+    t = time.perf_counter()
+    while time.perf_counter() - t < 3.0:
+        if (motion.read_state() or {}).get('vehicle'):
+            time.sleep(2.0); log(f"  [conduite] V est au volant (montee par script, vehicule {r.get('how')})"); return True
+        time.sleep(0.2)
+    return False
+
+
 def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
-    """Rejoint le vehicule (maillage puis ligne droite) et monte par poses (F ; F maintenu pour un vol)."""
+    """Rejoint le vehicule (maillage puis ligne droite) et monte : par script d abord (MountingFacility), puis par
+    poses (F ; F maintenu pour un vol) si le script echoue."""
+    sm = (motion.read_state() or {}).get('summon') or {}
+    if sm.get('x') is not None and math.hypot(sm['x'] - car['x'], sm['y'] - car['y']) < 25.0:
+        car = dict(car, x=sm['x'], y=sm['y'], z=sm.get('z', car.get('z')), d=float(sm.get('d') or car.get('d') or 0))   # position VIVE du vehicule appele
     log(f"  [conduite] vehicule « {car.get('name', '?')} » a {car['d']:.0f} m")
     t_stop = time.perf_counter()
     while time.perf_counter() - t_stop < 8.0 and (car.get('speed') or 0) > 0.5:      # il finit sa manoeuvre : on ne court pas apres
@@ -94,6 +112,10 @@ def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
                 motion.ARRIVE_M = old
         if not r.get('ok'):
             log(f"  [conduite] marche vers le vehicule : {r.get('reason')} (on tente les poses quand meme)")
+    # d abord PAR SCRIPT (le siege conducteur, sans invite) : c est le plus fiable
+    s_pre = motion.read_state() or {}
+    if s_pre.get('x') is not None and math.hypot(s_pre['x'] - car['x'], s_pre['y'] - car['y']) <= 8.0 and _mount_script(log=log, any_vehicle=steal):
+        return True
     # Embarquement par POSES : face au centre du vehicule, regard en bas (la selle d une moto est
     # ~0,8 m sous les yeux a 1,5 m), E a chaque pose. Le blackboard `interact` et `lookat` ne sont
     # pas fiables a cette distance, donc on ne s y fie pas : seul `vehicle` fait foi.
@@ -132,6 +154,8 @@ def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
                 log(f"  [conduite] V est au volant (pose {k + 1} : yaw {dyaw:+d}, inclinaison {pitch} deg, d={d:.1f} m)")
                 return True
     look_smooth(0, -2400); time.sleep(0.1); look_smooth(0, 1900)   # regard a peu pres a l horizon
+    if _mount_script(log=log, any_vehicle=steal):                    # dernier recours : encore le script
+        return True
     log('  [conduite] aucune invite pour monter'); return False
 
 

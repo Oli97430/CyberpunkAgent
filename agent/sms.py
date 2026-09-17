@@ -14,6 +14,7 @@ PERIOD_S = 180.0
 
 
 _LOGGED: dict = {}               # contact -> dernier message deja journalise (plus de repetition toutes les 3 min)
+_REFUSED: set = set()            # contacts dont la reponse est refusee par le jeu (ChangeEntryState) : plus d essai
 
 
 def check_and_reply(st: dict, log=print, force: bool = False) -> int:
@@ -42,7 +43,7 @@ def check_and_reply(st: dict, log=print, force: bool = False) -> int:
         if msgs and _LOGGED.get(c.get('name')) != last_txt:
             _LOGGED[c.get('name')] = last_txt                    # le meme dernier message n est journalise qu une fois
             log(f"  [sms] « {c.get('name')} » : {len(msgs)} message(s), dernier : « {last_txt[:90]} »")
-        if not choices:
+        if not choices or c.get('name') in _REFUSED:
             continue
         from . import dialog
         texts = [ch.get('text') or '?' for ch in choices]
@@ -55,5 +56,6 @@ def check_and_reply(st: dict, log=print, force: bool = False) -> int:
             log(f"  [sms] V repond a « {c.get('name')} » : « {texts[k][:90]} »")
             time.sleep(1.0)
         else:
-            log(f"  [sms] reponse refusee : {(rr or {}).get('reason')}")
+            _REFUSED.add(c.get('name'))                         # le jeu refuse : on n insiste plus ce contact-ci
+            log(f"  [sms] reponse refusee a « {c.get('name')} » : {(rr or {}).get('reason')} (on n insiste plus)")
     return replied
