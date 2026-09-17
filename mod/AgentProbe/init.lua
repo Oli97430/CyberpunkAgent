@@ -2460,7 +2460,16 @@ local function handleCommand(player, cmd)
         if toggled then did[#did + 1] = 'TogglePlayerActiveVehicle' end
         -- l exemplaire deja dans le monde (appel precedent, abandonne loin) empeche un nouveau spawn : on le retire
         if gid ~= nil and pcall(function() vs:DespawnPlayerVehicle(gid) end) then did[#did + 1] = 'Despawn' end
-        pcall(function() resp.restrictions = vs:GetVehicleRestrictions() end)
+        -- restrictions : tableau de CName -> chaines (un CName brut fait echouer l encodage JSON de TOUTE la reponse :
+        -- « mod muet » a chaque appel de vehicule depuis le 16/09 20:52)
+        pcall(function()
+            local rl, out = vs:GetVehicleRestrictions(), {}
+            for i = 1, #rl do
+                local ok1, s1 = pcall(function() return Game.NameToString(rl[i]) end)
+                out[#out + 1] = ok1 and s1 or tostring(rl[i])
+            end
+            resp.restrictions = out
+        end)
         pcall(function() resp.vcooldown = vs:IsPlayerVehicleOnCooldown(typeEnum, pick.v.recordID) end)
         vehCallT = os.clock()
         local spawned = false
