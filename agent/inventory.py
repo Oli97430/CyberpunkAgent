@@ -169,11 +169,21 @@ def manage(log=print) -> dict:
         combat.RANGED_SLOT = '3'
     if equipped:
         log(f"  [inventaire] apres reaffectation : melee au {combat.MELEE_SLOT}" + (f", distance au {combat.RANGED_SLOT}" if combat.RANGED_SLOT else ', pas d arme a feu'))
-    # verite des TOUCHES (le listing ne correspond pas aux touches 1/2/3) : calibrage empirique hors combat
-    try:
-        combat.calibrate_slots(log=log, listing_sig=tuple(sorted((k, v) for k, v in final.items())))
-    except Exception as e:
-        log(f'  [armes] calibrage impossible : {e}')
+    # VERITE DES TOUCHES : le mod dit ce que chaque touche 1/2/3 degaine vraiment (GetWeaponSlotItem) ; a defaut,
+    # calibrage empirique par les touches
+    hk = [h for h in (inv.get('hotkeys') or []) if h.get('type')]
+    if hk:
+        hm = [h for h in hk if h['type'] in MELEE_TYPES and h['type'] != 'Wea_Fists']
+        hr = [h for h in hk if h['type'].startswith('Wea_') and h['type'] not in MELEE_TYPES]
+        if hm:
+            combat.MELEE_SLOT = str(max(hm, key=melee_score)['key'])
+        combat.RANGED_SLOT = str(max(hr, key=lambda h: h.get('dps') or 0)['key']) if hr else None
+        log('  [armes] touches : ' + ', '.join(f"{h['key']}={h.get('name') or h['type']}" for h in hk) + f' -> melee {combat.MELEE_SLOT}, distance {combat.RANGED_SLOT}')
+    else:
+        try:
+            combat.calibrate_slots(log=log, listing_sig=tuple(sorted((k, v) for k, v in final.items())))
+        except Exception as e:
+            log(f'  [armes] calibrage impossible : {e}')
     top_idx ={it['i'] for it in melee[:2]} | ({ranged[0]['i']} if ranged else set())
 
     # 1b. vetements : dans chaque emplacement (tete, visage, torse int/ext, jambes, pieds), le meilleur

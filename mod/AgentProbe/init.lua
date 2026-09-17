@@ -1758,6 +1758,22 @@ local function handleCommand(player, cmd)
             end
             resp.slots = slots
         end)
+        -- TOUCHES 1/2/3 : ce que chaque touche degaine VRAIMENT (GetWeaponSlotItem, zone WeaponWheel) ; la liste `slots`
+        -- ci-dessus (zone Weapon) n est pas dans le meme ordre (17/09 : V degainait une matraque a 24 m)
+        pcall(function()
+            local hk = {}
+            for n = 1, 3 do
+                local rec = { key = n }
+                local okW, wid = pcall(function() return edata:GetWeaponSlotItem(n) end)
+                if okW and wid and ItemID.IsValid(wid) then
+                    pcall(function() rec.name = GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(wid.id):DisplayName()) end)
+                    pcall(function() rec.type = tostring(TweakDBInterface.GetItemRecord(wid.id):ItemType():Type()):gsub('gamedataItemType : ', ''):gsub(' %(%d+%)', '') end)
+                    pcall(function() rec.dps = ts:GetItemData(player, wid):GetStatValueByType(gamedataStatType.EffectiveDPS) end)
+                end
+                hk[#hk + 1] = rec
+            end
+            resp.hotkeys = hk
+        end)
         pcall(function()
             local worn = {}
             local wornIds = {}
@@ -2587,6 +2603,22 @@ local function handleCommand(player, cmd)
         resp.ok, resp.station, resp.active, resp.methodes = (#did > 0), station, active, did
         if #did == 0 then resp.reason = 'aucune methode radio acceptee' end
         journal(string.format('OK   radio : [%s] station=%s active=%s', table.concat(did, ','), tostring(station), tostring(active)))
+        return resp
+    elseif cmd.cmd == 'weapon_slot' then
+        -- DEGAINER l arme de la touche x (1..3 ; 0 = rengainer) par la requete du jeu, le chemin exact des touches
+        -- (defaultTransition.SendEquipmentSystemWeaponManipulationRequest) : sans clavier, sans dependre du focus
+        local n = math.floor(tonumber(cmd.x) or 0)
+        local names = { [0] = 'UnequipWeapon', [1] = 'RequestWeaponSlot1', [2] = 'RequestWeaponSlot2', [3] = 'RequestWeaponSlot3' }
+        if not names[n] then resp.reason = 'touche inconnue'; return resp end
+        local okE, errE = pcall(function()
+            local req = EquipmentSystemWeaponManipulationRequest.new()
+            req.owner = player
+            req.requestType = EquipmentManipulationAction[names[n]]
+            Game.GetScriptableSystemsContainer():Get('EquipmentSystem'):QueueRequest(req)
+        end)
+        resp.ok = okE
+        if not okE then resp.reason = 'requete refusee : ' .. tostring(errE) end
+        journal((okE and 'OK   ' or 'FAIL ') .. 'weapon_slot ' .. tostring(n) .. (okE and '' or (' : ' .. tostring(errE))))
         return resp
     elseif cmd.cmd == 'access_points' then
         -- POINTS D ACCES (terminaux du Breach Protocol) a < 40 m, avec leur etat pirate

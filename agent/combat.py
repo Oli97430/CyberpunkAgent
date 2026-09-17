@@ -17,7 +17,7 @@ import math
 import random
 import time
 
-from . import input_kbm as kbm, motion
+from . import input_kbm as kbm, motion, nav
 
 HEAL_BELOW, HEAL_CD = 45.0, 5.0
 RETREAT_HP, RETREAT_PRESSURE, RETREAT_S = 35.0, 2, 2.5
@@ -242,6 +242,20 @@ def calibrate_slots(log=print, listing_sig=None, force: bool = False) -> dict:
     return found
 
 
+def draw_slot(slot) -> None:
+    """Degaine l arme de la touche `slot` : d abord par la requete du jeu (mod, commande weapon_slot : le chemin exact des
+    touches, sans clavier ni focus), la touche en repli si le mod ne repond pas."""
+    if not slot:
+        return
+    r = None
+    try:
+        r = nav._wait(nav._send({'cmd': 'weapon_slot', 'x': int(slot)}), timeout=0.8)
+    except Exception:
+        r = None
+    if not (r and r.get('ok')):
+        kbm.tap(str(slot), 0.08)
+
+
 def _ensure_weapon(slot, melee: bool) -> None:
     """Degaine l arme de l emplacement demande SEULEMENT si elle n est pas deja en main : la touche est une
     bascule, un appui de trop RENGAINE (engage() puis fight() appuyaient tous les deux). Poings = rien en main."""
@@ -253,7 +267,7 @@ def _ensure_weapon(slot, melee: bool) -> None:
     if (melee and holding_melee) or (not melee and holding_ranged):
         return
     if slot:
-        kbm.tap(slot, 0.08); time.sleep(0.35)
+        draw_slot(slot); time.sleep(0.35)
 
 
 # ---- engagement (avant que le jeu ne passe en combat) -----------------------------------
@@ -447,7 +461,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 sterile_charges += 1; sterile_t = now
                 log(f"  [combat] combat sterile depuis 40 s : V charge la cible a {alive[0]['d']:.0f} m ({sterile_charges}/2)")
                 if mode == 'ranged':
-                    kbm.tap(MELEE_SLOT, 0.08); mode = 'melee'; time.sleep(0.3)
+                    draw_slot(MELEE_SLOT); mode = 'melee'; time.sleep(0.3)
                 t_ch, t_j = time.perf_counter(), -99.0
                 while time.perf_counter() - t_ch < 8.0 and not (stop is not None and stop.is_set()):
                     s_ch = motion.read_state() or st
@@ -562,10 +576,10 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 rmin, rback = RANGED_MIN_M, RANGED_BACK_M  # melee : arme a feu seulement loin / en hauteur
             want_ranged = RANGED_SLOT is not None and (high or rmin < e['d'] < RANGED_MAX_M)
             if want_ranged and mode != 'ranged':
-                kbm.tap(RANGED_SLOT, 0.08); mode = 'ranged'; shots = 0; time.sleep(0.5)
+                draw_slot(RANGED_SLOT); mode = 'ranged'; shots = 0; time.sleep(0.5)
                 log(f"  [combat] arme a distance (cible a {e['d']:.0f} m{', en hauteur' if high else ''})")
             elif mode == 'ranged' and e['d'] <= rback and not high:
-                kbm.tap(MELEE_SLOT, 0.08); mode = 'melee'; time.sleep(0.4)
+                draw_slot(MELEE_SLOT); mode = 'melee'; time.sleep(0.4)
                 log('  [combat] retour au corps a corps')
             # l arme REELLEMENT tenue (export du mod) : si elle ne correspond pas au mode, on corrige (la touche
             # d emplacement est une bascule : un appui de trop rengainait, ou laissait la mitrailleuse au CAC)
@@ -575,9 +589,9 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 holding_ranged = wt.startswith('Wea_') and wt not in _MT
                 holding_melee = wt in _MT and wt != 'Wea_Fists'     # poings = rien en main
                 if mode == 'melee' and not holding_melee:
-                    kbm.tap(MELEE_SLOT, 0.08); t_wsync = now; log(f'  [combat] arme tenue {wt} : on degaine la melee (emplacement {MELEE_SLOT})')
+                    draw_slot(MELEE_SLOT); t_wsync = now; log(f'  [combat] arme tenue {wt} : on degaine la melee (emplacement {MELEE_SLOT})')
                 elif mode == 'ranged' and RANGED_SLOT and not holding_ranged:
-                    kbm.tap(RANGED_SLOT, 0.08); t_wsync = now; log(f'  [combat] arme tenue {wt} : on degaine l arme a feu (emplacement {RANGED_SLOT})')
+                    draw_slot(RANGED_SLOT); t_wsync = now; log(f'  [combat] arme tenue {wt} : on degaine l arme a feu (emplacement {RANGED_SLOT})')
             if mode == 'ranged':
                 kbm.release('W'); kbm.act_release('sprint')
                 # hacks A DISTANCE entre deux rafales : cible alternee (hack_i) pour ne pas empiler sur le meme
