@@ -362,7 +362,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 # mais la souris ne pilote plus la camera (« rotation initiale echouee » en boucle hier soir) -> Echap
                 # 0a3b. MORT (vie a 0) : AVANT les menus, car l ecran de mort leve menu=true (16/09 21:28 : 11 min fige)
                 hp_now = st.get('hp')
-                if hp_now is not None and hp_now <= 0.5:      # NB : `hp or 100` transformait 0 en 100 -> boucle de mort
+                if (hp_now is not None and hp_now <= 0.5) or st.get('dead'):      # NB : `hp or 100` transformait 0 en 100 -> boucle de mort
                     dead_since = dead_since or time.perf_counter()
                     if time.perf_counter() - dead_since > 4.0:  # 4 s a 0 sur un etat vivant (pas un chargement)
                         quests.mark_death(st['x'], st['y'])

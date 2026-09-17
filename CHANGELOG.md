@@ -4,6 +4,7 @@
 
 - Combat : les emplacements d arme a degainer sont relus APRES la reaffectation de l inventaire (V tapait « 2 » pour l arme a feu alors que le fusil venait de passer en 3 : 3 combats a 26 m avec une matraque, 0 coup, puis « combat sterile »).
 - Combat : plus d abandon apres 75 s sans resultat ; V charge d abord la cible (2 fois, sprint + sauts) avant de conclure.
+- Mort de V : le mod exporte `dead` (IsDead) et recharge LUI-MEME le dernier point de controle 6 s apres la mort quand l agent est actif (Python peut etre occupe dans une routine longue) ; Python considere V mort sur `dead` ou vie <= 0,5 %.
 - Armes, cause reelle trouvee : le mod listait la zone d equipement « Weapon » alors que les touches 1/2/3 lisent « WeaponWheel » (GetWeaponSlotItem). Le mod exporte maintenant ce que chaque touche degaine vraiment (`hotkeys`) et degaine par la requete du jeu (`weapon_slot`, le chemin exact des touches, sans clavier ni focus) ; la touche reste en repli.
 - Terminal PIRATE PAR SCRIPT le 17/09 12:23 (connexion sans bouger, grille 6x6 resolue en 6 s). Calibrage des touches : non concluant si les trois touches donnent la meme arme (zone sans armes) -> emplacements conserves, nouvel essai 5 min plus tard.
 - Terminaux : connexion par script tentee AVANT de bouger (portee du Breach a distance), marche tout droit s il n y a pas de chemin a moins de 15 m, nouvel essai par script une fois a cote.

@@ -36,6 +36,7 @@ local cmdAcc, lastCmdSeq = 0.0, -1      -- AVANT onInit (sinon globale nil -> de
 local lastStateErr = nil                 -- derniere erreur du tick d etat (journalisee une fois)
 local slowT, slowLoot, slowVehicles, slowNpcs, slowTraffic = -99.0, nil, nil, nil, 0
 local playerVehRecs, playerVehRecsT = {}, -999.0   -- records (TweakDB) des vehicules de V, rafraichis toutes les 15 s
+local deadSince, deadReloaded, lastCmdClock = nil, false, -1e9   -- mort de V : rechargement automatique si l agent est actif
 local vehCallT = -999.0                       -- os.clock() du dernier vehicle_call : export des vehicules de V a 400 m pendant 45 s   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
@@ -875,6 +876,22 @@ registerForEvent('onUpdate', function(dt)
     -- commandes Python (chemins), des que le monde est pret.
     -- Une erreur ici est JOURNALISEE (une fois par message) : plus d echec silencieux.
     local okP, errP = pcall(pollCommands, player, dt)
+    -- MORT DE V : si l agent est actif, le mod recharge lui-meme le dernier point de controle apres 6 s (le menu de
+    -- mort fait exactement cela : deathMenu.script -> LoadLastCheckpoint(true)) ; Python peut etre occupe ailleurs
+    pcall(function()
+        local isDead = false
+        pcall(function() isDead = player:IsDead() == true end)
+        if isDead then
+            if deadSince == nil then deadSince = os.clock(); journal('MORT de V detectee') end
+            if not deadReloaded and os.clock() - deadSince > 6.0 and os.clock() - lastCmdClock < 180.0 then
+                deadReloaded = true
+                local okR, errR = pcall(function() Game.GetSystemRequestsHandler():LoadLastCheckpoint(true) end)
+                journal('MORT : rechargement automatique du dernier point de controle -> ' .. tostring(okR) .. (okR and '' or (' ' .. tostring(errR))))
+            end
+        else
+            deadSince, deadReloaded = nil, false
+        end
+    end)
     if not okP and tostring(errP) ~= lastPollErr then
         lastPollErr = tostring(errP)
         journal('POLL erreur: ' .. lastPollErr)
@@ -914,6 +931,8 @@ registerForEvent('onUpdate', function(dt)
         local defs = GetAllBlackboardDefs()
         -- vie (%) et combat (verifies par sonde)
         local hp = Game.GetStatPoolsSystem():GetStatPoolValue(id, gamedataStatPoolType.Health, true)
+        local isDead = false
+        pcall(function() isDead = player:IsDead() == true end)
         local playerLevel = nil
         pcall(function() playerLevel = Game.GetStatsSystem():GetStatValue(id, gamedataStatType.Level) end)
         -- NAGE : V dans l eau (IsSwimming) et oxygene restant (plongee) : ne jamais se noyer
@@ -1513,7 +1532,7 @@ registerForEvent('onUpdate', function(dt)
         if #bodies == 0 then bodies = nil end
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
-                 hp = hp, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
+                 hp = hp, dead = isDead, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
                  lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
                  enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, ftLoading = ftLoading, seqEnd = seq }
     end)
@@ -2955,6 +2974,7 @@ pollCommands = function(player, dt)
     if fromDb then
         if fromDb.seq ~= lastCmdSeq then
             lastCmdSeq = fromDb.seq
+            lastCmdClock = os.clock()                       -- l agent Python est actif
             local okH, resp = pcall(handleCommand, player, fromDb)
             if not okH then
                 journal('FAIL cmd ' .. tostring(fromDb.cmd) .. ' seq=' .. tostring(fromDb.seq) .. ' : ' .. tostring(resp))
