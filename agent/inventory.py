@@ -55,6 +55,9 @@ def disassemble(index: int, qty: int = 1) -> bool:
     return bool(r and r.get('ok'))
 
 
+EQUIP_BROKEN = False              # vrai des qu une reaffectation d emplacement par script s avere sans effet
+
+
 def sell_all(log=print) -> dict:
     """Chez un marchand (< 6 m) : vend les objets marques a vendre, un par un (commande Lua sell)."""
     global SELLABLE
@@ -85,7 +88,7 @@ def sell_all(log=print) -> dict:
 
 
 def manage(log=print) -> dict:
-    global HEALS, SELL_VALUE, MONEY, SELLABLE
+    global HEALS, SELL_VALUE, MONEY, SELLABLE, EQUIP_BROKEN
     t0 = time.perf_counter()
     inv = fetch()
     if not inv or not inv.get('ok'):
@@ -126,13 +129,25 @@ def manage(log=print) -> dict:
     for slot, it in sorted(wanted.items()):
         if in_slot.get(slot + 1) == str(it.get('name')):
             continue
+        if EQUIP_BROKEN:
+            continue                                   # la reaffectation par script n a aucun effet dans ce jeu : on n insiste pas
         if equip(it['i'], slot):
             equipped += 1; final[slot + 1] = str(it.get('name'))
             kind = 'arme a feu' if slot == 2 else 'melee'
             log(f"  [inventaire] {kind} « {it.get('name')} » ({it.get('type')}, dps {it.get('dps', 0):.0f}) -> emplacement {slot + 1}")
             time.sleep(0.3)
     from . import combat
-    # emplacements a degainer = ceux d APRES la reaffectation (16/09 : le combat tapait « 2 » pour l arme a feu
+    if equipped:
+        # VERITE DU JEU : on relit les emplacements apres la reaffectation (17/09 10:07 : equip() repondait ok mais le
+        # jeu gardait 1:Mocassin 2:fusil 3:matraque -> le combat tapait 3 pour l arme a feu et tenait la matraque)
+        inv2 = fetch()
+        real = {int(sl.get('slot') or 0): str(sl.get('name') or '') for sl in ((inv2 or {}).get('slots') or [])} if inv2 and inv2.get('ok') else None
+        if real is not None:
+            if any(real.get(k) != v for k, v in final.items() if v):
+                EQUIP_BROKEN = True
+                log('  [inventaire] reaffectation SANS EFFET (le jeu garde : ' + ' | '.join(f'{k}:{v}' for k, v in sorted(real.items())) + ') : on garde les emplacements reels')
+            final = dict(real)
+    # emplacements a degainer = ceux REELS apres la reaffectation (16/09 : le combat tapait « 2 » pour l arme a feu
     # alors que le fusil venait de passer en 3 et le Mocassin en 2 -> V restait a 26 m avec une matraque, 0 coup)
     m_by_name = {str(it.get('name')): it for it in melee}
     r_by_name = {str(it.get('name')): it for it in ranged}

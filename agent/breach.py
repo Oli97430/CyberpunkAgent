@@ -398,7 +398,12 @@ def run(stop=None, log=print, dry: bool = False) -> dict:
         i = len(done)
         if inf2 and int(inf2.get('state') or 0) in (2, 3):
             break
-    # fin du mini-jeu : il se termine seul quand le tampon est plein ou tous les daemons valides ; sinon on comble le tampon
+    # fin du mini-jeu : il se termine seul quand le tampon est plein ou tous les daemons valides ; sinon on comble le tampon.
+    # L ecran de resume ne bascule l etat qu a sa fermeture (17/09 : etat 1 pendant 12 s apres 5 selections) : Echap apres 2,5 s
+    if len(done) >= buffer or len(done) >= len(target_path):
+        time.sleep(2.5)
+        if int((info(timeout=1.0) or {}).get('state') or 0) == 1:
+            kbm.tap('ESC', 0.08); time.sleep(1.0)
     t1 = time.perf_counter()
     state = None
     while time.perf_counter() - t1 < 12.0:
