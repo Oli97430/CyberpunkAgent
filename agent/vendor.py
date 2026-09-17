@@ -16,7 +16,9 @@ from __future__ import annotations
 import math
 import time
 
+import json
 from . import input_kbm as kbm, motion, nav
+from .config import CFG
 
 MIN_SELLABLE = 8
 MAX_VENDOR_M = 250.0
@@ -31,10 +33,41 @@ def list_vendors() -> list[dict]:
 
 
 _failed: dict[tuple, float] = {}     # (x,y arrondis) -> heure de l echec (marchand injoignable : boutique hors maillage...)
+_fail_n: dict[tuple, int] = {}
+SKIP_FILE = CFG.log_file.parent / 'vendors_skip.json'   # marchands INUTILES, memorises d une session a l autre
+_skip: dict[str, dict] = {}
+try:
+    _skip = json.loads(SKIP_FILE.read_text(encoding='utf-8')) if SKIP_FILE.exists() else {}
+except Exception:
+    _skip = {}
 
 
-def mark_failed(v: dict) -> None:
-    _failed[(round(v.get('x', 0)), round(v.get('y', 0)))] = time.perf_counter()
+def _key(v: dict) -> str:
+    return f"{round(v.get('x', 0))},{round(v.get('y', 0))}"
+
+
+def is_skipped(v: dict) -> bool:
+    e = _skip.get(_key(v))
+    return bool(e) and time.time() - float(e.get('t', 0)) < float(e.get('days', 7)) * 86400.0
+
+
+def mark_useless(v: dict, reason: str, days: float = 7.0, log=print) -> None:
+    """Marchand qui ne sert a rien (ne parle pas, rien en stock, rien a echanger) : V n y retourne pas pendant `days` jours."""
+    _skip[_key(v)] = {'t': time.time(), 'days': days, 'name': v.get('name') or v.get('variant'), 'reason': reason}
+    try:
+        SKIP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SKIP_FILE.write_text(json.dumps(_skip, ensure_ascii=False, indent=1), encoding='utf-8')
+    except Exception as e:
+        log(f'  [marchand] memoire non sauvee : {e}')
+    log(f"  [marchand] « {v.get('name') or v.get('variant')} » ecarte {days:g} jour(s) : {reason}")
+
+
+def mark_failed(v: dict, log=print) -> None:
+    k = (round(v.get('x', 0)), round(v.get('y', 0)))
+    _failed[k] = time.perf_counter()
+    _fail_n[k] = _fail_n.get(k, 0) + 1
+    if _fail_n[k] >= 2:
+        mark_useless(v, 'injoignable deux fois', days=1.0, log=log)
 
 
 def pick_vendor(vendors: list[dict], prefer: str | None = None) -> dict | None:
@@ -42,7 +75,8 @@ def pick_vendor(vendors: list[dict], prefer: str | None = None) -> dict | None:
         return None
     near = [v for v in vendors if v.get('dist', 1e9) <= MAX_VENDOR_M and (prefer == 'ripper' or 'ripper' not in (v.get('variant') or '').lower())
             and not any(w in (v.get('variant') or '').lower() for w in ('apartment', 'wardrobe'))
-            and time.perf_counter() - _failed.get((round(v.get('x', 0)), round(v.get('y', 0))), -1e9) > 900.0]
+            and time.perf_counter() - _failed.get((round(v.get('x', 0)), round(v.get('y', 0))), -1e9) > 900.0
+            and not is_skipped(v)]
     if not near:
         return None
     if prefer:
@@ -133,7 +167,7 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
              if (str(it.get('type') or '').startswith('Cyb') or 'cyberware' in str(it.get('type') or '').lower())]
     if not cyber:
         log(f"  [charcudoc] « {stock.get('vendor')} » : aucun cyberware en stock ({len(stock.get('items') or [])} articles)")
-        return {'ok': True, 'poses': 0}
+        return {'ok': True, 'poses': 0, 'useless': f"aucun cyberware en stock ({stock.get('vendor')})"}
     cyber.sort(key=_cyber_score, reverse=True)
     posed, spent, tried = 0, 0, 0
     for it in cyber:

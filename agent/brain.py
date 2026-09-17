@@ -585,7 +585,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         tr = vendor.sell_trip(vend, stop=stop, log=_log)
                         if not tr.get('ok'):
                             _log(f"courses : marchand non atteint ({tr.get('reason')}) : ecarte 15 min, on essaiera un autre")
-                            vendor.mark_failed(vend); vendor_fail_streak += 1
+                            vendor.mark_failed(vend, log=_log); vendor_fail_streak += 1
                             if vendor_fail_streak >= 3:                 # maillage local impraticable : on suspend les courses 30 min
                                 _log('courses : 3 marchands injoignables d affilee, courses suspendues 30 min')
                                 last_sell_t = time.perf_counter() + 1200.0; vendor_fail_streak = 0
@@ -607,6 +607,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 inventory.HEALS += br['achetes']
                                 _log(f"achat : {br['achetes']} soin(s) pour {br.get('eddies', 0)} eddies")
                                 stats['achats'] = stats.get('achats', 0) + br['achetes']
+                            if not sr.get('vendus') and not br.get('achetes') and not sp.get('achats') and not rp.get('appris'):
+                                vendor.mark_useless(vend, 'rien vendu ni achete', days=1.0, log=_log)
                         continue
 
                 # 3a-quater. CHARCUDOC : assez d eddies -> V s optimise lui-meme (meilleur cyberware abordable, pose par script)
@@ -621,8 +623,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             rr = vendor.ripperdoc_shop(log=_log)
                             _log(f"charcudoc : {rr.get('poses', 0)} implant(s) pose(s) pour {rr.get('eddies', 0)} eddies ({rr.get('reason') or 'ok'})")
                             stats['implants'] = stats.get('implants', 0) + rr.get('poses', 0)
+                            if not rr.get('poses'):
+                                # rien a poser ici (pas de stock, ne parle pas, stock illisible) : on n y revient pas de sitot
+                                vendor.mark_useless(rip, rr.get('useless') or rr.get('reason') or 'rien a poser', days=7.0 if rr.get('useless') else 1.0, log=_log)
                         else:
-                            _log(f"charcudoc : non atteint ({tr.get('reason')})"); vendor.mark_failed(rip)
+                            _log(f"charcudoc : non atteint ({tr.get('reason')})"); vendor.mark_failed(rip, log=_log)
                         continue
 
                 # 3a-quinquies. APPARENCE : une fois par mois, si un appartement de V est proche, passage au miroir
