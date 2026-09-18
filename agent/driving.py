@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 import time
 
-from . import input_kbm as kbm, motion
+from . import input_kbm as kbm, motion, nav   # nav promu au niveau module : _mount_script l utilise sans import local (NameError garanti sinon)
 
 MAX_DRIVE_S = 300.0
 ARRIVE_M = 60.0
@@ -101,7 +101,6 @@ def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
         car = _refresh(car, s_c.get('vehicles') or [])
     if car['d'] > 2.5:                                    # deja a portee sinon (les poses gerent 1-2 m)
         # le vehicule arrive sur la ROUTE la plus proche : V y va par le maillage (nav.goto), puis tout droit
-        from . import nav
         r = nav.goto(lambda: nav.request_path_to(car['x'], car['y'], car.get('z')), arrive_m=2.0, max_legs=4, timeout=40.0, stop=stop, log=log)
         s1 = motion.read_state() or {}
         if s1 and math.hypot(s1['x'] - car['x'], s1['y'] - car['y']) > 2.5:
@@ -179,7 +178,6 @@ def summon_and_board(stop=None, log=print) -> bool:
         return steal_nearby(stop=stop, log=log)
     # au hasard : une voiture ou une moto parmi celles de V (VehicleSystem) ; a defaut la touche d appel
     import random
-    from . import nav
     want = random.choice((0, 1, 2))                      # 0 = n importe lequel, 1 = voiture, 2 = moto
     # VOIE LIBRE : on n appelle pas le vehicule au milieu de la circulation (il arrive sur la route la plus proche et
     # se fait bloquer / percuter) : on attend que plus aucun vehicule d inconnu ne roule a moins de 30 m (12 s max),

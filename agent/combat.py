@@ -427,7 +427,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     retreat_until = 0.0
     flee_until, last_flee_end = 0.0, -999.0
     t_buff = -999.0
-    sterile_sig, sterile_t = None, time.perf_counter()
+    sterile_n, sterile_hp, sterile_t = -1, 100.0, time.perf_counter()  # hysterese : pas de flip sur un simple flicker de vie
     sterile_charges = 0
     last_retreat_end = -99.0
     no_target_logged = False
@@ -468,10 +468,9 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                     log('  [combat] fin : plus en combat'); break
             # combat STERILE : rien ne change depuis 75 s (meme nombre d hostiles, vie intacte) -> cibles
             # injoignables (vitre, autre etage, tourelle hors portee) : on arrete de taper dans le vide
-            sig = (len(alive), hp >= 90)
-            if sig != sterile_sig:
-                sterile_sig, sterile_t = sig, now
-            elif (hp >= 90 or stats['coups'] + stats.get('tirs', 0) == 0) and alive and sterile_charges < 2 and now - sterile_t > 40.0:
+            if len(alive) != sterile_n or abs(hp - sterile_hp) > 5.0:   # nombre d ennemis change, ou vie a vraiment bouge (pas un flicker de regen)
+                sterile_n, sterile_hp, sterile_t = len(alive), hp, now
+            elif (sterile_hp >= 90 or stats['coups'] + stats.get('tirs', 0) == 0) and alive and sterile_charges < 2 and now - sterile_t > 40.0:
                 # rien ne bouge depuis 40 s : la cible est hors de portee (distance, etage, vitre). V n est pas un
                 # couard : il CHARGE (sprint droit dessus, saut sur les obstacles) avant de conclure quoi que ce soit
                 sterile_charges += 1; sterile_t = now
@@ -490,7 +489,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                     time.sleep(0.15)
                 kbm.release('W'); kbm.act_release('sprint')
                 seq = None; continue
-            elif (hp >= 90 or stats['coups'] + stats.get('tirs', 0) == 0) and now - sterile_t > 75.0:
+            elif (sterile_hp >= 90 or stats['coups'] + stats.get('tirs', 0) == 0) and now - sterile_t > 75.0:
                 log(f'  [combat] combat sterile : {len(alive)} hostile(s) intouchable(s) depuis 75 s malgre {sterile_charges} charge(s) -> on laisse tomber')
                 stats['sterile'] = True; break
             if not alive:
@@ -582,7 +581,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             gap = aim_at(e, st)
 
             # -- MODE A DISTANCE : cible loin ou en hauteur (drone/tourelle), si une arme a distance existe
-            high = (e.get('z', st['z']) - st['z']) > 2.5
+            high = (e.get('z', st.get('z', 0.0)) - st.get('z', 0.0)) > 2.5
             from .config import CFG as _C2
             if _C2.style == 'distance':
                 rmin, rback = 4.0, 2.5                    # arme a feu des 4 m : V est un tireur

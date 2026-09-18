@@ -12,7 +12,9 @@ import time
 
 from . import nav
 
-_blocked: set[int] = set()      # hashes d objectifs juges inaccessibles dans cette session
+_blocked: dict[int, float] = {}  # hash -> heure de blocage ; expire (contrairement a l ancien set() permanent :
+                                  # switch() bloquait tout objectif traverse, meme sur un signal transitoire)
+BLOCKED_S = 1200.0                # 20 min : le temps qu une porte recalcitrante ou une foule se degage
 import json, math
 from pathlib import Path
 from .config import CFG
@@ -60,7 +62,10 @@ def mark_visited(hash_: int | None) -> None:
 
 def mark_blocked(hash_: int | None) -> None:
     if hash_ is not None:
-        _blocked.add(int(hash_))
+        _blocked[int(hash_)] = time.perf_counter()
+        if len(_blocked) > 200:                                     # purge : on garde les 100 plus recents
+            for old_h in sorted(_blocked, key=lambda h: _blocked[h])[:len(_blocked) - 100]:
+                _blocked.pop(old_h, None)
 
 
 def list_active() -> list[dict]:
@@ -83,7 +88,7 @@ def pick_next(quests: list[dict], current_hash: int | None = None, player_level:
     avec marqueur, pas bloque, pas celui en cours, pas dans une zone dangereuse."""
     cands = [q for q in quests
              if q.get('hasMappin') and q.get('dist') is not None
-             and int(q['hash']) not in _blocked and q['hash'] != current_hash
+             and time.perf_counter() - _blocked.get(int(q['hash']), -1e9) > BLOCKED_S and q['hash'] != current_hash
              and q['dist'] >= 8.0 and time.perf_counter() - _visited.get(int(q['hash']), -1e9) > 900.0
              and not near_danger(q['x'], q['y'])]
     if not cands:

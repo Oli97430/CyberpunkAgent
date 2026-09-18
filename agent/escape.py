@@ -43,6 +43,7 @@ def _try_prompt(log) -> bool:
 
 
 def escape(target_xy: tuple | None, stop=None, log=print) -> dict:
+    _pressed.clear()   # sourdine des invites : propre a CET episode de blocage, pas a la session entiere
     t0 = time.perf_counter()
     st0 = motion.read_state()
     if not st0:

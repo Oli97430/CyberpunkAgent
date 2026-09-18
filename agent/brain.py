@@ -983,7 +983,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             continue
                     else:
                         rot_failures = 0
-                    if r.get('ok') or r.get('legs', 0) > 0:
+                    if r.get('ok') or r.get('real_legs', 0) > 0:      # 'legs' seul comptait un troncon bloque des le 1er pas comme un progres
                         path_failures = 0; straight_tried = False
                     else:
                         path_failures += 1

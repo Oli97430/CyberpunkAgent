@@ -180,6 +180,7 @@ def goto(request, arrive_m: float = 3.0, max_legs: int = 10, timeout: float = 18
     """Boucle troncon par troncon. `request` = fonction qui renvoie un path.json."""
     t0 = time.perf_counter()
     legs = 0
+    real_legs = 0            # troncons qui ont VRAIMENT fait avancer V (pas juste demande un chemin qui bloque aussitot)
     target = None
     while legs < max_legs and time.perf_counter() - t0 < timeout:
         if stop is not None and stop.is_set():
@@ -194,6 +195,8 @@ def goto(request, arrive_m: float = 3.0, max_legs: int = 10, timeout: float = 18
         log(f"  troncon {legs + 1}: {len(pts)} pts, {resp['length']:.0f} m{' (partiel)' if resp.get('partial') else ''}")
         r = motion.follow_path(pts, stop=stop, interrupt=interrupt)
         legs += 1
+        if r.get('waypoints_done', 0) > 0 or r.get('ok'):
+            real_legs += 1     # au moins un point du chemin a ete atteint : ce n est pas un blocage immediat
         if r.get('reason') == 'interrompu':
             return {'ok': False, 'reason': 'interrompu', 'legs': legs, 'seconds': time.perf_counter() - t0}
         st = motion.read_state()
@@ -202,11 +205,11 @@ def goto(request, arrive_m: float = 3.0, max_legs: int = 10, timeout: float = 18
         d = math.hypot(st['x'] - target['x'], st['y'] - target['y'])
         log(f"    -> {'ok' if r['ok'] else r.get('reason')}, reste {d:.1f} m")
         if d < arrive_m:
-            return {'ok': True, 'legs': legs, 'final_dist': d, 'seconds': time.perf_counter() - t0}
+            return {'ok': True, 'legs': legs, 'real_legs': real_legs, 'final_dist': d, 'seconds': time.perf_counter() - t0}
         if not r['ok'] and r.get('reason') not in ('bloque',):
-            return {'ok': False, 'reason': r.get('reason'), 'legs': legs, 'final_dist': d, 'seconds': time.perf_counter() - t0}
+            return {'ok': False, 'reason': r.get('reason'), 'legs': legs, 'real_legs': real_legs, 'final_dist': d, 'seconds': time.perf_counter() - t0}
         # bloque ou troncon partiel : on redemande un chemin depuis ici
-    return {'ok': False, 'reason': 'trop de troncons / timeout', 'legs': legs, 'seconds': time.perf_counter() - t0}
+    return {'ok': False, 'reason': 'trop de troncons / timeout', 'legs': legs, 'real_legs': real_legs, 'seconds': time.perf_counter() - t0}
 
 
 def goto_quest(**kw) -> dict:
