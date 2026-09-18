@@ -236,6 +236,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     frozen_esc = 0
     dead_since = None
     last_block_pos = None
+    escape_tries, escape_pos = 0, None   # essais d evasion (porte/sonde) au MEME endroit : 3 max avant d escalader
     last_heal_t = -99.0
     plan = planner.Planner()
     last_inventory_t = -999.0
@@ -987,7 +988,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     else:
                         path_failures += 1
                         _log(f"  trajet : {r.get('reason')} (echec {path_failures}/5)")
-                        if path_failures >= 5 and dist is not None and not straight_tried:      # meme pour une cible lointaine : d abord SORTIR d ici
+                        if path_failures >= 5 and dist is not None and not straight_tried and escape_tries < 3:      # meme pour une cible lointaine : d abord SORTIR d ici
                             # le maillage ne repond pas (interieur, escalier, ring...) : on marche EN LIGNE DROITE vers
                             # la cible 20 s (les portes s ouvrent en passant) ; si V a avance, le maillage se recalcule
                             straight_tried = True
@@ -1001,12 +1002,22 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 path_failures = 0; focus_insist_n = 0
                                 continue
                             # toujours coince : V cherche une SORTIE (portes, invites, sondes dans 8 directions)
-                            _log('ilot ferme : recherche d une sortie (portes, invites, sondes)')
+                            here_e = (s2['x'], s2['y'])
+                            if escape_pos is not None and math.hypot(here_e[0] - escape_pos[0], here_e[1] - escape_pos[1]) < 4.0:
+                                escape_tries += 1                        # meme point qu au dernier essai : pas de vrai progres
+                            else:
+                                escape_tries, escape_pos = 1, here_e
+                            _log(f'ilot ferme : recherche d une sortie (portes, invites, sondes) [{escape_tries}/3]')
                             re = escape.escape((tx, ty), stop=stop, log=_log)
                             _log(f"  sortie : {'trouvee par ' + re.get('moyen', '?') if re.get('ok') else 'introuvable (' + re.get('moyen', '?') + ')'}")
                             stats['sorties'] = stats.get('sorties', 0) + (1 if re.get('ok') else 0)
                             if re.get('ok'):
                                 path_failures = 0
+                            if escape_tries >= 3:
+                                _log('  meme point de blocage 3 fois de suite : V arrete d essayer cette porte, on cherche une autre solution')
+                                escape_tries, escape_pos = 0, None
+                                path_failures = 5; straight_tried = True   # force le passage aux branches suivantes (insister / voyage rapide / quete)
+                                continue
                             continue
                         if path_failures >= 5 and focus and focus_insist_n >= 3:
                             # 3 fois de suite sans progres (17/09 : 40 min coince pres de « Parler a Johnny ») : V fait autre chose un moment
@@ -1040,6 +1051,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             _log('objectif inaccessible a pied depuis ici : changement de quete')
                             path_failures = 0
                             straight_tried = False
+                            escape_tries, escape_pos = 0, None
                             nxt = quests.switch(alt_target.get('hash') if alt_target else q.get('hash'), log=_log)
                             if nxt:
                                 alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
