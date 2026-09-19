@@ -417,7 +417,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     t_wsync = -99.0
     t_sprint = -99.0
     wsync_fail = 0                                     # degainages sans effet (zone a mains nues, arme restreinte)
-    blind_hacks = 0                                    # hacks « par defaut » de suite (liste du panneau illisible)
+    blind_hacks, blind_hacks_t = 0, -99.0              # hacks « par defaut » de suite (liste du panneau illisible) : pause, pas coupure
     mode = 'melee'; shots = 0
     hack_i = 0
     last_hp, last_hp_t = None, time.perf_counter()
@@ -624,7 +624,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             if mode == 'ranged':
                 kbm.release('W'); kbm.act_release('sprint')
                 # hacks A DISTANCE entre deux rafales : cible alternee (hack_i) pour ne pas empiler sur le meme
-                if e['d'] > 3.0 and gap < 8 and now - t_hack > 2 * QUICKHACK_CD and blind_hacks < 3:   # vise d abord ; 8 s entre deux hacks
+                if e['d'] > 3.0 and gap < 8 and now - t_hack > 2 * QUICKHACK_CD and (blind_hacks < 3 or now - blind_hacks_t > 20.0):   # vise d abord ; 8 s entre deux hacks
                     tgt = alive[hack_i % len(alive)]; hack_i += 1
                     if tgt is not e:
                         aim_at(tgt, st)
@@ -632,10 +632,14 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                     t_hack = time.perf_counter()                        # le delai court APRES le hack (il dure ~4 s)
                     if title and str(title).startswith('userdata'):
                         title = None
-                    blind_hacks = 0 if title else blind_hacks + 1
+                    if title:
+                        blind_hacks = 0
+                    else:
+                        blind_hacks = blind_hacks + 1 if now - blind_hacks_t < 20.0 else 1
+                        blind_hacks_t = now
                     log(f"  [combat] quickhack « {title or 'par defaut'} » (a distance) sur cible a {tgt['d']:.0f} m")
                     if blind_hacks >= 3:
-                        log('  [combat] 3 hacks a l aveugle de suite (liste illisible) : on arrete les hacks, on tire')
+                        log('  [combat] 3 hacks a l aveugle de suite (liste illisible) : pause de 20 s avant de retenter, on tire')
                     seq = None; continue
                 if _C2.features.get('sprint', True) and now - t_sprint > (2.5 if hp < 85 else 5.0):
                     side = 'D' if side == 'A' else 'A'
@@ -653,13 +657,17 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 time.sleep(0.15); continue
 
             # -- quickhack a distance
-            if e['d'] > 3.0 and gap < 8 and now - t_hack > QUICKHACK_CD and blind_hacks < 3:
+            if e['d'] > 3.0 and gap < 8 and now - t_hack > QUICKHACK_CD and (blind_hacks < 3 or now - blind_hacks_t > 20.0):
                 tgt = alive[hack_i % len(alive)]; hack_i += 1
                 if tgt is not e and tgt['d'] > 3.0:
                     aim_at(tgt, st); e = tgt
                 title = quickhack_best(log=log); stats['quickhacks'] += 1
                 t_hack = time.perf_counter()
-                blind_hacks = 0 if (title and not str(title).startswith('userdata')) else blind_hacks + 1
+                if title and not str(title).startswith('userdata'):
+                    blind_hacks = 0
+                else:
+                    blind_hacks = blind_hacks + 1 if now - blind_hacks_t < 20.0 else 1
+                    blind_hacks_t = now
                 if title and str(title).startswith('userdata'):
                     title = None
                 log(f"  [combat] quickhack « {title or 'par defaut'} » sur cible a {e['d']:.0f} m")

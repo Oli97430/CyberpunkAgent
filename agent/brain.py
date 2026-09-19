@@ -235,6 +235,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     frozen_seq, frozen_t, frozen_logged = None, 0.0, False
     frozen_esc = 0
     dead_since = None
+    consecutive_deaths, last_death_t = 0, -1e9   # 3 morts en moins de 5 min au meme endroit -> on laisse tomber la quete un moment
     last_block_pos = None
     escape_tries, escape_pos = 0, None   # essais d evasion (porte/sonde) au MEME endroit : 3 max avant d escalader
     last_heal_t = -99.0
@@ -370,7 +371,25 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log('V EST MORT : lieu memorise (objectifs a < 80 m evites) ; rechargement de la derniere sauvegarde')
                         if _reload_last_save(_log, stop=stop):
                             stats['morts'] = stats.get('morts', 0) + 1
-                            dead_since = None; plan.last_t = -99.0; alt_target = None; path_failures = 0
+                            if time.perf_counter() - last_death_t > 300.0:
+                                consecutive_deaths = 0
+                            consecutive_deaths += 1; last_death_t = time.perf_counter()
+                            dead_since = None; plan.last_t = -99.0; path_failures = 0
+                            if consecutive_deaths >= 3:
+                                # meme combat perdu 3 fois de suite : on laisse tomber CETTE quete un moment (comme un objectif
+                                # inaccessible), au lieu de foncer une 4e fois dans le meme groupe (19/09 : 5 morts avant de gagner)
+                                consecutive_deaths = 0
+                                s_d = motion.read_state() or st
+                                q_d = s_d.get('quest') or {}
+                                nxt = quests.switch(alt_target.get('hash') if alt_target else q_d.get('hash'), log=_log)
+                                if nxt:
+                                    _log(f"3 morts de suite au meme combat : V laisse tomber et fait autre chose (« {nxt.get('text')} »)")
+                                    alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                                    stats['changements_quete'] = stats.get('changements_quete', 0) + 1
+                                else:
+                                    alt_target = None
+                            else:
+                                alt_target = None
                             time.sleep(3.0); continue
                         _log('rechargement impossible : arret'); break
                     time.sleep(0.3); continue
