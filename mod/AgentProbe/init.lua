@@ -2768,6 +2768,27 @@ local function handleCommand(player, cmd)
             req.mountData = data
             Game.GetMountingFacility():Mount(req)
         end)
+        if okM then
+            -- Mount() assoit V dans le siege mais ne declare pas le vehicule comme « actif » pour le joueur :
+            -- SANS CET APPEL, l autodrive n a pas de vehicule possede a router (7 echecs sur 7 le 19/09 : la
+            -- voiture roulait parfois, mais jamais vers la destination -- exactement le symptome d un vehicule
+            -- non reconnu comme « actif »). Meme appel que vehicle_call / quickSlotsManager.SetActiveVehicle.
+            pcall(function()
+                local vs = Game.GetVehicleSystem()
+                local recordID = target:GetRecordID()
+                local typeEnum = gamedataVehicleType.Car
+                pcall(function()
+                    local vtype = tostring(TweakDBInterface.GetVehicleRecord(recordID):Type():Type())
+                    if vtype:find('Bike') then typeEnum = gamedataVehicleType.Bike end
+                end)
+                local gid = nil
+                pcall(function() gid = GarageVehicleID.Resolve(TDBID.ToStringDEBUG(recordID)) end)
+                if gid == nil then pcall(function() gid = GarageVehicleID.new({ recordID = recordID }) end) end
+                local toggled = false
+                if gid ~= nil then toggled = pcall(function() vs:TogglePlayerActiveVehicle(gid, typeEnum, true) end) end
+                if not toggled then pcall(function() vs:TogglePlayerActiveVehicle(recordID, typeEnum, true) end) end
+            end)
+        end
         resp.ok, resp.how = okM, how
         if not okM then resp.reason = 'Mount : ' .. tostring(errM) end
         journal((okM and 'OK   ' or 'FAIL ') .. 'mount (' .. how .. ')' .. (okM and '' or (' : ' .. tostring(errM))))
