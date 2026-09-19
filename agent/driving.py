@@ -323,10 +323,33 @@ def autodrive_to(tx: float, ty: float, stop=None, log=print) -> dict:
     return {'ok': False, 'reason': 'temps ecoule', 'seconds': time.perf_counter() - t0, 'dist': _dist(s2, tx, ty)}
 
 
+def _current_speed(st: dict) -> float:
+    sm = st.get('summon') or {}
+    if sm.get('speed') is not None:
+        return float(sm['speed'])
+    for v in (st.get('vehicles') or []):
+        if v.get('player'):
+            return float(v.get('speed') or 0)
+    return 0.0
+
+
 def exit_vehicle(log=print) -> bool:
     st = motion.read_state()
     if not st or not st.get('vehicle'):
         return True
+    sp = _current_speed(st)
+    if sp > 2.0:
+        # encore en mouvement (croisiere autodrive pas coupee) : on freine, sinon V sautait de la
+        # voiture en marche (19/09) en descendant directement
+        log(f'  [conduite] freinage avant de descendre ({sp:.0f} m/s)')
+        if kbm.ACTIONS.get('autodrive'):
+            autodrive_toggle()   # bascule : coupe la croisiere automatique
+        t_b = time.perf_counter()
+        while time.perf_counter() - t_b < 6.0 and sp > 2.0:
+            kbm.act('back', 0.3)
+            st = motion.read_state() or st
+            sp = _current_speed(st)
+        log(f'  [conduite] vitesse {sp:.0f} m/s avant de descendre')
     key = 'exitvehicle' if kbm.ACTIONS.get('exitvehicle') else 'interact'
     for _ in range(3):
         kbm.act(key, 1.0); time.sleep(2.0)
