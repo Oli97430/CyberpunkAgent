@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, sms, terminals, vendor
+from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, sms, terminals, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -571,7 +571,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                             same_hub, last_hub_sig = 0, None
                             time.sleep(1.0); continue
-                        _log('aucune autre quete accessible : arret.')
+                        nxe = explore.pick(log=_log)
+                        if nxe:
+                            alt_target = {'x': nxe['x'], 'y': nxe['y'], 'text': nxe.get('text'), 'hash': nxe.get('hash'), 't0': time.perf_counter()}
+                            stats['explorations'] = stats.get('explorations', 0) + 1
+                            same_hub, last_hub_sig = 0, None
+                            time.sleep(1.0); continue
+                        _log('aucune autre quete accessible ni point d exploration connu : arret.')
                         break
                     r = dialog.answer_once(stop=stop, log=_log)
                     if r:
@@ -1076,7 +1082,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
                                 stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                                 time.sleep(1.0); continue
-                            _log('aucune autre quete accessible : arret.')
+                            nxe = explore.pick(log=_log)
+                            if nxe:
+                                alt_target = {'x': nxe['x'], 'y': nxe['y'], 'text': nxe.get('text'), 'hash': nxe.get('hash'), 't0': time.perf_counter()}
+                                stats['explorations'] = stats.get('explorations', 0) + 1
+                                time.sleep(1.0); continue
+                            _log('aucune autre quete accessible ni point d exploration connu : arret.')
                             break
                         time.sleep(3.0)
                     continue
@@ -1093,7 +1104,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
                         stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                         time.sleep(1.0); continue
-                    _log('aucune autre quete accessible : arret.')
+                    nxe = explore.pick(log=_log)
+                    if nxe:
+                        alt_target = {'x': nxe['x'], 'y': nxe['y'], 'text': nxe.get('text'), 'hash': nxe.get('hash'), 't0': time.perf_counter()}
+                        stats['explorations'] = stats.get('explorations', 0) + 1
+                        time.sleep(1.0); continue
+                    _log('aucune autre quete accessible ni point d exploration connu : arret.')
                     break
                 time.sleep(0.5)
 
