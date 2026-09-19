@@ -2,6 +2,9 @@
 
 ## 0.1.2 — 2026-09-17 — combat fiable, secours, terminaux, vol de voiture, Breach Protocol validé
 
+- Conduite : V sautait d un vehicule EN MARCHE en descendant apres l abandon de l autodrive sans itineraire (« pas d itineraire, on descend » sans jamais freiner ni couper l autodrive) -- constate en jeu le 19/09. `exit_vehicle()` verifie desormais la vitesse et freine (coupe l autodrive, touche S) jusqu a l arret avant de descendre.
+- Mort de V en boucle : 5 morts de suite contre le meme combat le 19/09 avant de gagner au 6e essai -- le rechargement automatique remettait V dans le MEME combat perdant, la memoire des lieux de mort n etant consultee que pour un NOUVEL objectif, jamais pour la quete deja suivie. Desormais, 3 morts de suite (< 5 min entre elles) au meme endroit -> V laisse tomber cette quete un moment (meme mecanisme que « objectif inaccessible »).
+- Combat : les hacks a l aveugle (panneau illisible) coupaient les quickhacks pour le RESTE du combat des la 3e fois -- retour utilisateur du 19/09 (0 a 3 hacks par combat, y compris contre une netrunner). C est maintenant une pause de 20 s avant de retenter, pas une coupure definitive.
 - Combat : les emplacements d arme a degainer sont relus APRES la reaffectation de l inventaire (V tapait « 2 » pour l arme a feu alors que le fusil venait de passer en 3 : 3 combats a 26 m avec une matraque, 0 coup, puis « combat sterile »).
 - Combat : plus d abandon apres 75 s sans resultat ; V charge d abord la cible (2 fois, sprint + sauts) avant de conclure.
 - Embarquement PAR SCRIPT (commande mount : MountingFacility, siege conducteur) sur le vehicule appele ou le vehicule de V a portee, avant et apres les poses ; position vive du vehicule appele utilisee. SMS : un contact dont la reponse est refusee n est plus retente.
