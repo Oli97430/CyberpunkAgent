@@ -21,7 +21,7 @@ from tkinter import messagebox, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent.config import CFG, DATA_DIR  # noqa: E402
-from agent import llm  # noqa: E402
+from agent import llm, remote  # noqa: E402
 
 CONFIG_PATH = DATA_DIR / 'config.json'
 PROVIDERS = [('Ollama (local, gratuit, rien ne sort du PC)', 'ollama'),
@@ -66,6 +66,18 @@ def save(d: dict) -> None:
     CONFIG_PATH.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding='utf-8')
 
 
+def load_telegram() -> dict:
+    try:
+        return json.loads(remote.TELEGRAM_FILE.read_text(encoding='utf-8-sig'))   # utf-8-sig : tolere un BOM
+    except Exception:
+        return {}
+
+
+def save_telegram(d: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    remote.TELEGRAM_FILE.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding='utf-8')
+
+
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -106,6 +118,26 @@ class App(tk.Tk):
         ttk.Label(frm, text='Dossier du jeu').grid(row=r, column=0, sticky='w', **pad)
         self.game_dir = tk.StringVar(value=cfg.get('game_dir') or (str(CFG.game_dir) if CFG.game_dir else ''))
         ttk.Entry(frm, textvariable=self.game_dir, width=46).grid(row=r, column=1, sticky='w', **pad)
+
+        r += 1
+        ttk.Separator(frm).grid(row=r, column=0, columnspan=3, sticky='ew', pady=8)
+        r += 1
+        ttk.Label(frm, text='Telegram (directives et comptes-rendus a distance, facultatif)', font=('Segoe UI', 11, 'bold')).grid(row=r, column=0, columnspan=3, sticky='w', **pad)
+        tg = load_telegram()
+        r += 1
+        ttk.Label(frm, text='Jeton du bot (@BotFather)').grid(row=r, column=0, sticky='w', **pad)
+        self.tg_token = tk.StringVar(value=tg.get('token') or '')
+        self.tg_token_entry = ttk.Entry(frm, textvariable=self.tg_token, width=46, show='•')
+        self.tg_token_entry.grid(row=r, column=1, sticky='w', **pad)
+        self.show_tg_token = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text='afficher', variable=self.show_tg_token, command=lambda: self.tg_token_entry.config(show='' if self.show_tg_token.get() else '•')).grid(row=r, column=2, sticky='w')
+        r += 1
+        ttk.Label(frm, text='Identifiant de chat (@userinfobot)').grid(row=r, column=0, sticky='w', **pad)
+        self.tg_chat_id = tk.StringVar(value=str(tg.get('chat_id') or ''))
+        ttk.Entry(frm, textvariable=self.tg_chat_id, width=46).grid(row=r, column=1, sticky='w', **pad)
+        r += 1
+        ttk.Label(frm, text='Cree le bot avec @BotFather (/newbot dans Telegram) et recupere ton identifiant avec @userinfobot.',
+                  foreground='#555').grid(row=r, column=0, columnspan=3, sticky='w', padx=10)
 
         r += 1
         ttk.Separator(frm).grid(row=r, column=0, columnspan=3, sticky='ew', pady=8)
@@ -184,9 +216,13 @@ class App(tk.Tk):
             d['game_dir'] = gd
         return d
 
+    def collect_telegram(self) -> dict:
+        return {'token': self.tg_token.get().strip(), 'chat_id': self.tg_chat_id.get().strip()}
+
     def on_save(self) -> None:
         save(self.collect())
-        self.status.set(f'Enregistre dans {CONFIG_PATH}')
+        save_telegram(self.collect_telegram())
+        self.status.set(f'Enregistre dans {CONFIG_PATH} et {remote.TELEGRAM_FILE.name}')
 
     def on_check(self) -> None:
         self.on_save()
