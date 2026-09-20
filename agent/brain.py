@@ -948,7 +948,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 else:
                     dist = _dist_to_mappin(st)
                 inter = st.get('interact')
-                action = plan.maybe_decide(st, {'dist_m': dist, 'approached': _was_approached, 'rescued': _was_rescued}, log=_log)
+                action = plan.maybe_decide(st, {'dist_m': dist, 'approached': _was_approached, 'rescued': _was_rescued, 'muted': _muted}, log=_log)
 
                 if action == 'eviter':
                     hs = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('police')]

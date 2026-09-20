@@ -143,6 +143,10 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
         hostiles_engage = [e for e in hostiles if e['d'] < max(ENGAGE_R, 45)]
     else:
         hostiles_engage = [e for e in hostiles if e['d'] < ENGAGE_R]
+    # cibles deja jugees intouchables (vitre, autre niveau, scene) : ignorees ICI, pas seulement au moment
+    # d engager -- sinon on redecide "attaquer" toutes les 3 s pour rien, sans jamais avancer (20/09)
+    muted = extra.get('muted') or (lambda e: False)
+    hostiles_engage = [e for e in hostiles_engage if not muted(e)]
     if hostiles_engage:
         hp = st.get('hp'); hp = 100.0 if hp is None else hp
         return 'attaquer', f"regle : hostile a {hostiles_engage[0]['d']:.0f} m ({len(hostiles)} en vue, {_C.aggro}/{_C.courage})"
@@ -228,6 +232,8 @@ def _decide_llm(st: dict, extra: dict, timeout: float) -> tuple[str, str]:
             act = m.group(1)
             hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
                 and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
+            muted = extra.get('muted') or (lambda e: False)
+            hostiles = [e for e in hostiles if not muted(e)]
             if act == 'attendre' and hostiles and hostiles[0]['d'] < 15:
                 return 'attaquer', 'garde-fou : hostiles proches'
             if act == 'attendre' and (st.get('hp') or 100) >= 40:
@@ -247,6 +253,8 @@ def fallback(st: dict, extra: dict) -> str:
                 and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
     if st.get('combat'):
         return 'attaquer'
+    muted = extra.get('muted') or (lambda e: False)
+    hostiles = [e for e in hostiles if not muted(e)]
     if hostiles and hostiles[0]['d'] < 15 and not all(e.get('police') for e in hostiles):
         return 'attaquer'
     if st.get('interact'):
