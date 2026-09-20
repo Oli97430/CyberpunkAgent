@@ -390,9 +390,26 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         else:
                             _log(f'DIRECTIVE : lieu « {lieu} » inconnu')
                             remote.notify(f'Lieu « {lieu} » inconnu (marchand/charcudoc/point de voyage rapide deja decouvert seulement).')
+                    elif low in ('status', 'etat', 'etat?'):
+                        q_s = st.get('quest') or {}
+                        d_s = _dist_to_mappin(st)
+                        txt = (f"V : niveau {st.get('level', '?')}, vie {st.get('hp', 0):.0f} %, {inventory.MONEY} eddies\n"
+                               f"Quete : {q_s.get('text') or 'aucune'}" + (f' (a {d_s:.0f} m)' if d_s is not None else '') + '\n'
+                               f"Session : {stats.get('combats', 0)} combat(s), {stats.get('morts', 0)} mort(s), "
+                               f"{stats.get('loot', 0)} objet(s) loote(s), {stats.get('trajets', 0)} trajet(s), "
+                               f"{int(time.perf_counter() - t0)} s ecoulees")
+                        _log('DIRECTIVE : etat demande')
+                        remote.notify(txt)
+                    elif low in ('photo', 'screenshot', 'capture'):
+                        _log('DIRECTIVE : capture d ecran demandee')
+                        img = remote.screenshot_jpeg()
+                        if img:
+                            remote.send_photo(img, caption=f"V - {st.get('hp', 0):.0f} % de vie, niveau {st.get('level', '?')}")
+                        else:
+                            remote.notify('Capture d ecran impossible (dxcam indisponible ?).')
                     else:
                         _log(f'DIRECTIVE non reconnue : « {dtv} »')
-                        remote.notify('Directive non reconnue. Essaie : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>.')
+                        remote.notify('Directive non reconnue. Essaie : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>, status, photo.')
                     plan.last_t = -99.0; time.sleep(0.3); continue
 
                 # 0a2. BREACH PROTOCOL ouvert (terminal de piratage / point d acces) : le jeu est en pause, le mod relaie
@@ -441,6 +458,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log('V EST MORT : lieu memorise (objectifs a < 80 m evites) ; rechargement de la derniere sauvegarde')
                         if _reload_last_save(_log, stop=stop):
                             stats['morts'] = stats.get('morts', 0) + 1
+                            remote.notify(f"V est mort (mort n {stats['morts']} de la session) : rechargement de la derniere sauvegarde.")
                             if time.perf_counter() - last_death_t > 300.0:
                                 consecutive_deaths = 0
                             consecutive_deaths += 1; last_death_t = time.perf_counter()
@@ -663,6 +681,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     _log(f"combat detecte : {len(st.get('enemies') or [])} hostile(s), vie {st.get('hp', 0):.0f} %")
                     r = combat.fight(stop=stop, log=_log)
                     stats['combats'] = stats.get('combats', 0) + 1
+                    remote.notify(f"Combat termine : {r.get('coups', 0)} coup(s), {r.get('tirs', 0)} tir(s), {r.get('quickhacks', 0)} hack(s), {r.get('seconds', 0):.0f} s" + (' -- V est mort' if r.get('mort') else ''))
                     if not r.get('mort'):
                         lr = combat.loot_around(stop=stop, log=_log, seen=looted)
                         _log(f"loot : {lr.get('ramasses', 0)}/{lr.get('objets', 0)} objets ramasses")
@@ -689,10 +708,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     lr2 = nav._wait(nav._send({'cmd': 'levelup'}), timeout=6.0)
                     if lr2 and lr2.get('ok'):
                         _log(f"niveau : {lr2.get('bought', 0)} point(s) d attribut depenses ({lr2.get('attribute_points_before')} -> {lr2.get('attribute_points_after')}), perks dispo {lr2.get('perk_points')}")
+                        if lr2.get('bought'):
+                            remote.notify(f"V a monte en niveau : {lr2['bought']} point(s) d attribut depenses (niveau {st.get('level', '?')}).")
                         if (lr2.get('perk_points') or 0) > 0:
                             pr = nav._wait(nav._send({'cmd': 'perks'}), timeout=8.0)
                             if pr and pr.get('ok'):
                                 _log(f"perks : {len(pr.get('achetes') or [])} achete(s) {pr.get('achetes')}, restants {pr.get('restants')}")
+                                if pr.get('achetes'):
+                                    remote.notify(f"V a achete {len(pr['achetes'])} perk(s) : {', '.join(pr['achetes'])}.")
                             else:
                                 _log(f"perks : echec ({(pr or {}).get('reason', 'mod muet')})")
                     else:
@@ -854,6 +877,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             r = combat.fight(stop=stop, log=_log)
                             stats['combats'] = stats.get('combats', 0) + 1
                             stats['sauvetages'] = stats.get('sauvetages', 0) + 1
+                            remote.notify(f"V a joue les sauveurs : combat termine, {r.get('coups', 0)} coup(s), {r.get('seconds', 0):.0f} s" + (' -- V est mort' if r.get('mort') else ''))
                             if not r.get('mort'):
                                 lr = combat.loot_around(stop=stop, log=_log, seen=looted)
                                 stats['loot'] = stats.get('loot', 0) + lr.get('ramasses', 0)
@@ -1121,6 +1145,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                     # suivantes, mais le troncon partiel qui suit presque toujours remet path_failures a 0 avant
                                     # qu elles ne soient evaluees (9 min bloque au meme secteur, en boucle) -> on escalade ICI, tout de suite.
                                     _log(f'  bloque dans ce secteur depuis {stuck_cycles} cycles d evasion epuises : voyage rapide direct')
+                                    remote.notify('V etait bloque dans un secteur depuis plusieurs minutes : depart en voyage rapide ailleurs.')
                                     stuck_cycles = 0
                                     tx2, ty2 = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
                                     rft2 = nav.fast_travel_to(tx2, ty2, log=_log, min_gain_m=50.0)
@@ -1233,4 +1258,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         if money_start is not None:
             stats['eddies_gagnes'] = inventory.MONEY - money_start
         _log(f'=== fin : {stats} ===')
+        remote.notify(f"Session terminee ({stats['seconds'] / 60:.0f} min) : {stats.get('combats', 0)} combat(s), "
+                      f"{stats.get('morts', 0)} mort(s), {stats.get('loot', 0)} objet(s) loote(s), "
+                      f"{stats.get('trajets', 0)} trajet(s), {stats.get('eddies_gagnes', 0)} eddies gagnes.")
     return stats

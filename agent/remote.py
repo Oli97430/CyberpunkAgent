@@ -23,6 +23,15 @@ from .config import DATA_DIR
 TELEGRAM_FILE = DATA_DIR / 'telegram.json'   # {"token": "...", "chat_id": "..."} -- jamais commis au depot
 
 _Q: queue.Queue = queue.Queue()
+_screen = None   # capture.Screen() : cree a la demande (premiere « photo »), pas au demarrage (cout ~230 ms)
+
+
+def _creds() -> tuple[str | None, str | None]:
+    try:
+        cfg = json.loads(TELEGRAM_FILE.read_text(encoding='utf-8-sig'))   # utf-8-sig : tolere un BOM (Notepad/PowerShell)
+        return cfg.get('token'), cfg.get('chat_id')
+    except Exception:
+        return None, None
 _telegram_started = False
 
 
@@ -57,12 +66,9 @@ def _telegram_loop(token: str, chat_id: str, log) -> None:
 
 
 def notify(text: str) -> None:
-    """Compte-rendu a l utilisateur sur Telegram, si configure (silencieux sinon)."""
-    try:
-        cfg = json.loads(TELEGRAM_FILE.read_text(encoding='utf-8-sig'))   # utf-8-sig : tolere un BOM (Notepad/PowerShell)
-        token, chat_id = cfg.get('token'), cfg.get('chat_id')
-    except Exception:
-        return
+    """Compte-rendu a l utilisateur sur Telegram, si configure (silencieux sinon) -- V parle de lui-meme
+    (mort, fin de combat, niveau, secteur bloque, fin de session), pas seulement en reponse a une directive."""
+    token, chat_id = _creds()
     if not (token and chat_id):
         return
     try:
@@ -73,20 +79,53 @@ def notify(text: str) -> None:
         pass
 
 
+def screenshot_jpeg(quality: int = 70) -> bytes | None:
+    """Capture d ecran immediate (dxcam, deja utilise par capture.py) encodee en JPEG, ou None si indisponible."""
+    global _screen
+    try:
+        from . import capture
+        if _screen is None:
+            _screen = capture.Screen()
+            time.sleep(0.2)                       # dxcam : la 1ere image apres start() peut etre vide
+        frame = _screen.frame()
+        if frame is None:
+            return None
+        return capture.Screen.to_jpeg(frame, quality=quality)
+    except Exception:
+        return None
+
+
+def send_photo(image_bytes: bytes, caption: str = '') -> bool:
+    """Envoie une image sur Telegram (multipart, sans dependance externe -- le projet reste 100% stdlib)."""
+    token, chat_id = _creds()
+    if not (token and chat_id):
+        return False
+    boundary = 'CyberpunkAgentBoundary'
+    parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'.encode('utf-8')]
+    if caption:
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n{caption[:1000]}\r\n'.encode('utf-8'))
+    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; filename="v.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'.encode('utf-8'))
+    parts.append(image_bytes)
+    parts.append(f'\r\n--{boundary}--\r\n'.encode('utf-8'))
+    body = b''.join(parts)
+    req = urllib.request.Request(f'https://api.telegram.org/bot{token}/sendPhoto', data=body,
+                                  headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+    try:
+        urllib.request.urlopen(req, timeout=15)
+        return True
+    except Exception:
+        return False
+
+
 def ensure_started(log=print) -> None:
     """A appeler une fois au demarrage : lance le thread Telegram si telegram.json est rempli."""
     global _telegram_started
     if _telegram_started:
         return
     _telegram_started = True
-    try:
-        cfg = json.loads(TELEGRAM_FILE.read_text(encoding='utf-8-sig'))   # utf-8-sig : tolere un BOM (Notepad/PowerShell)
-        token, chat_id = cfg.get('token'), cfg.get('chat_id')
-    except Exception as e:
-        log(f'  [telegram] non configure ({TELEGRAM_FILE.name} illisible ou absent : {e}) : desactive, directives in-game seulement')
-        return
+    token, chat_id = _creds()
     if not (token and chat_id):
-        log('  [telegram] token/chat_id manquant dans telegram.json : desactive')
+        log(f'  [telegram] non configure ({TELEGRAM_FILE.name} illisible, absent ou incomplet) : desactive, directives in-game seulement')
         return
     threading.Thread(target=_telegram_loop, args=(token, chat_id, log), daemon=True).start()
 
