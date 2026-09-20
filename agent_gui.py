@@ -3,10 +3,12 @@ agent_gui.py -- panneau de configuration de CyberpunkAgent (fenetre Windows, san
 
     python agent_gui.py          ou  CyberpunkAgent-Config.exe
 
-Reglages : modele de decision (Ollama local / OpenAI / Anthropic), cle API (masquee), modeles,
-comportements (radio, conduite, sauvetages, courses, charcudoc), duree de session.
-Tout est ecrit dans %APPDATA%\\CyberpunkAgent\\config.json (la cle n est jamais journalisee).
-Boutons : Verifier (test du fournisseur et de l installation), Lancer V (ouvre le lanceur).
+Reglages, par onglet : Modele (Ollama local / OpenAI / Anthropic, cle API masquee, choix du
+modele Ollama avec sa VRAM), Comportements (radio, conduite, sauvetages, courses, charcudoc),
+Temperament (courage / style / agressivite, duree de session), Telegram (directives et
+comptes-rendus a distance, facultatif).
+Tout est ecrit dans %APPDATA%\\CyberpunkAgent\\config.json et telegram.json (jetons jamais
+journalises). Boutons : Verifier (test du fournisseur et de l installation), Lancer V.
 """
 from __future__ import annotations
 
@@ -34,7 +36,7 @@ FEATURES = [('radio', 'Ecouter la radio de temps en temps'),
             ('ripperdoc', 'Aller chez le charcudoc s optimiser (cyberware)'),
             ('buffs', 'Se buffer avant et pendant le combat (nourriture, boissons, boosters)'),
             ('stealth', 'Approcher en discretion et eliminer furtivement quand V n est pas repere'),
-            ('sprint', 'Sprinter sans cesse en combat (perk : +60 % de regeneration de sante en sprint)'),
+            ('sprint', 'Sprinter sans cesse en combat (perk : +60 % de regeneration en sprint)'),
             ('steal', 'Voler une voiture arretee (par envie, ou quand la sienne n arrive pas)'),
             ('terminals', 'Se connecter aux points d acces a portee et jouer le Breach Protocol'),
             ('fasttravel', 'Utiliser le voyage rapide (bornes) pour les objectifs lointains'),
@@ -78,106 +80,159 @@ def save_telegram(d: dict) -> None:
     remote.TELEGRAM_FILE.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding='utf-8')
 
 
+PAD = {'padx': 10, 'pady': 5}
+SECTION_FONT = ('Segoe UI', 11, 'bold')
+GROUP_FONT = ('Segoe UI', 10, 'bold')
+MUTED = '#666'
+
+
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title('CyberpunkAgent — configuration')
         self.resizable(False, False)
-        cfg = load()
-        pad = {'padx': 10, 'pady': 4}
-        frm = ttk.Frame(self, padding=12); frm.grid(sticky='nsew')
+        try:
+            ttk.Style(self).theme_use('vista')     # rendu natif Windows, plus net que le theme ttk par defaut
+        except tk.TclError:
+            pass
+        self.cfg = load()
+        self.tg = load_telegram()
 
-        ttk.Label(frm, text='Modele de decision', font=('Segoe UI', 11, 'bold')).grid(row=0, column=0, columnspan=3, sticky='w', **pad)
+        outer = ttk.Frame(self, padding=(14, 12, 14, 8))
+        outer.grid(sticky='nsew')
+
+        nb = ttk.Notebook(outer)
+        nb.grid(row=0, column=0, sticky='nsew')
+        tab_model = ttk.Frame(nb, padding=14)
+        tab_behaviors = ttk.Frame(nb, padding=14)
+        tab_temper = ttk.Frame(nb, padding=14)
+        tab_telegram = ttk.Frame(nb, padding=14)
+        nb.add(tab_model, text='  Modele  ')
+        nb.add(tab_behaviors, text='  Comportements  ')
+        nb.add(tab_temper, text='  Temperament  ')
+        nb.add(tab_telegram, text='  Telegram  ')
+
+        self._build_model_tab(tab_model)
+        self._build_behaviors_tab(tab_behaviors)
+        self._build_temperament_tab(tab_temper)
+        self._build_telegram_tab(tab_telegram)
+
+        bottom = ttk.Frame(outer, padding=(0, 10, 0, 0))
+        bottom.grid(row=1, column=0, sticky='ew')
+        ttk.Separator(bottom).pack(fill='x', pady=(0, 8))
+        btns = ttk.Frame(bottom); btns.pack(fill='x')
+        ttk.Button(btns, text='Enregistrer', command=self.on_save).pack(side='left', padx=(0, 6))
+        ttk.Button(btns, text='Verifier l installation', command=self.on_check).pack(side='left', padx=6)
+        ttk.Button(btns, text='Lancer V', command=self.on_launch).pack(side='left', padx=6)
+        ttk.Button(btns, text='Ouvrir les journaux', command=lambda: os.startfile(str(DATA_DIR))).pack(side='left', padx=6)
+        self.status = tk.StringVar(value=f'Configuration : {CONFIG_PATH}')
+        ttk.Label(bottom, textvariable=self.status, wraplength=620, foreground=MUTED).pack(fill='x', pady=(8, 0))
+
+        self._refresh()
+        self._refresh_models()
+
+    # ------------------------------------------------------------------ onglets
+
+    def _build_model_tab(self, frm: ttk.Frame) -> None:
+        cfg = self.cfg
+        ttk.Label(frm, text='Modele de decision', font=SECTION_FONT).grid(row=0, column=0, columnspan=3, sticky='w', pady=(0, 6))
         self.provider = tk.StringVar(value=cfg.get('provider') or CFG.provider or 'ollama')
-        for i, (label, val) in enumerate(PROVIDERS):
-            ttk.Radiobutton(frm, text=label, value=val, variable=self.provider, command=self._refresh).grid(row=1 + i, column=0, columnspan=3, sticky='w', padx=24)
+        r = 1
+        for label, val in PROVIDERS:
+            ttk.Radiobutton(frm, text=label, value=val, variable=self.provider, command=self._refresh).grid(
+                row=r, column=0, columnspan=3, sticky='w', padx=20, pady=2)
+            r += 1
 
-        r = 4
-        ttk.Label(frm, text='Cle API (OpenAI / Anthropic)').grid(row=r, column=0, sticky='w', **pad)
+        r += 1
+        ttk.Label(frm, text='Cle API (OpenAI / Anthropic)').grid(row=r, column=0, sticky='w', **PAD)
         self.api_key = tk.StringVar(value=cfg.get('api_key') or '')
-        self.key_entry = ttk.Entry(frm, textvariable=self.api_key, width=46, show='•')
-        self.key_entry.grid(row=r, column=1, sticky='w', **pad)
+        self.key_entry = ttk.Entry(frm, textvariable=self.api_key, width=42, show='•')
+        self.key_entry.grid(row=r, column=1, sticky='w', **PAD)
         self.show_key = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frm, text='afficher', variable=self.show_key, command=lambda: self.key_entry.config(show='' if self.show_key.get() else '•')).grid(row=r, column=2, sticky='w')
+        ttk.Checkbutton(frm, text='afficher', variable=self.show_key,
+                         command=lambda: self.key_entry.config(show='' if self.show_key.get() else '•')).grid(row=r, column=2, sticky='w')
 
         r += 1
-        ttk.Label(frm, text='Modele Ollama').grid(row=r, column=0, sticky='w', **pad)
+        ttk.Label(frm, text='Modele Ollama').grid(row=r, column=0, sticky='w', **PAD)
         self.model = tk.StringVar(value=cfg.get('model') or CFG.model or 'llama3.2:latest')
-        self.model_combo = ttk.Combobox(frm, textvariable=self.model, width=38, values=[self.model.get()])
-        self.model_combo.grid(row=r, column=1, sticky='w', **pad)
+        self.model_combo = ttk.Combobox(frm, textvariable=self.model, width=34, values=[self.model.get()])
+        self.model_combo.grid(row=r, column=1, sticky='w', **PAD)
         ttk.Button(frm, text='Rafraichir', command=self._refresh_models).grid(row=r, column=2, sticky='w')
+
         r += 1
-        ttk.Label(frm, text='Modele OpenAI').grid(row=r, column=0, sticky='w', **pad)
+        ttk.Label(frm, text='Modele OpenAI').grid(row=r, column=0, sticky='w', **PAD)
         self.openai_model = tk.StringVar(value=cfg.get('openai_model') or 'gpt-4o-mini')
-        ttk.Entry(frm, textvariable=self.openai_model, width=46).grid(row=r, column=1, sticky='w', **pad)
+        ttk.Entry(frm, textvariable=self.openai_model, width=42).grid(row=r, column=1, sticky='w', **PAD)
+
         r += 1
-        ttk.Label(frm, text='Modele Anthropic').grid(row=r, column=0, sticky='w', **pad)
+        ttk.Label(frm, text='Modele Anthropic').grid(row=r, column=0, sticky='w', **PAD)
         self.anthropic_model = tk.StringVar(value=cfg.get('anthropic_model') or 'claude-haiku-4-5-20251001')
-        ttk.Entry(frm, textvariable=self.anthropic_model, width=46).grid(row=r, column=1, sticky='w', **pad)
+        ttk.Entry(frm, textvariable=self.anthropic_model, width=42).grid(row=r, column=1, sticky='w', **PAD)
+
         r += 1
-        ttk.Label(frm, text='Dossier du jeu').grid(row=r, column=0, sticky='w', **pad)
+        ttk.Separator(frm).grid(row=r, column=0, columnspan=3, sticky='ew', pady=10)
+        r += 1
+        ttk.Label(frm, text='Dossier du jeu').grid(row=r, column=0, sticky='w', **PAD)
         self.game_dir = tk.StringVar(value=cfg.get('game_dir') or (str(CFG.game_dir) if CFG.game_dir else ''))
-        ttk.Entry(frm, textvariable=self.game_dir, width=46).grid(row=r, column=1, sticky='w', **pad)
+        ttk.Entry(frm, textvariable=self.game_dir, width=42).grid(row=r, column=1, columnspan=2, sticky='w', **PAD)
 
-        r += 1
-        ttk.Separator(frm).grid(row=r, column=0, columnspan=3, sticky='ew', pady=8)
-        r += 1
-        ttk.Label(frm, text='Telegram (directives et comptes-rendus a distance, facultatif)', font=('Segoe UI', 11, 'bold')).grid(row=r, column=0, columnspan=3, sticky='w', **pad)
-        tg = load_telegram()
-        r += 1
-        ttk.Label(frm, text='Jeton du bot (@BotFather)').grid(row=r, column=0, sticky='w', **pad)
-        self.tg_token = tk.StringVar(value=tg.get('token') or '')
-        self.tg_token_entry = ttk.Entry(frm, textvariable=self.tg_token, width=46, show='•')
-        self.tg_token_entry.grid(row=r, column=1, sticky='w', **pad)
-        self.show_tg_token = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frm, text='afficher', variable=self.show_tg_token, command=lambda: self.tg_token_entry.config(show='' if self.show_tg_token.get() else '•')).grid(row=r, column=2, sticky='w')
-        r += 1
-        ttk.Label(frm, text='Identifiant de chat (@userinfobot)').grid(row=r, column=0, sticky='w', **pad)
-        self.tg_chat_id = tk.StringVar(value=str(tg.get('chat_id') or ''))
-        ttk.Entry(frm, textvariable=self.tg_chat_id, width=46).grid(row=r, column=1, sticky='w', **pad)
-        r += 1
-        ttk.Label(frm, text='Cree le bot avec @BotFather (/newbot dans Telegram) et recupere ton identifiant avec @userinfobot.',
-                  foreground='#555').grid(row=r, column=0, columnspan=3, sticky='w', padx=10)
-
-        r += 1
-        ttk.Separator(frm).grid(row=r, column=0, columnspan=3, sticky='ew', pady=8)
-        r += 1
-        ttk.Label(frm, text='Comportements de V', font=('Segoe UI', 11, 'bold')).grid(row=r, column=0, columnspan=3, sticky='w', **pad)
-        feats = cfg.get('features') or {}
+    def _build_behaviors_tab(self, frm: ttk.Frame) -> None:
+        ttk.Label(frm, text='Comportements de V', font=SECTION_FONT).grid(row=0, column=0, sticky='w', pady=(0, 8))
+        feats = self.cfg.get('features') or {}
         self.features: dict[str, tk.BooleanVar] = {}
-        for key, label in FEATURES:
-            r += 1
-            v = tk.BooleanVar(value=bool(cfg.get('focus_tracked', True)) if key == 'focus_tracked' else bool(feats.get(key, True)))
+        for i, (key, label) in enumerate(FEATURES):
+            v = tk.BooleanVar(value=bool(self.cfg.get('focus_tracked', True)) if key == 'focus_tracked' else bool(feats.get(key, True)))
             self.features[key] = v
-            ttk.Checkbutton(frm, text=label, variable=v).grid(row=r, column=0, columnspan=3, sticky='w', padx=24)
+            ttk.Checkbutton(frm, text=label, variable=v).grid(row=1 + i, column=0, sticky='w', padx=4, pady=3)
 
+    def _build_temperament_tab(self, frm: ttk.Frame) -> None:
+        cfg = self.cfg
+        ttk.Label(frm, text='Temperament de V', font=SECTION_FONT).grid(row=0, column=0, columnspan=3, sticky='w', pady=(0, 8))
         self.temper: dict[str, tk.StringVar] = {}
+        r = 1
         for key, label, opts in TEMPERAMENT:
+            ttk.Label(frm, text=label, font=GROUP_FONT).grid(row=r, column=0, columnspan=3, sticky='w', pady=(6, 2))
             r += 1
-            ttk.Label(frm, text=label, font=('Segoe UI', 10, 'bold')).grid(row=r, column=0, columnspan=3, sticky='w', **pad)
             v = tk.StringVar(value=cfg.get(key) or {'courage': 'temeraire', 'style': 'melee', 'aggro': 'normal'}[key])
             self.temper[key] = v
             for val, text in opts:
+                ttk.Radiobutton(frm, text=text, value=val, variable=v).grid(row=r, column=0, columnspan=3, sticky='w', padx=20, pady=1)
                 r += 1
-                ttk.Radiobutton(frm, text=text, value=val, variable=v).grid(row=r, column=0, columnspan=3, sticky='w', padx=24)
         r += 1
-        ttk.Label(frm, text='Duree d une session (minutes)').grid(row=r, column=0, sticky='w', **pad)
+        ttk.Separator(frm).grid(row=r, column=0, columnspan=3, sticky='ew', pady=10)
+        r += 1
+        ttk.Label(frm, text='Duree d une session (minutes)').grid(row=r, column=0, sticky='w', **PAD)
         self.minutes = tk.StringVar(value=str(cfg.get('minutes') or 20))
-        ttk.Spinbox(frm, from_=5, to=240, increment=5, textvariable=self.minutes, width=8).grid(row=r, column=1, sticky='w', **pad)
+        ttk.Spinbox(frm, from_=5, to=240, increment=5, textvariable=self.minutes, width=8).grid(row=r, column=1, sticky='w', **PAD)
 
-        r += 1
-        ttk.Separator(frm).grid(row=r, column=0, columnspan=3, sticky='ew', pady=8)
-        r += 1
-        btns = ttk.Frame(frm); btns.grid(row=r, column=0, columnspan=3, sticky='ew')
-        ttk.Button(btns, text='Enregistrer', command=self.on_save).pack(side='left', padx=4)
-        ttk.Button(btns, text='Verifier l installation', command=self.on_check).pack(side='left', padx=4)
-        ttk.Button(btns, text='Lancer V', command=self.on_launch).pack(side='left', padx=4)
-        ttk.Button(btns, text='Ouvrir les journaux', command=lambda: os.startfile(str(DATA_DIR))).pack(side='left', padx=4)
-        r += 1
-        self.status = tk.StringVar(value=f'Configuration : {CONFIG_PATH}')
-        ttk.Label(frm, textvariable=self.status, wraplength=560, foreground='#555').grid(row=r, column=0, columnspan=3, sticky='w', **pad)
-        self._refresh()
-        self._refresh_models()
+    def _build_telegram_tab(self, frm: ttk.Frame) -> None:
+        tg = self.tg
+        ttk.Label(frm, text='Telegram (directives et comptes-rendus a distance)', font=SECTION_FONT).grid(
+            row=0, column=0, columnspan=3, sticky='w', pady=(0, 4))
+        ttk.Label(frm, text='Facultatif -- laisse vide pour ne piloter V que depuis le panneau in-game (CET).',
+                  foreground=MUTED).grid(row=1, column=0, columnspan=3, sticky='w', pady=(0, 10))
+
+        ttk.Label(frm, text='Jeton du bot (@BotFather)').grid(row=2, column=0, sticky='w', **PAD)
+        self.tg_token = tk.StringVar(value=tg.get('token') or '')
+        self.tg_token_entry = ttk.Entry(frm, textvariable=self.tg_token, width=42, show='•')
+        self.tg_token_entry.grid(row=2, column=1, sticky='w', **PAD)
+        self.show_tg_token = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text='afficher', variable=self.show_tg_token,
+                         command=lambda: self.tg_token_entry.config(show='' if self.show_tg_token.get() else '•')).grid(row=2, column=2, sticky='w')
+
+        ttk.Label(frm, text='Identifiant de chat (@userinfobot)').grid(row=3, column=0, sticky='w', **PAD)
+        self.tg_chat_id = tk.StringVar(value=str(tg.get('chat_id') or ''))
+        ttk.Entry(frm, textvariable=self.tg_chat_id, width=42).grid(row=3, column=1, sticky='w', **PAD)
+
+        ttk.Separator(frm).grid(row=4, column=0, columnspan=3, sticky='ew', pady=10)
+        ttk.Label(frm, text='Marche a suivre :', font=GROUP_FONT).grid(row=5, column=0, columnspan=3, sticky='w')
+        steps = ('1. Dans Telegram, cherche @BotFather et envoie /newbot -- il te donne un jeton.\n'
+                 "2. Cherche @userinfobot et envoie-lui n importe quoi -- il te donne ton identifiant de chat.\n"
+                 '3. Envoie un premier message a TON bot (pour qu il puisse te repondre).\n'
+                 '4. Remplis les deux champs ci-dessus et clique Enregistrer.')
+        ttk.Label(frm, text=steps, foreground=MUTED, justify='left').grid(row=6, column=0, columnspan=3, sticky='w', pady=(4, 0))
+
+    # ------------------------------------------------------------------ actions
 
     def _refresh(self) -> None:
         state = 'normal' if self.provider.get() != 'ollama' else 'disabled'
