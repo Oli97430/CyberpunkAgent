@@ -238,6 +238,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     consecutive_deaths, last_death_t = 0, -1e9   # 3 morts en moins de 5 min au meme endroit -> on laisse tomber la quete un moment
     last_block_pos = None
     escape_tries, escape_pos = 0, None   # essais d evasion (porte/sonde) au MEME endroit : 3 max avant d escalader
+    stuck_cycles, stuck_pos = 0, None    # cycles d evasion EPUISES (escape_tries >= 3) dans le meme SECTEUR (60 m) : 2 max
     last_heal_t = -99.0
     plan = planner.Planner()
     last_inventory_t = -999.0
@@ -1041,6 +1042,35 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             if escape_tries >= 3:
                                 _log('  meme point de blocage 3 fois de suite : V arrete d essayer cette porte, on cherche une autre solution')
                                 escape_tries, escape_pos = 0, None
+                                if stuck_pos is not None and math.hypot(here_e[0] - stuck_pos[0], here_e[1] - stuck_pos[1]) < 60.0:
+                                    stuck_cycles += 1
+                                else:
+                                    stuck_cycles, stuck_pos = 1, here_e
+                                if stuck_cycles >= 2:
+                                    # 19-20/09 : un cycle d evasion epuise laissait juste path_failures=5 pour forcer les branches
+                                    # suivantes, mais le troncon partiel qui suit presque toujours remet path_failures a 0 avant
+                                    # qu elles ne soient evaluees (9 min bloque au meme secteur, en boucle) -> on escalade ICI, tout de suite.
+                                    _log(f'  bloque dans ce secteur depuis {stuck_cycles} cycles d evasion epuises : voyage rapide direct')
+                                    stuck_cycles = 0
+                                    tx2, ty2 = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
+                                    rft2 = nav.fast_travel_to(tx2, ty2, log=_log, min_gain_m=50.0)
+                                    if rft2.get('ok'):
+                                        stats['voyages'] = stats.get('voyages', 0) + 1; path_failures = 0; straight_tried = False
+                                        continue
+                                    nxts = quests.switch(alt_target.get('hash') if alt_target else q.get('hash'), log=_log)
+                                    if nxts:
+                                        alt_target = {'x': nxts['x'], 'y': nxts['y'], 'text': nxts.get('text'), 'hash': nxts.get('hash'), 't0': time.perf_counter()}
+                                        stats['changements_quete'] = stats.get('changements_quete', 0) + 1
+                                        path_failures = 0; straight_tried = False
+                                        time.sleep(1.0); continue
+                                    nxes = explore.pick(log=_log)
+                                    if nxes:
+                                        alt_target = {'x': nxes['x'], 'y': nxes['y'], 'text': nxes.get('text'), 'hash': nxes.get('hash'), 't0': time.perf_counter()}
+                                        stats['explorations'] = stats.get('explorations', 0) + 1
+                                        path_failures = 0; straight_tried = False
+                                        time.sleep(1.0); continue
+                                    _log('secteur bloque, aucun voyage/quete/exploration possible : arret.')
+                                    break
                                 path_failures = 5; straight_tried = True   # force le passage aux branches suivantes (insister / voyage rapide / quete)
                                 continue
                             continue
