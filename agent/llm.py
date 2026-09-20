@@ -6,6 +6,7 @@ attend qu il reponde.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 import urllib.request
@@ -22,6 +23,16 @@ def alive(timeout: float = 2.0) -> bool:
         return True
     except Exception:
         return False
+
+
+def list_models(timeout: float = 4.0) -> list[str]:
+    """20/09 (Olivier : choisir d autres modeles locaux) : noms des modeles Ollama deja installes
+    (`ollama pull ...`), pour proposer un choix plutot que de taper un nom a l aveugle."""
+    try:
+        data = json.loads(urllib.request.urlopen(TAGS, timeout=timeout).read())
+        return sorted(m['name'] for m in data.get('models', []) if m.get('name'))
+    except Exception:
+        return []
 
 
 def ensure(log=print, wait_s: float = 25.0) -> bool:

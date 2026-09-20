@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, remote, sms, terminals, vendor
+from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, input_kbm as kbm, inventory, llm, motion, nav, planner, quests, radio, remote, sms, terminals, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -32,8 +32,9 @@ _DIRECTIVE_KEYWORDS = frozenset({
     'attaque', 'attaquer', 'combat', 'objectif', 'quete', 'marchand', 'vendre', 'boutique',
     'charcudoc', 'ripperdoc', 'implant', 'explore', 'explorer', 'balade', 'changer_quete', 'autre_quete',
     'status', 'etat', 'etat?', 'photo', 'screenshot', 'capture', 'niveau', 'soigne', 'stats',
+    'modeles', 'liste_modeles', 'modele_liste',
 })
-_DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ')
+_DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ', 'modele ')
 
 
 _LOG_STATE = {'file': LOG_FILE, 'err': None}
@@ -466,9 +467,28 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             remote.notify(f'V est desormais {v_a}.')
                         else:
                             remote.notify(f'Agressivite inconnue ({v_a}) : defensif, normal ou chasseur.')
+                    elif low in ('modeles', 'liste_modeles', 'modele_liste'):
+                        _log('DIRECTIVE : liste des modeles Ollama demandee')
+                        if CFG.provider != 'ollama':
+                            remote.notify(f'Fournisseur actuel : {CFG.provider} (pas Ollama) -- pas de liste locale a proposer.')
+                        else:
+                            names = llm.list_models()
+                            remote.notify('Modeles Ollama installes :\n' + ('\n'.join(f'- {n}' + (' (actif)' if n == CFG.model else '') for n in names) if names else 'aucun trouve (Ollama injoignable ?)'))
+                    elif low.startswith('modele '):
+                        v_m = low.split(' ', 1)[1].strip()
+                        if CFG.provider != 'ollama':
+                            remote.notify(f'Fournisseur actuel : {CFG.provider} (pas Ollama) -- change de fournisseur dans le panneau in-game d abord.')
+                        else:
+                            names = llm.list_models()
+                            if names and v_m not in names:
+                                remote.notify(f"Modele « {v_m} » non installe localement (`ollama pull {v_m}` d abord). Modeles disponibles :\n" + '\n'.join(f'- {n}' for n in names))
+                            else:
+                                CFG.model = v_m
+                                _log(f'DIRECTIVE : modele Ollama regle sur {v_m}')
+                                remote.notify(f'V utilise desormais le modele {v_m}.')
                     else:
                         _log(f'DIRECTIVE non reconnue : « {dtv} »')
-                        remote.notify('Directive non reconnue. Essaie : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>, status, photo, niveau, soigne, stats, courage/style/aggro <valeur>.')
+                        remote.notify('Directive non reconnue. Essaie : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>, status, photo, niveau, soigne, stats, courage/style/aggro <valeur>, modeles, modele <nom>.')
                     plan.last_t = -99.0; time.sleep(0.3); continue
 
                 # 0a2. BREACH PROTOCOL ouvert (terminal de piratage / point d acces) : le jeu est en pause, le mod relaie
