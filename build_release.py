@@ -28,11 +28,15 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True, cwd=ROOT)
 
 
-def pyinstaller(script: Path, name: str, add_data: list[tuple[Path, str]], icon: Path | None = None, windowed: bool = False) -> Path:
+def pyinstaller(script: Path, name: str, add_data: list[tuple[Path, str]], icon: Path | None = None, windowed: bool = False,
+                 need_capture: bool = False) -> Path:
     cmd = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed' if windowed else '--console',
-           '--name', name, '--distpath', str(DIST), '--workpath', str(BUILD / 'work'), '--specpath', str(BUILD),
-           '--exclude-module', 'dxcam', '--exclude-module', 'cv2', '--exclude-module', 'numpy', '--exclude-module', 'vgamepad',
-           '--exclude-module', 'PIL'] + ([] if windowed else ['--exclude-module', 'tkinter'])
+           '--name', name, '--distpath', str(DIST), '--workpath', str(BUILD / 'work'), '--specpath', str(BUILD)]
+    # dxcam/cv2/numpy : necessaires seulement a l agent (remote.py -> capture.py, directive « photo » du 20/09) ;
+    # exclus des autres builds (Config, installateur) qui ne s en servent pas.
+    if not need_capture:
+        cmd += ['--exclude-module', 'dxcam', '--exclude-module', 'cv2', '--exclude-module', 'numpy']
+    cmd += ['--exclude-module', 'vgamepad', '--exclude-module', 'PIL'] + ([] if windowed else ['--exclude-module', 'tkinter'])
     for src, dst in add_data:
         cmd += ['--add-data', f'{src};{dst}']
     if icon and icon.exists():
@@ -51,7 +55,7 @@ def main() -> None:
     PAYLOAD.mkdir(parents=True)
 
     # 1. l agent + le panneau de configuration (fenetre tkinter)
-    agent_exe = pyinstaller(ROOT / 'run_agent.py', 'CyberpunkAgent', [])
+    agent_exe = pyinstaller(ROOT / 'run_agent.py', 'CyberpunkAgent', [], need_capture=True)
     gui_exe = pyinstaller(ROOT / 'agent_gui.py', 'CyberpunkAgent-Config', [], windowed=True)
 
     # 2. la charge utile de l installateur : agent, mod, docs, sources minimales (detection du jeu)
