@@ -59,7 +59,7 @@ def _telegram_loop(token: str, chat_id: str, log) -> None:
 def notify(text: str) -> None:
     """Compte-rendu a l utilisateur sur Telegram, si configure (silencieux sinon)."""
     try:
-        cfg = json.loads(TELEGRAM_FILE.read_text(encoding='utf-8'))
+        cfg = json.loads(TELEGRAM_FILE.read_text(encoding='utf-8-sig'))   # utf-8-sig : tolere un BOM (Notepad/PowerShell)
         token, chat_id = cfg.get('token'), cfg.get('chat_id')
     except Exception:
         return
@@ -80,7 +80,7 @@ def ensure_started(log=print) -> None:
         return
     _telegram_started = True
     try:
-        cfg = json.loads(TELEGRAM_FILE.read_text(encoding='utf-8'))
+        cfg = json.loads(TELEGRAM_FILE.read_text(encoding='utf-8-sig'))   # utf-8-sig : tolere un BOM (Notepad/PowerShell)
         token, chat_id = cfg.get('token'), cfg.get('chat_id')
     except Exception:
         log(f'  [telegram] non configure ({TELEGRAM_FILE.name} absent) : desactive, directives in-game seulement')
