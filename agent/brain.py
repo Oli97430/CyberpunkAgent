@@ -238,6 +238,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     consecutive_deaths, last_death_t = 0, -1e9   # 3 morts en moins de 5 min au meme endroit -> on laisse tomber la quete un moment
     last_block_pos = None
     escape_tries, escape_pos = 0, None   # essais d evasion (porte/sonde) au MEME endroit : 3 max avant d escalader
+    shop_stuck_n, shop_stuck_pos, shop_stuck_t = 0, None, -1e9   # ecarts d un marchand/menu au MEME endroit (survit aux resets de menu_t/dialog)
     stuck_cycles, stuck_pos = 0, None    # cycles d evasion EPUISES (escape_tries >= 3) dans le meme SECTEUR (60 m) : 2 max
     last_heal_t = -99.0
     plan = planner.Planner()
@@ -501,6 +502,18 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                     kbm.tap('ENTER', 0.08)
                         if st.get('scene'):
                             time.sleep(0.5); kbm.hold('S'); time.sleep(1.2); kbm.release('S')
+                        s_ms = motion.read_state() or st
+                        if s_ms.get('x') is not None:
+                            if shop_stuck_pos is not None and time.perf_counter() - shop_stuck_t < 300.0 and math.hypot(s_ms['x'] - shop_stuck_pos[0], s_ms['y'] - shop_stuck_pos[1]) < 6.0:
+                                shop_stuck_n += 1
+                            else:
+                                shop_stuck_n, shop_stuck_pos = 1, (s_ms['x'], s_ms['y'])
+                            shop_stuck_t = time.perf_counter()
+                            if shop_stuck_n >= 3:
+                                _log(f'  {shop_stuck_n}e ecart au meme endroit (menu) : V s eloigne vraiment cette fois')
+                                nav.add_avoid(*shop_stuck_pos)
+                                kbm.hold('S'); kbm.act_hold('sprint'); time.sleep(4.0); kbm.act_release('sprint'); kbm.release('S')
+                                shop_stuck_n = 0; alt_target = None; plan.last_t = -99.0
                     elif time.perf_counter() - menu_t > 30.0:
                         # jamais de boucle muette : on le dit et on recommence une serie (menu de mort, chargement, carte...)
                         _log(f"menu toujours ouvert 30 s apres 4 Echap (vie {st.get('hp')}, scene {st.get('scene')}) : nouvelle serie")
@@ -635,6 +648,18 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             kbm.hold('S'); time.sleep(1.5); kbm.release('S')
                             motion.turn_by(150.0, timeout=1.5, stop=stop)
                             kbm.hold('W'); time.sleep(1.2); kbm.release('W')
+                            s_ds = motion.read_state() or st
+                            if s_ds.get('x') is not None:
+                                if shop_stuck_pos is not None and time.perf_counter() - shop_stuck_t < 300.0 and math.hypot(s_ds['x'] - shop_stuck_pos[0], s_ds['y'] - shop_stuck_pos[1]) < 6.0:
+                                    shop_stuck_n += 1
+                                else:
+                                    shop_stuck_n, shop_stuck_pos = 1, (s_ds['x'], s_ds['y'])
+                                shop_stuck_t = time.perf_counter()
+                                if shop_stuck_n >= 3:
+                                    _log(f'  {shop_stuck_n}e ecart au meme endroit (commerce) : V s eloigne vraiment cette fois')
+                                    nav.add_avoid(*shop_stuck_pos)
+                                    kbm.hold('S'); kbm.act_hold('sprint'); time.sleep(4.0); kbm.act_release('sprint'); kbm.release('S')
+                                    shop_stuck_n = 0; alt_target = None; plan.last_t = -99.0
                         time.sleep(0.5); continue
                     same_hub = same_hub + 1 if sig == last_hub_sig else 1
                     last_hub_sig = sig
