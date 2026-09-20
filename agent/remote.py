@@ -82,8 +82,8 @@ def ensure_started(log=print) -> None:
     try:
         cfg = json.loads(TELEGRAM_FILE.read_text(encoding='utf-8-sig'))   # utf-8-sig : tolere un BOM (Notepad/PowerShell)
         token, chat_id = cfg.get('token'), cfg.get('chat_id')
-    except Exception:
-        log(f'  [telegram] non configure ({TELEGRAM_FILE.name} absent) : desactive, directives in-game seulement')
+    except Exception as e:
+        log(f'  [telegram] non configure ({TELEGRAM_FILE.name} illisible ou absent : {e}) : desactive, directives in-game seulement')
         return
     if not (token and chat_id):
         log('  [telegram] token/chat_id manquant dans telegram.json : desactive')
