@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, sms, terminals, vendor
+from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, input_kbm as kbm, inventory, motion, nav, planner, quests, radio, remote, sms, terminals, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -285,6 +285,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                      for m in ('brain', 'combat', 'planner', 'motion'))
     _write_diag()
     _log(f'=== cerveau v1 demarre ({duration_s:.0f} s max) | code : {stamp} ===')
+    remote.ensure_started(log=_log)
     # auto-test : V bouge-t-il ? (touche avant 0,6 s) -> detecte tout de suite un blocage d entree
     s0 = motion.read_state()
     if s0 and kbm.game_focused():
@@ -325,6 +326,74 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 st = motion.read_state()
                 if st is None:
                     stats['attentes'] += 1; time.sleep(0.5); continue
+
+                # 0a0. DIRECTIVE recue (jeu ou Telegram) : V est redirige en direct, sans attendre qu il ait fini
+                dtv = remote.poll(log=_log)
+                if dtv:
+                    low = dtv.lower().strip()
+                    stats['directives'] = stats.get('directives', 0) + 1
+                    if low in ('stop', 'arret', 'arrete-toi', 'arrete toi'):
+                        _log('DIRECTIVE : arret demande'); remote.notify('V s arrete.')
+                        if stop is not None: stop.set()
+                    elif low == 'pause':
+                        if pause is not None: pause.set()
+                        remote.notify('V est en pause.')
+                    elif low in ('reprendre', 'resume', 'continue'):
+                        if pause is not None: pause.clear()
+                        remote.notify('V reprend.')
+                    elif low in ('attaque', 'attaquer', 'combat'):
+                        hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')]
+                        if hostiles:
+                            _log(f'DIRECTIVE : attaque ({len(hostiles)} hostile(s) en vue)')
+                            combat.fight(stop=stop, log=_log)
+                            stats['combats'] = stats.get('combats', 0) + 1
+                            remote.notify(f'V a engage le combat ({len(hostiles)} hostile(s)).')
+                        else:
+                            _log('DIRECTIVE : attaque demandee mais aucun hostile en vue')
+                            remote.notify('Aucun hostile en vue pour l instant.')
+                    elif low in ('objectif', 'quete'):
+                        alt_target = None
+                        _log('DIRECTIVE : retour a la quete suivie')
+                        remote.notify('V reprend sa quete.')
+                    elif low in ('marchand', 'vendre', 'boutique'):
+                        last_sell_t = -999.0
+                        _log('DIRECTIVE : course chez le marchand forcee')
+                        remote.notify('V part faire ses courses.')
+                    elif low in ('charcudoc', 'ripperdoc', 'implant'):
+                        last_ripper_t = -999.0
+                        _log('DIRECTIVE : passage charcudoc force')
+                        remote.notify('V va chez le charcudoc.')
+                    elif low in ('explore', 'explorer', 'balade'):
+                        nxd = explore.pick(log=_log)
+                        if nxd:
+                            alt_target = {'x': nxd['x'], 'y': nxd['y'], 'text': nxd.get('text'), 'hash': nxd.get('hash'), 't0': time.perf_counter()}
+                            stats['explorations'] = stats.get('explorations', 0) + 1
+                        remote.notify('V part explorer' + (' : ' + nxd['text'] if nxd else ' (aucun point connu)'))
+                    elif low in ('changer_quete', 'autre_quete'):
+                        nxd = quests.switch(alt_target.get('hash') if alt_target else (st.get('quest') or {}).get('hash'), log=_log)
+                        if nxd:
+                            alt_target = {'x': nxd['x'], 'y': nxd['y'], 'text': nxd.get('text'), 'hash': nxd.get('hash'), 't0': time.perf_counter()}
+                            stats['changements_quete'] = stats.get('changements_quete', 0) + 1
+                        remote.notify('nouvelle cible : ' + (nxd['text'] if nxd else 'aucune trouvee'))
+                    elif low.startswith('va_a ') or low.startswith('va a '):
+                        lieu = dtv.split(' ', 2)[-1].strip().lower()
+                        cands = [v for v in (vendor.list_vendors() or []) if lieu in str(v.get('variant') or '').lower()]
+                        ftr = nav._wait(nav._send({'cmd': 'fast_travel_points'}), timeout=6.0)
+                        cands += [p for p in ((ftr or {}).get('points') or []) if p.get('x') is not None
+                                  and (lieu in str(p.get('name') or '').lower() or lieu in str(p.get('district') or '').lower())]
+                        if cands:
+                            c = min(cands, key=lambda c: c.get('dist', c.get('d', 1e9)))
+                            label = c.get('name') or c.get('variant') or lieu
+                            alt_target = {'x': c['x'], 'y': c['y'], 'text': f'directive : {label}', 'hash': -800_000_000 - round(c['x'] + c['y']), 't0': time.perf_counter()}
+                            _log(f'DIRECTIVE : V part vers « {label} »')
+                            remote.notify(f'V part vers {label}.')
+                        else:
+                            _log(f'DIRECTIVE : lieu « {lieu} » inconnu')
+                            remote.notify(f'Lieu « {lieu} » inconnu (marchand/charcudoc/point de voyage rapide deja decouvert seulement).')
+                    else:
+                        _log(f'DIRECTIVE non reconnue : « {dtv} »')
+                        remote.notify('Directive non reconnue. Essaie : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>.')
+                    plan.last_t = -99.0; time.sleep(0.3); continue
 
                 # 0a2. BREACH PROTOCOL ouvert (terminal de piratage / point d acces) : le jeu est en pause, le mod relaie
                 # l etat par onDraw (paused=true). V lit la grille et les sequences, calcule la solution et clique.

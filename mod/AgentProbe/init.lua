@@ -38,6 +38,7 @@ local slowT, slowLoot, slowVehicles, slowNpcs, slowTraffic = -99.0, nil, nil, ni
 local playerVehRecs, playerVehRecsT = {}, -999.0   -- records (TweakDB) des vehicules de V, rafraichis toutes les 15 s
 local deadSince, deadReloaded, lastCmdClock = nil, false, -1e9   -- mort de V : rechargement automatique si l agent est actif
 local vehCallT = -999.0                       -- os.clock() du dernier vehicle_call : export des vehicules de V a 400 m pendant 45 s   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
+local pendingDirective = nil                  -- directive tapee dans le panneau (ou reçue par Telegram cote Python) : lue une fois par get_directive
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
 local breachCtrl = nil
@@ -2793,6 +2794,11 @@ local function handleCommand(player, cmd)
         if not okM then resp.reason = 'Mount : ' .. tostring(errM) end
         journal((okM and 'OK   ' or 'FAIL ') .. 'mount (' .. how .. ')' .. (okM and '' or (' : ' .. tostring(errM))))
         return resp
+    elseif cmd.cmd == 'get_directive' then
+        resp.ok = true
+        resp.text = pendingDirective or ''
+        pendingDirective = nil
+        return resp
     elseif cmd.cmd == 'access_points' then
         -- POINTS D ACCES (terminaux du Breach Protocol) a < 40 m, avec leur etat pirate
         journal('RUN  access_points')
@@ -3168,7 +3174,8 @@ end
 local ui = { open = false, provider = 1, key = '', model = 'llama3.2:latest', openai_model = 'gpt-4o-mini',
              anthropic_model = 'claude-haiku-4-5-20251001', minutes = 20, saved = '',
              radio = true, driving = true, rescue = true, sell = true, ripperdoc = true, buffs = true,
-             stealth = true, fasttravel = true, phone = true, sms = true, appearance = true, recipes = true, sprint = true, steal = true, terminals = true, courage = 3, style = 1, aggro = 2 }
+             stealth = true, fasttravel = true, phone = true, sms = true, appearance = true, recipes = true, sprint = true, steal = true, terminals = true, courage = 3, style = 1, aggro = 2,
+             directive = '', directiveSent = '' }
 local uiCourage = { 'prudent', 'equilibre', 'temeraire' }
 local uiStyle = { 'melee', 'mixte', 'distance' }
 local uiAggro = { 'defensif', 'normal', 'chasseur' }
@@ -3270,6 +3277,17 @@ registerForEvent('onDraw', function()
         ImGui.Text('Agressivite :'); ImGui.SameLine()
         for i, v in ipairs(uiAggro) do if ImGui.RadioButton(v .. '##a', ui.aggro == i) then ui.aggro = i end; if i < #uiAggro then ImGui.SameLine() end end
         ui.minutes = ImGui.InputInt('Duree de session (min)', ui.minutes)
+        ImGui.Separator()
+        ImGui.Separator()
+        ImGui.Text('Diriger V (prise en compte au prochain cycle, quelques secondes)')
+        ui.directive = ImGui.InputText('Directive', ui.directive, 200)
+        if ImGui.Button('Envoyer') and ui.directive ~= '' then
+            pendingDirective = ui.directive
+            ui.directiveSent = 'envoyee (' .. ui.directive .. ') ' .. os.date('%H:%M:%S')
+            ui.directive = ''
+        end
+        ImGui.SameLine(); ImGui.Text(ui.directiveSent)
+        ImGui.TextWrapped('Commandes : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>')
         ImGui.Separator()
         if ImGui.Button('Enregistrer') then pcall(uiSave) end
         ImGui.SameLine(); ImGui.Text(ui.saved)
