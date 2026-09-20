@@ -638,7 +638,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 if CFG.features.get('sell', True) and not _threat_near(st) and (inv_full or need_heals) and time.perf_counter() - last_sell_t > 600.0 \
                         and (not focus or need_heals):    # en focus, seules les courses de soins passent avant la quete
                     last_sell_t = time.perf_counter()
-                    vendor.MAX_VENDOR_M = 700.0                        # plein ou en manque de soins : on accepte d aller plus loin
+                    vendor.MAX_VENDOR_M = 5000.0                       # course dediee : le marchand connu le plus proche fera l affaire,
+                                                                       # sell_trip() sait deja s y rendre a toute distance (conduite/voyage rapide)
                     vend = vendor.pick_vendor(vendor.list_vendors())
                     if vend:
                         _log(f"courses : poids {inventory.WEIGHT:.0f}/{inventory.CARRY:.0f}, {len(inventory.SELLABLE)} objets a vendre, soins {inventory.HEALS}, marchand a {vend['dist']:.0f} m")
@@ -675,7 +676,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 # 3a-quater. CHARCUDOC : assez d eddies -> V s optimise lui-meme (meilleur cyberware abordable, pose par script)
                 if CFG.features.get('ripperdoc', True) and inventory.MONEY >= 6000 and time.perf_counter() - last_ripper_t > 1800.0 and not st.get('combat') and not _threat_near(st) and not focus:
                     last_ripper_t = time.perf_counter()
-                    vendor.MAX_VENDOR_M = 700.0
+                    vendor.MAX_VENDOR_M = 5000.0
                     rip = vendor.pick_vendor(vendor.list_vendors(), prefer='ripper')
                     if rip and 'ripper' in (rip.get('variant') or '').lower():
                         _log(f"charcudoc : {inventory.MONEY} eddies, « {rip.get('variant')} » a {rip['dist']:.0f} m : V va s optimiser")
