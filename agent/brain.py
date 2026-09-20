@@ -524,9 +524,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 shop_stuck_n, shop_stuck_pos = 1, (s_ms['x'], s_ms['y'])
                             shop_stuck_t = time.perf_counter()
                             if shop_stuck_n >= 3:
-                                _log(f'  {shop_stuck_n}e ecart au meme endroit (menu) : V s eloigne vraiment cette fois')
+                                # 20/09 : reculer (S) au meme endroit ne creait pas de distance reelle -- le stand
+                                # rouvrait 1 s plus tard (V recule sans doute dans un mur, kiosque exigu) -> on
+                                # se retourne et on COURT VERS L AVANT (deplacement libre, comme l ecart normal)
+                                _log(f'  {shop_stuck_n}e ecart au meme endroit (menu) : V se retourne et court loin, vraiment cette fois')
                                 nav.add_avoid(*shop_stuck_pos)
-                                kbm.hold('S'); kbm.act_hold('sprint'); time.sleep(4.0); kbm.act_release('sprint'); kbm.release('S')
+                                motion.turn_by(180.0, timeout=1.5, stop=stop)
+                                kbm.hold('W'); kbm.act_hold('sprint'); time.sleep(6.0); kbm.act_release('sprint'); kbm.release('W')
                                 shop_stuck_n = 0; alt_target = None; plan.last_t = -99.0
                     elif time.perf_counter() - menu_t > 30.0:
                         # jamais de boucle muette : on le dit et on recommence une serie (menu de mort, chargement, carte...)
@@ -670,9 +674,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                     shop_stuck_n, shop_stuck_pos = 1, (s_ds['x'], s_ds['y'])
                                 shop_stuck_t = time.perf_counter()
                                 if shop_stuck_n >= 3:
-                                    _log(f'  {shop_stuck_n}e ecart au meme endroit (commerce) : V s eloigne vraiment cette fois')
+                                    # 20/09 : reculer (S) au meme endroit ne creait pas de distance reelle -- le stand
+                                    # rouvrait 1 s plus tard (V recule sans doute dans un mur, kiosque exigu) -> on
+                                    # se retourne et on COURT VERS L AVANT (deplacement libre, comme l ecart normal)
+                                    _log(f'  {shop_stuck_n}e ecart au meme endroit (commerce) : V se retourne et court loin, vraiment cette fois')
                                     nav.add_avoid(*shop_stuck_pos)
-                                    kbm.hold('S'); kbm.act_hold('sprint'); time.sleep(4.0); kbm.act_release('sprint'); kbm.release('S')
+                                    motion.turn_by(180.0, timeout=1.5, stop=stop)
+                                    kbm.hold('W'); kbm.act_hold('sprint'); time.sleep(6.0); kbm.act_release('sprint'); kbm.release('W')
                                     shop_stuck_n = 0; alt_target = None; plan.last_t = -99.0
                         time.sleep(0.5); continue
                     same_hub = same_hub + 1 if sig == last_hub_sig else 1
