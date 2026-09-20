@@ -2,6 +2,7 @@
 
 ## 0.1.2 — 2026-09-17 — combat fiable, secours, terminaux, vol de voiture, Breach Protocol validé
 
+- Directives, derniere serie (20/09) : niveau (force perks), soigne, stats (bilan complet), courage/style/aggro <valeur> (temperament de V regle en direct, sans redemarrer). La comprehension en langage libre couvre aussi ces nouvelles commandes.
 - Marchand, confirme en jeu (20/09) : l ecart force declenchait bien apres 3 blocages, mais reculait (S) au meme endroit -- l ecran de commerce rouvrait moins d 1 s plus tard (V recule dans un mur, kiosque exigu). Remplace par : V se retourne (180°) et court VERS L AVANT 6 s, meme logique que l ecart normal, juste plus loin.
 - Navigation : V restait coince pres d un marchand (journal 20/09 10:19-10:21, 2+ min et ça continuait) -- deux mecanismes d evasion (menu ouvert / ecran de commerce) se remettaient a zero l un l autre sans jamais escalader. Compteur partage base sur la position : au 3e ecart au meme endroit, V sprinte vraiment loin et le lieu est marque a eviter.
 - Directives : comprehension en langage libre (modele local, deja utilise pour dialogues/SMS) -- une phrase qui ne matche aucun mot-cle exact est traduite vers la commande la plus proche au lieu d etre rejetee.
