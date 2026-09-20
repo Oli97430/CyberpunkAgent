@@ -419,8 +419,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log('DIRECTIVE : capture d ecran demandee')
                         img = remote.screenshot_jpeg()
                         if img:
-                            remote.send_photo(img, caption=f"V - {st.get('hp', 0):.0f} % de vie, niveau {st.get('level', '?')}")
+                            sent = remote.send_photo(img, caption=f"V - {st.get('hp', 0):.0f} % de vie, niveau {st.get('level', '?')}")
+                            _log(f"  [telegram] photo {'envoyee' if sent else 'echec d envoi'} ({len(img)} octets)")
                         else:
+                            _log('  [telegram] capture d ecran impossible (dxcam/cv2 indisponible ?)')
                             remote.notify('Capture d ecran impossible (dxcam indisponible ?).')
                     else:
                         _log(f'DIRECTIVE non reconnue : « {dtv} »')
