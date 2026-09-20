@@ -297,7 +297,28 @@ class App(tk.Tk):
             self.after(0, lambda: (self.status.set(txt.strip()[-900:]), messagebox.showinfo('Verification', txt.strip() or 'aucune sortie')))
         threading.Thread(target=work, daemon=True).start()
 
+    def _agent_already_running(self) -> bool:
+        """Meme verrou mono-instance que run_agent.py (CreateMutexW) : verifie AVANT de lancer, pour ne pas
+        echouer en silence -- 20/09, bouton « Lancer V » qui semblait ne rien faire quand une session tournait deja."""
+        try:
+            import ctypes
+            k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            h = k32.CreateMutexW(None, True, 'CyberpunkAgent.single')
+            already = (not h) or ctypes.get_last_error() == 183   # ERROR_ALREADY_EXISTS
+            if h:
+                k32.CloseHandle(h)
+            return already
+        except Exception:
+            return False
+
     def on_launch(self) -> None:
+        if self._agent_already_running():
+            msg = ('V joue deja (une seule session a la fois).\n\n'
+                   'Dans le jeu : F11 pour reprendre la main si c est en pause, F12 pour arreter la session en cours.\n'
+                   'Tu peux aussi le piloter a distance depuis Telegram ou le panneau in-game (CET).')
+            messagebox.showinfo('V joue deja', msg)
+            self.status.set('V joue deja : F11 pour reprendre (si en pause), F12 pour arreter.')
+            return
         self.on_save()
         minutes = self.minutes.get() or '20'
         if getattr(sys, 'frozen', False):

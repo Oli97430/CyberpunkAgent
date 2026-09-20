@@ -191,9 +191,8 @@ def single_instance() -> bool:
 def main() -> None:
     # le verrou mono-instance ne concerne que le JEU (--check / --config / --test restent possibles en parallele)
     if not any(a in sys.argv[1:] for a in ('--check', '--config')) and not single_instance():
-        print('Un agent CyberpunkAgent tourne deja (F12 pour l arreter). Cette instance se ferme.')
-        if getattr(sys, 'frozen', False):
-            time.sleep(4)
+        print('Un agent CyberpunkAgent tourne deja (F11 pour reprendre s il est en pause, F12 pour l arreter). Cette instance se ferme.')
+        time.sleep(4)   # laisse le temps de lire le message, meme dans une console qui se fermerait sinon aussitot (mode dev)
         return
     ap = argparse.ArgumentParser(description='Agent IA autonome pour Cyberpunk 2077 (V joue seul).')
     ap.add_argument('minutes', nargs='?', type=float, default=20.0, help='duree de jeu en minutes (defaut 20)')
