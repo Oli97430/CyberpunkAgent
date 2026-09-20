@@ -31,8 +31,9 @@ _DIRECTIVE_KEYWORDS = frozenset({
     'stop', 'arret', 'arrete-toi', 'arrete toi', 'pause', 'reprendre', 'resume', 'continue',
     'attaque', 'attaquer', 'combat', 'objectif', 'quete', 'marchand', 'vendre', 'boutique',
     'charcudoc', 'ripperdoc', 'implant', 'explore', 'explorer', 'balade', 'changer_quete', 'autre_quete',
-    'status', 'etat', 'etat?', 'photo', 'screenshot', 'capture',
+    'status', 'etat', 'etat?', 'photo', 'screenshot', 'capture', 'niveau', 'soigne', 'stats',
 })
+_DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ')
 
 
 _LOG_STATE = {'file': LOG_FILE, 'err': None}
@@ -340,7 +341,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 dtv = remote.poll(log=_log)
                 if dtv:
                     low = dtv.lower().strip()
-                    if low not in _DIRECTIVE_KEYWORDS and not (low.startswith('va_a ') or low.startswith('va a ')):
+                    if low not in _DIRECTIVE_KEYWORDS and not low.startswith(_DIRECTIVE_PREFIXES):
                         # pas un mot-cle exact : le modele local traduit la phrase libre (20/09, « trop basique »)
                         cl = remote.classify(dtv)
                         if cl:
@@ -424,9 +425,48 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         else:
                             _log('  [telegram] capture d ecran impossible (dxcam/cv2 indisponible ?)')
                             remote.notify('Capture d ecran impossible (dxcam indisponible ?).')
+                    elif low == 'niveau':
+                        last_levelup_t = -999.0
+                        _log('DIRECTIVE : verification niveau/perks forcee')
+                        remote.notify('V verifie son niveau et ses perks.')
+                    elif low == 'soigne':
+                        if kbm.ACTIONS.get('consumable'):
+                            kbm.act('consumable', 0.1); last_heal_t = time.perf_counter()
+                            _log('DIRECTIVE : soin force')
+                            remote.notify(f"V se soigne (vie {st.get('hp', 0):.0f} %).")
+                        else:
+                            remote.notify('Pas de touche de soin configuree.')
+                    elif low == 'stats':
+                        _log('DIRECTIVE : bilan de session demande')
+                        remote.notify('Bilan de session :\n' + '\n'.join(f'- {k} : {v}' for k, v in stats.items()))
+                    elif low.startswith('courage '):
+                        v_c = low.split(' ', 1)[1].strip()
+                        if v_c in ('prudent', 'equilibre', 'temeraire'):
+                            CFG.courage = v_c
+                            CFG.courage_t = {'prudent': (5, 4, 5, 80, 25), 'equilibre': (6, 5, 6, 60, 25), 'temeraire': (8, 7, 8, 40, 35)}[v_c]
+                            _log(f'DIRECTIVE : courage regle sur {v_c}')
+                            remote.notify(f'V est desormais {v_c}.')
+                        else:
+                            remote.notify(f'Courage inconnu ({v_c}) : prudent, equilibre ou temeraire.')
+                    elif low.startswith('style '):
+                        v_s = low.split(' ', 1)[1].strip()
+                        if v_s in ('melee', 'mixte', 'distance'):
+                            CFG.style = v_s
+                            _log(f'DIRECTIVE : style regle sur {v_s}')
+                            remote.notify(f'V se bat desormais en style {v_s}.')
+                        else:
+                            remote.notify(f'Style inconnu ({v_s}) : melee, mixte ou distance.')
+                    elif low.startswith('aggro '):
+                        v_a = low.split(' ', 1)[1].strip()
+                        if v_a in ('defensif', 'normal', 'chasseur'):
+                            CFG.aggro = v_a
+                            _log(f'DIRECTIVE : agressivite reglee sur {v_a}')
+                            remote.notify(f'V est desormais {v_a}.')
+                        else:
+                            remote.notify(f'Agressivite inconnue ({v_a}) : defensif, normal ou chasseur.')
                     else:
                         _log(f'DIRECTIVE non reconnue : « {dtv} »')
-                        remote.notify('Directive non reconnue. Essaie : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>, status, photo.')
+                        remote.notify('Directive non reconnue. Essaie : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>, status, photo, niveau, soigne, stats, courage/style/aggro <valeur>.')
                     plan.last_t = -99.0; time.sleep(0.3); continue
 
                 # 0a2. BREACH PROTOCOL ouvert (terminal de piratage / point d acces) : le jeu est en pause, le mod relaie

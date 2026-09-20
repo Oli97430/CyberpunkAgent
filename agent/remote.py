@@ -142,21 +142,26 @@ def poll(log=print) -> str | None:
 
 
 COMMANDS = ('stop', 'pause', 'reprendre', 'attaque', 'objectif', 'marchand', 'charcudoc', 'explore',
-            'changer_quete', 'va_a', 'status', 'photo')
+            'changer_quete', 'va_a', 'status', 'photo', 'niveau', 'soigne', 'stats', 'courage', 'style', 'aggro')
+# commandes qui prennent un parametre libre (lieu pour va_a, valeur pour courage/style/aggro)
+PARAM_CMDS = {'va_a': 'lieu (marchand/charcudoc/point de voyage rapide connu)',
+              'courage': 'prudent, equilibre ou temeraire',
+              'style': 'melee, mixte ou distance',
+              'aggro': 'defensif, normal ou chasseur'}
 
 
 def classify(text: str, timeout: float = 6.0) -> str | None:
-    """20/09 (Olivier : « trop basique ») : traduit une phrase libre (« va vendre ton bazar ») vers la
-    commande fixe la plus proche, via le modele local deja utilise pour les dialogues/SMS -- pas de
-    nouvelle dependance. None si rien ne correspond (le modele est muet ou aucune commande ne va)."""
+    """20/09 (Olivier : « trop basique ») : traduit une phrase libre (« va vendre ton bazar », « sois plus
+    prudent ») vers la commande fixe la plus proche, via le modele local deja utilise pour les dialogues/
+    SMS -- pas de nouvelle dependance. None si rien ne correspond (le modele est muet ou aucune commande ne va)."""
     numbered = '\n'.join(f'{i}: {c}' for i, c in enumerate(COMMANDS))
+    params = '\n'.join(f'- {c} attend un parametre : {hint}' for c, hint in PARAM_CMDS.items())
     prompt = (
         'Tu traduis une instruction donnee a V (Cyberpunk 2077) vers UNE commande fixe.\n'
         f'Instruction : « {text} »\n'
         f'Commandes possibles :\n{numbered}\n'
-        'Si l instruction demande d aller vers un lieu precis (marchand/charcudoc/point connu, "va vendre" '
-        'compte pour marchand sauf lieu precis donne), reponds avec l index de va_a et le lieu cite.\n'
-        'Reponds UNIQUEMENT en JSON : {"index": N, "lieu": "..."} (lieu vide si non applicable). '
+        f'Certaines commandes attendent un parametre :\n{params}\n'
+        'Reponds UNIQUEMENT en JSON : {"index": N, "param": "..."} (param vide si la commande n en attend pas). '
         'Si rien ne correspond a une commande, {"index": -1}.'
     )
     try:
@@ -170,10 +175,10 @@ def classify(text: str, timeout: float = 6.0) -> str | None:
         if i < 0 or i >= len(COMMANDS):
             return None
         cmd = COMMANDS[i]
-        if cmd == 'va_a':
-            lm = re.search(r'"lieu"\s*:\s*"([^"]*)"', txt)
-            lieu = (lm.group(1) if lm else '').strip()
-            return f'va_a {lieu}' if lieu else None
+        if cmd in PARAM_CMDS:
+            pm = re.search(r'"param"\s*:\s*"([^"]*)"', txt)
+            param = (pm.group(1) if pm else '').strip().lower()
+            return f'{cmd} {param}' if param else None
         return cmd
     except Exception as e:
         from . import llm
