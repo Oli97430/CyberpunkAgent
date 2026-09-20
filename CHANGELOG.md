@@ -2,6 +2,7 @@
 
 ## 0.1.2 — 2026-09-17 — combat fiable, secours, terminaux, vol de voiture, Breach Protocol validé
 
+- CyberpunkAgent-Config : interface refaite, par onglets (Modele, Comportements, Temperament, Telegram) avec un theme Windows natif, au lieu d un long formulaire qui defilait. Aucun changement de logique/comportement.
 - Combat, confirme en jeu (20/09, journal 14:57-14:58) : V restait colle 37+ s a un hostile intouchable (vitre, autre niveau) -- la mise en sourdine fonctionnait, mais le planificateur n en avait pas connaissance et redecidait « attaquer » toutes les 3 s, ecrasant la retombee sur 'objectif' avant qu elle ne soit jamais mise en cache. Le planificateur (decide/fallback/_decide_llm) exclut maintenant les hostiles en sourdine de la decision d engager.
 - CyberpunkAgent-Config : champs pour le jeton et l identifiant de chat Telegram (voir plus haut).
 - Modeles Ollama : la VRAM approximative (taille sur disque) s affiche partout -- directives modeles/modele, et CyberpunkAgent-Config a maintenant un vrai selecteur (menu deroulant rempli en tache de fond + bouton Rafraichir) au lieu d un champ texte libre.
