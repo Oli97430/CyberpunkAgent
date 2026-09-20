@@ -26,6 +26,14 @@ from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
 ARRIVE_M = 3.0
 
+# mots-cles exacts de la boucle de directives (0a0) : tout ce qui ne matche pas passe par remote.classify()
+_DIRECTIVE_KEYWORDS = frozenset({
+    'stop', 'arret', 'arrete-toi', 'arrete toi', 'pause', 'reprendre', 'resume', 'continue',
+    'attaque', 'attaquer', 'combat', 'objectif', 'quete', 'marchand', 'vendre', 'boutique',
+    'charcudoc', 'ripperdoc', 'implant', 'explore', 'explorer', 'balade', 'changer_quete', 'autre_quete',
+    'status', 'etat', 'etat?', 'photo', 'screenshot', 'capture',
+})
+
 
 _LOG_STATE = {'file': LOG_FILE, 'err': None}
 
@@ -332,6 +340,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 dtv = remote.poll(log=_log)
                 if dtv:
                     low = dtv.lower().strip()
+                    if low not in _DIRECTIVE_KEYWORDS and not (low.startswith('va_a ') or low.startswith('va a ')):
+                        # pas un mot-cle exact : le modele local traduit la phrase libre (20/09, « trop basique »)
+                        cl = remote.classify(dtv)
+                        if cl:
+                            _log(f'DIRECTIVE « {dtv} » comprise comme : {cl}')
+                            dtv, low = cl, cl.lower().strip()
                     stats['directives'] = stats.get('directives', 0) + 1
                     if low in ('stop', 'arret', 'arrete-toi', 'arrete toi'):
                         _log('DIRECTIVE : arret demande'); remote.notify('V s arrete.')

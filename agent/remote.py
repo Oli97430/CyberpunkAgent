@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 import time
 import urllib.parse
@@ -137,4 +138,46 @@ def poll(log=print) -> str | None:
     try:
         return _Q.get_nowait()
     except queue.Empty:
+        return None
+
+
+COMMANDS = ('stop', 'pause', 'reprendre', 'attaque', 'objectif', 'marchand', 'charcudoc', 'explore',
+            'changer_quete', 'va_a', 'status', 'photo')
+
+
+def classify(text: str, timeout: float = 6.0) -> str | None:
+    """20/09 (Olivier : « trop basique ») : traduit une phrase libre (« va vendre ton bazar ») vers la
+    commande fixe la plus proche, via le modele local deja utilise pour les dialogues/SMS -- pas de
+    nouvelle dependance. None si rien ne correspond (le modele est muet ou aucune commande ne va)."""
+    numbered = '\n'.join(f'{i}: {c}' for i, c in enumerate(COMMANDS))
+    prompt = (
+        'Tu traduis une instruction donnee a V (Cyberpunk 2077) vers UNE commande fixe.\n'
+        f'Instruction : « {text} »\n'
+        f'Commandes possibles :\n{numbered}\n'
+        'Si l instruction demande d aller vers un lieu precis (marchand/charcudoc/point connu, "va vendre" '
+        'compte pour marchand sauf lieu precis donne), reponds avec l index de va_a et le lieu cite.\n'
+        'Reponds UNIQUEMENT en JSON : {"index": N, "lieu": "..."} (lieu vide si non applicable). '
+        'Si rien ne correspond a une commande, {"index": -1}.'
+    )
+    try:
+        from . import llm_client
+        txt = llm_client.chat([{'role': 'user', 'content': prompt}], temperature=0.1, max_tokens=40,
+                               timeout=timeout, keep_alive='5m')
+        m = re.search(r'"index"\s*:\s*(-?\d+)', txt)
+        if not m:
+            return None
+        i = int(m.group(1))
+        if i < 0 or i >= len(COMMANDS):
+            return None
+        cmd = COMMANDS[i]
+        if cmd == 'va_a':
+            lm = re.search(r'"lieu"\s*:\s*"([^"]*)"', txt)
+            lieu = (lm.group(1) if lm else '').strip()
+            return f'va_a {lieu}' if lieu else None
+        return cmd
+    except Exception as e:
+        from . import llm
+        from .config import CFG
+        if CFG.provider == 'ollama' and ('refus' in str(e) or '10061' in str(e) or 'refused' in str(e)):
+            llm.ensure()
         return None
