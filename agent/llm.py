@@ -25,12 +25,16 @@ def alive(timeout: float = 2.0) -> bool:
         return False
 
 
-def list_models(timeout: float = 4.0) -> list[str]:
-    """20/09 (Olivier : choisir d autres modeles locaux) : noms des modeles Ollama deja installes
-    (`ollama pull ...`), pour proposer un choix plutot que de taper un nom a l aveugle."""
+def list_models(timeout: float = 4.0) -> list[dict]:
+    """20/09 (Olivier : choisir d autres modeles locaux) : modeles Ollama deja installes (`ollama pull ...`),
+    avec leur taille sur disque -- une approximation courante et raisonnable de la VRAM necessaire pour les
+    charger entierement sur le GPU (hors contexte/KV-cache, qui grandit avec l usage). Renvoie
+    [{'name': str, 'size_gb': float}, ...] trie du plus petit au plus gros."""
     try:
         data = json.loads(urllib.request.urlopen(TAGS, timeout=timeout).read())
-        return sorted(m['name'] for m in data.get('models', []) if m.get('name'))
+        models = [{'name': m['name'], 'size_gb': round((m.get('size') or 0) / 1e9, 1)}
+                  for m in data.get('models', []) if m.get('name')]
+        return sorted(models, key=lambda m: m['size_gb'])
     except Exception:
         return []
 

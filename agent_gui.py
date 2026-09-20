@@ -21,6 +21,7 @@ from tkinter import messagebox, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent.config import CFG, DATA_DIR  # noqa: E402
+from agent import llm  # noqa: E402
 
 CONFIG_PATH = DATA_DIR / 'config.json'
 PROVIDERS = [('Ollama (local, gratuit, rien ne sort du PC)', 'ollama'),
@@ -90,7 +91,9 @@ class App(tk.Tk):
         r += 1
         ttk.Label(frm, text='Modele Ollama').grid(row=r, column=0, sticky='w', **pad)
         self.model = tk.StringVar(value=cfg.get('model') or CFG.model or 'llama3.2:latest')
-        ttk.Entry(frm, textvariable=self.model, width=46).grid(row=r, column=1, sticky='w', **pad)
+        self.model_combo = ttk.Combobox(frm, textvariable=self.model, width=38, values=[self.model.get()])
+        self.model_combo.grid(row=r, column=1, sticky='w', **pad)
+        ttk.Button(frm, text='Rafraichir', command=self._refresh_models).grid(row=r, column=2, sticky='w')
         r += 1
         ttk.Label(frm, text='Modele OpenAI').grid(row=r, column=0, sticky='w', **pad)
         self.openai_model = tk.StringVar(value=cfg.get('openai_model') or 'gpt-4o-mini')
@@ -142,10 +145,26 @@ class App(tk.Tk):
         self.status = tk.StringVar(value=f'Configuration : {CONFIG_PATH}')
         ttk.Label(frm, textvariable=self.status, wraplength=560, foreground='#555').grid(row=r, column=0, columnspan=3, sticky='w', **pad)
         self._refresh()
+        self._refresh_models()
 
     def _refresh(self) -> None:
         state = 'normal' if self.provider.get() != 'ollama' else 'disabled'
         self.key_entry.config(state=state)
+
+    def _refresh_models(self) -> None:
+        """Interroge Ollama (/api/tags) pour lister les modeles deja installes -- en tache de fond,
+        pour ne pas geler la fenetre si Ollama est lent ou injoignable."""
+        def work():
+            models = llm.list_models()
+            def apply():
+                if models:
+                    self.model_combo['values'] = [m['name'] for m in models]
+                    sizes = ', '.join(f"{m['name']} (~{m['size_gb']:.1f} Go VRAM)" for m in models)
+                    self.status.set(f'{len(models)} modele(s) Ollama installe(s) -- taille ~= VRAM necessaire : {sizes}')
+                else:
+                    self.status.set('Ollama injoignable : impossible de lister les modeles installes (le champ reste modifiable a la main).')
+            self.after(0, apply)
+        threading.Thread(target=work, daemon=True).start()
 
     def collect(self) -> dict:
         d = load()

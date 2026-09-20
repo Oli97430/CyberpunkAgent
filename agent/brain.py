@@ -472,16 +472,18 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         if CFG.provider != 'ollama':
                             remote.notify(f'Fournisseur actuel : {CFG.provider} (pas Ollama) -- pas de liste locale a proposer.')
                         else:
-                            names = llm.list_models()
-                            remote.notify('Modeles Ollama installes :\n' + ('\n'.join(f'- {n}' + (' (actif)' if n == CFG.model else '') for n in names) if names else 'aucun trouve (Ollama injoignable ?)'))
+                            models = llm.list_models()
+                            lines = [f"- {m['name']} (~{m['size_gb']:.1f} Go VRAM)" + (' (actif)' if m['name'] == CFG.model else '') for m in models]
+                            remote.notify('Modeles Ollama installes (taille ~= VRAM necessaire) :\n' + ('\n'.join(lines) if lines else 'aucun trouve (Ollama injoignable ?)'))
                     elif low.startswith('modele '):
                         v_m = low.split(' ', 1)[1].strip()
                         if CFG.provider != 'ollama':
                             remote.notify(f'Fournisseur actuel : {CFG.provider} (pas Ollama) -- change de fournisseur dans le panneau in-game d abord.')
                         else:
-                            names = llm.list_models()
+                            models = llm.list_models()
+                            names = [m['name'] for m in models]
                             if names and v_m not in names:
-                                remote.notify(f"Modele « {v_m} » non installe localement (`ollama pull {v_m}` d abord). Modeles disponibles :\n" + '\n'.join(f'- {n}' for n in names))
+                                remote.notify(f"Modele « {v_m} » non installe localement (`ollama pull {v_m}` d abord). Modeles disponibles :\n" + '\n'.join(f"- {m['name']} (~{m['size_gb']:.1f} Go)" for m in models))
                             else:
                                 CFG.model = v_m
                                 _log(f'DIRECTIVE : modele Ollama regle sur {v_m}')
