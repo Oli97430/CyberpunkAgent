@@ -243,6 +243,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     unfocused = False
     frozen_seq, frozen_t, frozen_logged = None, 0.0, False
     frozen_esc = 0
+    frozen_notified = False
     dead_since = None
     consecutive_deaths, last_death_t = 0, -1e9   # 3 morts en moins de 5 min au meme endroit -> on laisse tomber la quete un moment
     last_block_pos = None
@@ -259,6 +260,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_phone_t = -999.0
     breach_t = None
     bd_t = None
+    bd_ok, bd_tries = True, 0
     menu_t, menu_esc, scene_t = None, 0, None
     scene_pos, scene_wait = None, 25.0
     shop_back_t = -999.0
@@ -493,16 +495,25 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 # 0a3. DANSE SENSORIELLE (braindance) : V prend l editeur en main (indices, couches, timeline, sortie)
                 bdst = st.get('bd') or {}
                 if bdst.get('active') or bdst.get('rew'):
-                    if bd_t is None:
+                    # 20/09 : run() pouvait echouer a sortir (bd toujours active) sans jamais etre rappelee -- bd_t
+                    # restait fixe pour de bon. On retente (avec un delai) tant que la danse est encore active.
+                    if bd_t is None or (not bd_ok and time.perf_counter() - bd_t > 15.0):
+                        if bd_t is None:
+                            bd_tries = 0
                         bd_t = time.perf_counter(); kbm.release_all()
                         stats['bd'] = stats.get('bd', 0) + 1
                         _log('DANSE SENSORIELLE : V prend l editeur en main')
                         rbd = braindance.run(stop=stop, log=_log)
+                        bd_ok = bool(rbd.get('ok'))
                         _log(f"danse sensorielle : {rbd.get('reason')} ({rbd.get('scans', 0)} indice(s) scanne(s), {rbd.get('seconds', 0):.0f} s)")
                         stats['bd_scans'] = stats.get('bd_scans', 0) + int(rbd.get('scans') or 0)
+                        if not bd_ok:
+                            bd_tries += 1
+                            if bd_tries == 3:
+                                remote.notify(f"V semble coince dans une danse sensorielle depuis plusieurs tentatives ({rbd.get('reason')}).")
                     time.sleep(0.5); continue
                 else:
-                    bd_t = None
+                    bd_t, bd_ok, bd_tries = None, True, 0
 
                 # 0a4. MENU OUVERT sans raison (ecran de marchand, inventaire, carte laisses ouverts) : le monde continue
                 # mais la souris ne pilote plus la camera (« rotation initiale echouee » en boucle hier soir) -> Echap
@@ -616,13 +627,25 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 elif time.perf_counter() - frozen_t > 2.0 and (st.get('hp') is None or st.get('hp') > 0.5):
                     kbm.release_all()
                     if not frozen_logged:
-                        frozen_logged = True; frozen_esc = 0; _log('etat fige (pause, menu ou chargement) : attente')
+                        frozen_logged = True; frozen_esc = 0; frozen_notified = False; _log('etat fige (pause, menu ou chargement) : attente')
                     # un menu ouvert par accident (carte des voyages rapides, inventaire...) fige le jeu : apres 8 s, Echap,
                     # puis toutes les 20 s, 3 fois au plus (un chargement, lui, se termine tout seul)
                     if time.perf_counter() - frozen_t > 8.0 + 20.0 * frozen_esc and frozen_esc < 3:
                         frozen_esc += 1
                         _log(f'etat fige depuis {time.perf_counter() - frozen_t:.0f} s : Echap pour fermer un eventuel menu ({frozen_esc}/3)')
                         kbm.tap('ESC', 0.09)
+                    elif frozen_esc >= 3 and time.perf_counter() - frozen_t > 90.0:
+                        # 3 series d Echap sans effet : pas un simple menu -- on ne reste plus jamais inactif pour de bon
+                        # (20/09 : le mod pouvait rester silencieusement bloque le reste de la session)
+                        if not frozen_notified and time.perf_counter() - frozen_t > 300.0:
+                            frozen_notified = True
+                            _log(f"etat fige depuis {int(time.perf_counter() - frozen_t)} s malgre plusieurs series d Echap : tentative de rechargement de la derniere sauvegarde")
+                            remote.notify(f"V semble bloque (etat fige depuis {int(time.perf_counter() - frozen_t)} s) : tentative de rechargement.")
+                            if _reload_last_save(_log, stop=stop):
+                                frozen_seq, frozen_t, frozen_logged, frozen_esc, frozen_notified = st.get('seq'), time.perf_counter(), False, 0, False
+                                time.sleep(3.0); continue
+                        else:
+                            frozen_esc = 0   # nouvelle serie d Echap (au cas ou un nouveau menu serait apparu depuis)
                     time.sleep(0.5); continue
 
                 # 0c. TELEPHONE : un appel entrant -> on repond (touche telephone maintenue), la conversation suit via le dialogue
@@ -1310,8 +1333,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 stats['attentes'] += 1
                 if no_mappin_since is None:
                     no_mappin_since = time.perf_counter()
-                elif time.perf_counter() - no_mappin_since > 20.0:
-                    _log(f"objectif sans marqueur depuis 20 s ({q.get('text')}) : V cherche une quete (donneur de quete de son niveau, ou marqueur)")
+                elif time.perf_counter() - no_mappin_since > 45.0:      # > 30 s (cooldown 5a) : V a eu au moins un essai d approche avant d abandonner
+                    _log(f"objectif sans marqueur ou invite en retard depuis 45 s ({q.get('text')}) : V cherche une quete (donneur de quete de son niveau, ou marqueur)")
                     no_mappin_since = None
                     nxt = quests.switch(q.get('hash'), log=_log, prefer_givers=True)
                     if nxt:

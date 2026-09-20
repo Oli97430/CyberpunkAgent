@@ -71,6 +71,11 @@ SC = {
 
 _held: set[int] = set()
 _held_ext: set[int] = set()     # scancodes maintenus avec le drapeau ETENDU (fleches)
+# 20/09 : _held/_held_ext/_mouse_held sont lus/ecrits par le thread principal ET par le thread du coupe-circuit
+# (KillSwitch, F11/F12) -- sans verrou, un release_all() pouvait effacer un ajout concurrent avant qu il ne soit
+# vu, laissant une touche « fantome » enfoncee pour le reste de la session. RLock : release_all() rappelle key()
+# en boucle tout en tenant le verrou, meme thread donc pas de blocage.
+_held_lock = threading.RLock()
 _acc = [0.0, 0.0]
 EXTENDED = {'UP', 'DOWN', 'LEFT', 'RIGHT'}   # memes scancodes que le pave numerique : sans E0, UP = Numpad 8
 _focus_cache = [0.0, True]
@@ -232,11 +237,12 @@ def key(scancode: int, down: bool, extended: bool = False) -> None:
         flags |= KEYEVENTF_EXTENDEDKEY
     inp = INPUT(type=INPUT_KEYBOARD, u=_U(ki=KEYBDINPUT(0, scancode, flags, 0, 0)))
     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
-    if down:
-        _held.add(scancode)
-        if extended: _held_ext.add(scancode)
-    else:
-        _held.discard(scancode); _held_ext.discard(scancode)
+    with _held_lock:
+        if down:
+            _held.add(scancode)
+            if extended: _held_ext.add(scancode)
+        else:
+            _held.discard(scancode); _held_ext.discard(scancode)
 
 
 def tap(name: str, duration: float = 0.08) -> None:
@@ -309,7 +315,8 @@ def mouse(button: str, down: bool) -> None:
     flag = _MB[button][0 if down else 1]
     inp = INPUT(type=INPUT_MOUSE, u=_U(mi=MOUSEINPUT(0, 0, 0, flag, 0, 0)))
     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
-    (_mouse_held.add if down else _mouse_held.discard)(button)
+    with _held_lock:
+        (_mouse_held.add if down else _mouse_held.discard)(button)
 
 
 def mouse_tap(button: str = 'left', duration: float = 0.09) -> None:
@@ -355,12 +362,13 @@ def click(down: bool) -> None:
 
 
 def release_all() -> None:
-    for sc in list(_held):
-        key(sc, False, sc in _held_ext)
-    _held.clear()
-    for b in list(_mouse_held):
-        mouse(b, False)
-    _mouse_held.clear()
+    with _held_lock:
+        for sc in list(_held):
+            key(sc, False, sc in _held_ext)
+        _held.clear()
+        for b in list(_mouse_held):
+            mouse(b, False)
+        _mouse_held.clear()
 
 
 load_user_keys()

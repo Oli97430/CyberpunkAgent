@@ -56,8 +56,8 @@ def apply(st: dict | None, log=print, in_combat: bool = False) -> int:
     if not CFG.features.get('buffs', True):
         return 0
     if _cache.get('seq') != inventory.LISTING_SEQ or time.perf_counter() - _cache['t'] > 600.0:
-        if in_combat and _cache.get('seq') is not None and _cache.get('seq') != inventory.LISTING_SEQ:
-            return 0                     # indices perimes et pas le temps de relister : on ne consomme pas au hasard
+        if in_combat:
+            return 0                     # jamais de relecture bloquante (jusqu a 6 s) en plein combat, quelle qu en soit la raison
         refresh()
     b = (st or {}).get('buffs') or {}
     now = time.perf_counter()
