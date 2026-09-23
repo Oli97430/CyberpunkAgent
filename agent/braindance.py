@@ -265,6 +265,8 @@ def run(stop=None, log=print) -> dict:
             last_progress = time.perf_counter()
             continue
         # la scene doit peut-etre avancer (indices reveles par le dialogue) : lecture normale quelques secondes
+        # (23/09 : un sweep_done.clear() inconditionnel ici relancait un balayage complet a chaque tour, ~13 s,
+        # au lieu de laisser STALL_S rythmer les nouvelles tentatives -- V re-balayait dans le vide pendant des
+        # minutes des qu il ne restait plus qu un indice abandonne)
         speed(2); time.sleep(4.0); speed(0)
-        sweep_done.clear()
     return {'ok': False, 'reason': 'temps ecoule', 'scans': scans, 'seconds': time.perf_counter() - t0}
