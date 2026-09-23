@@ -39,6 +39,12 @@ local playerVehRecs, playerVehRecsT = {}, -999.0   -- records (TweakDB) des vehi
 local deadSince, deadReloaded, lastCmdClock = nil, false, -1e9   -- mort de V : rechargement automatique si l agent est actif
 local vehCallT = -999.0                       -- os.clock() du dernier vehicle_call : export des vehicules de V a 400 m pendant 45 s   -- scans larges (TSQ_ALL) a 4 Hz, pas 20
 local pendingDirective = nil                  -- directive tapee dans le panneau (ou reçue par Telegram cote Python) : lue une fois par get_directive
+local hudShow = true                          -- HUD « Terminator » (etat de V) par-dessus le jeu
+local hudData = nil                           -- etat de l IA publie par Python (table SQLite hud), relu 2x/s
+local hudReadT, hudHexT, hudLastErr = -99.0, -99.0, nil
+local hudHex = {}
+local hudTrack, hudKilled = {}, {}            -- hostiles vus debout (cle -> EntityID, instant) / deja comptes
+local hudKills, hudKillsTotal, hudSessionT0, hudCheckT = 0, 0, nil, -99.0
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
 local breachCtrl = nil
@@ -74,6 +80,50 @@ local function journal(line)
 end
 
 local function addProbe(name, fn) probes[#probes + 1] = { name = name, fn = fn } end
+
+-- HUD : pertes humaines = hostile vu debout puis mort OU neutralise (assomme / vaincu)
+local function hudDown(ent)
+    local down = false
+    pcall(function() if ent:IsDead() then down = true end end)
+    if not down then pcall(function() if ent:IsIncapacitated() then down = true end end) end
+    if not down then pcall(function() if ScriptedPuppet.IsDefeated(ent) then down = true end end) end
+    return down
+end
+local function hudCountKill(key)
+    if hudKilled[key] then return end
+    hudKilled[key] = true
+    hudKills = hudKills + 1
+    hudKillsTotal = hudKillsTotal + 1
+    pcall(function() db:exec(string.format("INSERT OR REPLACE INTO hud_stats (k, v) VALUES ('kills', %d)", hudKillsTotal)) end)
+end
+local function hudNote(key, ent, dead)
+    if hudKilled[key] then return end
+    if dead or hudDown(ent) then
+        if hudTrack[key] then hudCountKill(key); hudTrack[key] = nil end
+    else
+        local id = nil
+        pcall(function() id = ent:GetEntityID() end)
+        hudTrack[key] = { id = id, t = os.clock() }
+    end
+end
+local function hudCheckTracked()
+    -- les requetes de ciblage excluent souvent les morts : un hostile disparu est re-verifie par son entite
+    local now = os.clock()
+    if now - hudCheckT < 0.5 then return end
+    hudCheckT = now
+    local n = 0
+    for key, rec in pairs(hudTrack) do
+        n = n + 1
+        local down = false
+        pcall(function()
+            local ent = rec.id and Game.FindEntityByID(rec.id)
+            if ent and hudDown(ent) then down = true end
+        end)
+        if down then hudCountKill(key); hudTrack[key] = nil
+        elseif now - rec.t > 60 then hudTrack[key] = nil end
+    end
+    if n > 300 then hudTrack = {} end
+end
 
 -- NIVEAU RECOMMANDE d une quete : on remonte les parents de l entree de journal (objectif -> phase
 -- -> quete) jusqu a une entree qui expose GetRecommendedLevelID / GetRecommendedLevel. Chaque appel
@@ -855,6 +905,11 @@ registerForEvent('onInit', function()
         db:exec('DELETE FROM cmd')
         return n
     end)
+    pcall(function()
+        db:exec('CREATE TABLE IF NOT EXISTS hud (id INTEGER PRIMARY KEY, json TEXT)')
+        db:exec('CREATE TABLE IF NOT EXISTS hud_stats (k TEXT PRIMARY KEY, v INTEGER)')
+        for row in db:nrows("SELECT v FROM hud_stats WHERE k = 'kills'") do hudKillsTotal = tonumber(row.v) or 0 end
+    end)
     dbReady = okDb
     journal(string.format('sqlite db : type=%s pret=%s %s', type(db), tostring(okDb), okDb and '' or tostring(errDb)))
     print('[AgentProbe] v2 pret (sondes apres ' .. WARMUP .. ' s de jeu)')
@@ -1101,6 +1156,7 @@ registerForEvent('onUpdate', function(dt)
                                 rec.sx, rec.sy = sc.x, sc.y
                             end)
                             pcall(function() rec.dead = ent:IsDead() end)
+                            pcall(hudNote, key, ent, rec.dead)
                             list[#list + 1] = rec
                         end
                     end
@@ -1110,6 +1166,7 @@ registerForEvent('onUpdate', function(dt)
                 end
             end)
             if not okE then enemyDiag = 'erreur: ' .. tostring(errE) end
+            pcall(hudCheckTracked)
             if inCombat and not enemies and enemyDiag ~= lastEnemyDiag then
                 lastEnemyDiag = enemyDiag
                 journal('ENNEMIS vides en combat : ' .. enemyDiag)
@@ -2794,6 +2851,10 @@ local function handleCommand(player, cmd)
         if not okM then resp.reason = 'Mount : ' .. tostring(errM) end
         journal((okM and 'OK   ' or 'FAIL ') .. 'mount (' .. how .. ')' .. (okM and '' or (' : ' .. tostring(errM))))
         return resp
+    elseif cmd.cmd == 'hud_toggle' then
+        hudShow = not hudShow
+        resp.ok, resp.hud = true, hudShow
+        return resp
     elseif cmd.cmd == 'get_directive' then
         resp.ok = true
         resp.text = pendingDirective or ''
@@ -3200,10 +3261,11 @@ local function uiLoad()
     for i, v in ipairs(uiCourage) do if d.courage == v then ui.courage = i end end
     for i, v in ipairs(uiStyle) do if d.style == v then ui.style = i end end
     for i, v in ipairs(uiAggro) do if d.aggro == v then ui.aggro = i end end
+    if d.hud ~= nil then hudShow = d.hud and true or false end
 end
 local function uiSave()
     local d = { provider = uiProviders[ui.provider], api_key = ui.key, model = ui.model, openai_model = ui.openai_model,
-                anthropic_model = ui.anthropic_model, minutes = ui.minutes,
+                anthropic_model = ui.anthropic_model, minutes = ui.minutes, hud = hudShow,
                 courage = uiCourage[ui.courage], style = uiStyle[ui.style], aggro = uiAggro[ui.aggro],
                 features = { radio = ui.radio, driving = ui.driving, rescue = ui.rescue, sell = ui.sell, ripperdoc = ui.ripperdoc, buffs = ui.buffs,
                              stealth = ui.stealth, fasttravel = ui.fasttravel, phone = ui.phone, sms = ui.sms, appearance = ui.appearance, recipes = ui.recipes,
@@ -3212,6 +3274,129 @@ local function uiSave()
     if f then f:write(json.encode(d)); f:close(); ui.saved = 'enregistre ' .. os.date('%H:%M:%S') else ui.saved = 'echec d ecriture' end
 end
 pcall(uiLoad)
+
+-- ============================ HUD « TERMINATOR » ============================
+local function hudAgo(t, now)
+    t = tonumber(t)
+    if not t then return '' end
+    local d = math.floor(math.max(0, now - t))
+    if d < 60 then return string.format(' (IL Y A %d S)', d) end
+    return string.format(' (IL Y A %d MIN)', math.floor(d / 60))
+end
+local function hudHms(sec)
+    sec = math.max(0, math.floor(sec or 0))
+    return string.format('%02d:%02d:%02d', math.floor(sec / 3600), math.floor(sec / 60) % 60, sec % 60)
+end
+local function hudFlags()
+    local v = 0
+    for _, n in ipairs({ 'NoTitleBar', 'NoResize', 'AlwaysAutoResize', 'NoCollapse', 'NoScrollbar', 'NoFocusOnAppearing' }) do
+        local f = ImGuiWindowFlags[n]
+        if f then v = (bit and bit.bor) and bit.bor(v, f) or (v + f) end
+    end
+    return v
+end
+local function hudBody()
+    local e = lastExport or {}
+    local d = hudData or {}
+    local now = os.time()
+    local stale = (tonumber(d.ts) == nil) or (now - tonumber(d.ts) > 8)
+    local blink = math.floor(os.clock() * 2) % 2 == 0
+    local bd = e.bd or {}
+    local mode
+    if e.dead then mode = 'UNITE HORS SERVICE'
+    elseif bd.active or bd.rew then mode = 'DANSE SENSORIELLE'
+    elseif e.combat then mode = 'ENGAGEMENT'
+    elseif e.vehicle then mode = 'CONDUITE'
+    elseif (e.dialog or {}).choices then mode = 'DIALOGUE'
+    elseif stale then mode = 'CONTROLE MANUEL'
+    elseif d.paused then mode = 'PAUSE - CONTROLE MANUEL'
+    else mode = tostring(d.mode or 'EN MISSION') end
+    local link = 'ACTIVE'
+    if stale then link = 'PERDUE' elseif d.ended then link = 'SESSION TERMINEE' elseif d.paused then link = 'EN PAUSE' end
+    local hp = tonumber(e.hp) or 0
+
+    ImGui.Text('V-800  //  UNITE AUTONOME   ' .. (blink and '#' or ' '))
+    ImGui.Separator()
+    ImGui.Text('MODE ............ ' .. mode)
+    ImGui.Text('LIAISON IA ...... ' .. link .. ((d.model and not stale) and ('  [' .. tostring(d.model) .. ']') or ''))
+    ImGui.Text(string.format('INTEGRITE ....... %d %%', math.floor(hp + 0.5)))
+    ImGui.ProgressBar(math.max(0, math.min(1, hp / 100)), 300, 8, '')
+    ImGui.Text('NIVEAU .......... ' .. tostring(e.level or '?'))
+    ImGui.Separator()
+    ImGui.Text('DIRECTIVE PRIORITAIRE')
+    ImGui.Text('> ' .. tostring((not stale and d.directive) or 'AUCUNE (CONTROLE MANUEL)'))
+    if not stale and d.decision then ImGui.Text('DECISION ........ ' .. tostring(d.decision)) end
+    if d.order then ImGui.Text('ORDRE RECU ...... ' .. tostring(d.order) .. hudAgo(d.order_t, now)) end
+    ImGui.Separator()
+    local alive, nearest, police = 0, nil, 0
+    for _, en in ipairs(e.enemies or {}) do
+        if not en.dead then
+            alive = alive + 1
+            if en.police then police = police + 1 end
+            if (not nearest) or (en.d or 999) < nearest then nearest = en.d end
+        end
+    end
+    local lvl = 'NULLE'
+    if alive >= 6 then lvl = 'CRITIQUE' elseif alive >= 3 then lvl = 'ELEVEE' elseif alive >= 1 then lvl = 'FAIBLE' end
+    if alive > 0 and hp < 35 then lvl = 'CRITIQUE' end
+    ImGui.Text(string.format('ANALYSE MENACE .. %s  (%d HOSTILE%s%s)', lvl, alive, alive > 1 and 'S' or '',
+        nearest and string.format(', %d M', math.floor(nearest + 0.5)) or ''))
+    if police > 0 then ImGui.Text('                  DONT ' .. police .. ' POLICE : NE PAS ENGAGER') end
+    ImGui.Text(string.format('PERTES HUMAINES . %d SESSION  /  %d TOTAL', hudKills, hudKillsTotal))
+    ImGui.Separator()
+    local st = d.stats or {}
+    ImGui.Text(string.format('COMBATS %d   MORTS %d   LOOT %d   EDDIES %+d',
+        tonumber(st.combats) or 0, tonumber(st.morts) or 0, tonumber(st.loot) or 0, tonumber(st.eddies) or 0))
+    if d.t0 and not stale then ImGui.Text('SESSION ......... ' .. hudHms(now - (tonumber(d.t0) or now))) end
+    if d.temper then ImGui.Text('PROTOCOLE ....... ' .. tostring(d.temper)) end
+    if os.clock() - hudHexT > 0.12 then
+        hudHexT = os.clock()
+        for i = 1, 3 do
+            hudHex[i] = string.format('%04X %04X %04X %04X %04X %04X %04X', math.random(0, 65535), math.random(0, 65535),
+                math.random(0, 65535), math.random(0, 65535), math.random(0, 65535), math.random(0, 65535), math.random(0, 65535))
+        end
+    end
+    for i = 1, 3 do ImGui.TextColored(0.65, 0.07, 0.05, 0.8, hudHex[i] or '') end
+end
+local function drawHud()
+    if not hudShow or not lastExport then return end
+    if os.clock() - hudReadT > 0.5 then
+        hudReadT = os.clock()
+        pcall(function()
+            for row in db:nrows('SELECT json FROM hud WHERE id = 1') do
+                local okJ, dj = pcall(json.decode, row.json)
+                if okJ and type(dj) == 'table' then
+                    if dj.t0 and dj.t0 ~= hudSessionT0 then hudSessionT0 = dj.t0; hudKills = 0 end   -- nouvelle session de l agent
+                    hudData = dj
+                end
+            end
+        end)
+    end
+    if lastExport.menu or ((lastExport.breach or {}).state == 1) then return end   -- menus plein ecran, Breach Protocol (clics)
+    local colors = {
+        { ImGuiCol.WindowBg, 0.05, 0.0, 0.0, 0.62 }, { ImGuiCol.Border, 0.95, 0.12, 0.08, 0.85 },
+        { ImGuiCol.Text, 1.0, 0.17, 0.10, 1.0 }, { ImGuiCol.Separator, 0.8, 0.1, 0.06, 0.8 },
+        { ImGuiCol.PlotHistogram, 1.0, 0.14, 0.08, 1.0 }, { ImGuiCol.FrameBg, 0.25, 0.02, 0.02, 0.8 },
+    }
+    local nc, nv = 0, 0
+    for _, c in ipairs(colors) do
+        if c[1] ~= nil then ImGui.PushStyleColor(c[1], c[2], c[3], c[4], c[5]); nc = nc + 1 end
+    end
+    if ImGuiStyleVar.WindowRounding then ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0.0); nv = nv + 1 end
+    if ImGuiStyleVar.WindowBorderSize then ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1.0); nv = nv + 1 end
+    local okW, errW = pcall(function()
+        ImGui.SetNextWindowPos(40, 300, ImGuiCond.FirstUseEver)
+        if ImGui.Begin('V-800##agenthud', hudFlags()) then
+            local okB, errB = pcall(hudBody)
+            if not okB and tostring(errB) ~= hudLastErr then hudLastErr = tostring(errB); journal('HUD erreur : ' .. hudLastErr) end
+        end
+        ImGui.End()
+    end)
+    if not okW and tostring(errW) ~= hudLastErr then hudLastErr = tostring(errW); journal('HUD fenetre : ' .. hudLastErr) end
+    if nv > 0 then ImGui.PopStyleVar(nv) end
+    if nc > 0 then ImGui.PopStyleColor(nc) end
+end
+registerHotkey('agent_hud_toggle', 'Afficher / masquer le HUD de V', function() hudShow = not hudShow end)
 registerForEvent('onOverlayOpen', function() ui.open = true end)
 registerForEvent('onOverlayClose', function() ui.open = false end)
 registerForEvent('onDraw', function()
@@ -3238,6 +3423,8 @@ registerForEvent('onDraw', function()
             if okE and #s < STATE_WIDTH then fh:seek('set', 0); fh:write(pad(s, STATE_WIDTH) .. '\n'); fh:flush() end
         end
     end)
+    local okH, errH = pcall(drawHud)
+    if not okH and tostring(errH) ~= hudLastErr then hudLastErr = tostring(errH); journal('HUD : ' .. hudLastErr) end
     if not ui.open then return end
     if ImGui.Begin('CyberpunkAgent') then
         ImGui.Text('Modele de decision')
@@ -3268,6 +3455,7 @@ registerForEvent('onDraw', function()
         ui.sms = ImGui.Checkbox('Lire et repondre aux SMS', ui.sms)
         ui.appearance = ImGui.Checkbox('Changer d apparence au miroir de temps en temps', ui.appearance)
         ui.recipes = ImGui.Checkbox('Acheter et apprendre des plans de craft', ui.recipes)
+        hudShow = ImGui.Checkbox('HUD Terminator (statut de V a l ecran)', hudShow)
         ImGui.Separator()
         ImGui.Text('Temperament')
         ImGui.Text('Courage :'); ImGui.SameLine()

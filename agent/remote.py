@@ -143,7 +143,7 @@ def poll(log=print) -> str | None:
 
 COMMANDS = ('stop', 'pause', 'reprendre', 'attaque', 'objectif', 'marchand', 'charcudoc', 'explore',
             'changer_quete', 'va_a', 'status', 'photo', 'niveau', 'soigne', 'stats', 'courage', 'style', 'aggro',
-            'modeles', 'modele')
+            'modeles', 'modele', 'hud')
 # commandes qui prennent un parametre libre (lieu pour va_a, valeur pour courage/style/aggro/modele)
 PARAM_CMDS = {'va_a': 'lieu (marchand/charcudoc/point de voyage rapide connu)',
               'courage': 'prudent, equilibre ou temeraire',

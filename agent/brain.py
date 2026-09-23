@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, input_kbm as kbm, inventory, llm, motion, nav, planner, quests, radio, remote, sms, terminals, vendor
+from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, planner, quests, radio, remote, sms, terminals, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -32,9 +32,30 @@ _DIRECTIVE_KEYWORDS = frozenset({
     'attaque', 'attaquer', 'combat', 'objectif', 'quete', 'marchand', 'vendre', 'boutique',
     'charcudoc', 'ripperdoc', 'implant', 'explore', 'explorer', 'balade', 'changer_quete', 'autre_quete',
     'status', 'etat', 'etat?', 'photo', 'screenshot', 'capture', 'niveau', 'soigne', 'stats',
-    'modeles', 'liste_modeles', 'modele_liste',
+    'modeles', 'liste_modeles', 'modele_liste', 'hud',
 })
 _DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ', 'modele ')
+
+# HUD : libelle du mode selon la decision du planificateur (le mod affiche lui-meme combat/conduite/danse/dialogue)
+_HUD_MODES = {'objectif': 'EN MISSION', 'attaquer': 'ENGAGEMENT', 'eviter': 'REPLI TACTIQUE', 'secourir': 'INTERVENTION',
+              'parler': 'INTERACTION', 'aborder': 'PRISE DE CONTACT', 'changer_quete': 'REAFFECTATION', 'attendre': 'VEILLE'}
+
+
+def _hud_directive(st: dict, alt_target: dict | None, dist: float | None) -> str:
+    if alt_target is not None:
+        t = str(alt_target.get('text') or '')
+        label = 'objectif secondaire (marqueur)' if (not t or t.endswith('Variant')) else t
+    else:
+        label = (st.get('quest') or {}).get('text') or 'aucune quete suivie'
+    if dist is not None:
+        label = f'{label} [{dist:.0f} m]'
+    return hud.ascii_up(label)[:70]
+
+
+def _hud_model() -> str:
+    if CFG.provider == 'ollama':
+        return hud.ascii_up(CFG.model)
+    return hud.ascii_up(f"{CFG.provider} {CFG.openai_model if CFG.provider == 'openai' else CFG.anthropic_model}")
 
 
 _LOG_STATE = {'file': LOG_FILE, 'err': None}
@@ -299,6 +320,9 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     _write_diag()
     _log(f'=== cerveau v1 demarre ({duration_s:.0f} s max) | code : {stamp} ===')
     remote.ensure_started(log=_log)
+    hud.update(t0=time.time(), mode='INITIALISATION', paused=False, ended=False, model=_hud_model(),
+               temper=hud.ascii_up(f'{CFG.courage} / {CFG.style} / {CFG.aggro}'), stats={})
+    hud.start()
     # auto-test : V bouge-t-il ? (touche avant 0,6 s) -> detecte tout de suite un blocage d entree
     s0 = motion.read_state()
     if s0 and kbm.game_focused():
@@ -317,9 +341,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     kbm.release_all()
                     if not paused_logged:
                         paused_logged = True; _log('PAUSE (F11) : le joueur a la main ; F11 pour reprendre')
+                        hud.update(paused=True)
                     time.sleep(0.3); continue
                 if paused_logged:
                     paused_logged = False; _log('REPRISE (F11) : V rejoue'); plan.last_t = -99.0
+                    hud.update(paused=False)
                 # V aime ecouter la radio de temps a autre (hors combat, dialogue, vehicule) : c est lui qui choisit la station
                 try:
                     _st_r = motion.read_state() or {}
@@ -351,6 +377,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             _log(f'DIRECTIVE « {dtv} » comprise comme : {cl}')
                             dtv, low = cl, cl.lower().strip()
                     stats['directives'] = stats.get('directives', 0) + 1
+                    hud.update(order='"' + hud.ascii_up(dtv)[:40] + '"', order_t=time.time())
                     if low in ('stop', 'arret', 'arrete-toi', 'arrete toi'):
                         _log('DIRECTIVE : arret demande'); remote.notify('V s arrete.')
                         if stop is not None: stop.set()
@@ -467,6 +494,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             remote.notify(f'V est desormais {v_a}.')
                         else:
                             remote.notify(f'Agressivite inconnue ({v_a}) : defensif, normal ou chasseur.')
+                    elif low == 'hud':
+                        rh = nav._wait(nav._send({'cmd': 'hud_toggle'}), timeout=3.0)
+                        shown = bool((rh or {}).get('hud'))
+                        _log(f"DIRECTIVE : HUD {'affiche' if shown else 'masque'}")
+                        remote.notify(f"HUD {'affiche' if shown else 'masque'}." if rh else 'HUD : mod muet (jeu lance ?).')
                     elif low in ('modeles', 'liste_modeles', 'modele_liste'):
                         _log('DIRECTIVE : liste des modeles Ollama demandee')
                         if CFG.provider != 'ollama':
@@ -869,6 +901,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     vend = vendor.pick_vendor(vendor.list_vendors())
                     if vend:
                         _log(f"courses : poids {inventory.WEIGHT:.0f}/{inventory.CARRY:.0f}, {len(inventory.SELLABLE)} objets a vendre, soins {inventory.HEALS}, marchand a {vend['dist']:.0f} m")
+                        hud.update(mode='RAVITAILLEMENT', directive=hud.ascii_up(f"marchand a {vend['dist']:.0f} m"))
                         tr = vendor.sell_trip(vend, stop=stop, log=_log)
                         if not tr.get('ok'):
                             _log(f"courses : marchand non atteint ({tr.get('reason')}) : ecarte 15 min, on essaiera un autre")
@@ -906,6 +939,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     rip = vendor.pick_vendor(vendor.list_vendors(), prefer='ripper')
                     if rip and 'ripper' in (rip.get('variant') or '').lower():
                         _log(f"charcudoc : {inventory.MONEY} eddies, « {rip.get('variant')} » a {rip['dist']:.0f} m : V va s optimiser")
+                        hud.update(mode='OPTIMISATION CYBERNETIQUE', directive=hud.ascii_up(f"charcudoc a {rip['dist']:.0f} m"))
                         tr = vendor.sell_trip(rip, stop=stop, log=_log)
                         if tr.get('ok'):
                             rr = vendor.ripperdoc_shop(log=_log)
@@ -949,6 +983,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     dist = _dist_to_mappin(st)
                 inter = st.get('interact')
                 action = plan.maybe_decide(st, {'dist_m': dist, 'approached': _was_approached, 'rescued': _was_rescued, 'muted': _muted}, log=_log)
+                _explo = alt_target is not None and str(alt_target.get('text') or '').startswith('exploration')
+                hud.update(mode='EXPLORATION' if _explo else _HUD_MODES.get(action, 'EN MISSION'),
+                           directive=_hud_directive(st, alt_target, dist),
+                           decision=hud.ascii_up(f'{plan.action} -- {plan.reason}')[:80],
+                           model=_hud_model(), temper=hud.ascii_up(f'{CFG.courage} / {CFG.style} / {CFG.aggro}'),
+                           stats={'combats': stats.get('combats', 0), 'morts': stats.get('morts', 0), 'loot': stats.get('loot', 0),
+                                  'eddies': (inventory.MONEY - money_start) if money_start is not None else 0})
 
                 if action == 'eviter':
                     hs = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('police')]
@@ -1392,6 +1433,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         if money_start is not None:
             stats['eddies_gagnes'] = inventory.MONEY - money_start
         _log(f'=== fin : {stats} ===')
+        hud.update(ended=True, paused=False, mode='SESSION TERMINEE')
+        hud.flush()
         remote.notify(f"Session terminee ({stats['seconds'] / 60:.0f} min) : {stats.get('combats', 0)} combat(s), "
                       f"{stats.get('morts', 0)} mort(s), {stats.get('loot', 0)} objet(s) loote(s), "
                       f"{stats.get('trajets', 0)} trajet(s), {stats.get('eddies_gagnes', 0)} eddies gagnes.")
