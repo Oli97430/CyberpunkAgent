@@ -48,6 +48,10 @@ local hudKills, hudKillsTotal, hudSessionT0, hudCheckT = 0, 0, nil, -99.0
 local hudLocks = true                         -- cadres de verrouillage sur les hostiles
 local hudLockTargets = {}                     -- { sx, sy, d, police } calcules dans onUpdate, dessines dans onDraw
 local hudEvents = {}                          -- evenements cote mod (pertes) : { instant, texte }
+local hudPos = 'milieu_droite'                -- position du HUD (panneau CET) ; « libre » : glisser a la souris
+local hudPosList = { 'milieu_droite', 'milieu_gauche', 'bas_gauche', 'bas_droite', 'libre' }
+local hudPosLabels = { 'milieu droite', 'milieu gauche', 'bas gauche', 'bas droite', 'libre (glisser)' }
+local hudW, hudH = 480, 420                   -- taille mesuree du HUD (auto) : ancrage par le bord droit
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
 local breachCtrl = nil
@@ -3292,10 +3296,11 @@ local function uiLoad()
     for i, v in ipairs(uiAggro) do if d.aggro == v then ui.aggro = i end end
     if d.hud ~= nil then hudShow = d.hud and true or false end
     if d.hud_locks ~= nil then hudLocks = d.hud_locks and true or false end
+    for _, p in ipairs(hudPosList) do if d.hud_pos == p then hudPos = p end end
 end
 local function uiSave()
     local d = { provider = uiProviders[ui.provider], api_key = ui.key, model = ui.model, openai_model = ui.openai_model,
-                anthropic_model = ui.anthropic_model, minutes = ui.minutes, hud = hudShow, hud_locks = hudLocks,
+                anthropic_model = ui.anthropic_model, minutes = ui.minutes, hud = hudShow, hud_locks = hudLocks, hud_pos = hudPos,
                 courage = uiCourage[ui.courage], style = uiStyle[ui.style], aggro = uiAggro[ui.aggro],
                 features = { radio = ui.radio, driving = ui.driving, rescue = ui.rescue, sell = ui.sell, ripperdoc = ui.ripperdoc, buffs = ui.buffs,
                              stealth = ui.stealth, fasttravel = ui.fasttravel, phone = ui.phone, sms = ui.sms, appearance = ui.appearance, recipes = ui.recipes,
@@ -3492,10 +3497,21 @@ local function drawHud()
     if ImGuiStyleVar.WindowRounding then ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0.0); nv = nv + 1 end
     if ImGuiStyleVar.WindowBorderSize then ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1.0); nv = nv + 1 end
     local okW, errW = pcall(function()
-        ImGui.SetNextWindowPos(40, 300, ImGuiCond.FirstUseEver)
+        local okR, W, H = pcall(GetDisplayResolution)
+        local x, y = nil, nil
+        if hudPos ~= 'libre' and okR and W and H and W > 0 then
+            local m = 40
+            if hudPos == 'milieu_droite' then x, y = W - hudW - m, H * 0.58 - hudH / 2
+            elseif hudPos == 'milieu_gauche' then x, y = m, H * 0.5 - hudH / 2
+            elseif hudPos == 'bas_gauche' then x, y = m, H - hudH - 190
+            elseif hudPos == 'bas_droite' then x, y = W - hudW - m, H - hudH - 190 end
+        end
+        if x then ImGui.SetNextWindowPos(math.max(0, x), math.max(0, y), ImGuiCond.Always)
+        else ImGui.SetNextWindowPos(40, 300, ImGuiCond.FirstUseEver) end
         if ImGui.Begin('V-800##agenthud', hudFlags()) then
             local okB, errB = pcall(hudBody)
             if not okB and tostring(errB) ~= hudLastErr then hudLastErr = tostring(errB); journal('HUD erreur : ' .. hudLastErr) end
+            pcall(function() local ww, hh = ImGui.GetWindowSize(); if ww and ww > 50 then hudW, hudH = ww, hh end end)
         end
         ImGui.End()
     end)
@@ -3566,6 +3582,11 @@ registerForEvent('onDraw', function()
         ui.recipes = ImGui.Checkbox('Acheter et apprendre des plans de craft', ui.recipes)
         hudShow = ImGui.Checkbox('HUD Terminator (statut de V a l ecran)', hudShow)
         hudLocks = ImGui.Checkbox('Cadres de verrouillage sur les hostiles', hudLocks)
+        ImGui.Text('Position du HUD :')
+        for i, p in ipairs(hudPosList) do
+            if ImGui.RadioButton(hudPosLabels[i] .. '##hudpos', hudPos == p) then hudPos = p end
+            if i < #hudPosList then ImGui.SameLine() end
+        end
         ImGui.Separator()
         ImGui.Text('Temperament')
         ImGui.Text('Courage :'); ImGui.SameLine()
