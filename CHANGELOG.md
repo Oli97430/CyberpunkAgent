@@ -2,6 +2,7 @@
 
 ## 0.1.2 — 2026-09-17 — combat fiable, secours, terminaux, vol de voiture, Breach Protocol validé
 
+- HUD, suite (23/09) : analyse de la cible visee (nom, faction, niveau, statut, vie, evaluation de menace -- police en non-cible ; vehicules et conteneurs identifies) et alertes clignotantes (vie < 30 %, 6 hostiles ou plus) avec fond du HUD qui pulse en rouge. Position du HUD : milieu droite par defaut, choix dans le panneau CET.
 - HUD, suite (23/09) : cadres de verrouillage sur les hostiles a l ecran (« CIBLE VERROUILLEE » pour le plus proche, police en ambre « NON-CIBLE », distance, taille selon l eloignement) et journal defilant des 5 derniers evenements (objectif, ordres, engagements, pertes, comptes-rendus). Case a cocher dans le panneau pour les cadres.
 - HUD in-game facon Terminator (demande Olivier, 23/09) : statut de V en direct par-dessus le jeu -- mode, liaison IA et modele, integrite, niveau, directive prioritaire, derniere decision, dernier ordre recu, analyse de menace, pertes humaines (session / total, hostiles tues ou neutralises), bilan et duree de session. Case a cocher dans le panneau CET, raccourci CET, directive « hud ». Masque dans les menus et pendant le Breach Protocol.
 - Danse sensorielle, suite (23/09, journal 08:42-08:55) : une fois l unique indice abandonne, V re-balayait la timeline dans le vide toutes les ~13 s pendant 7+ minutes -- un sweep_done.clear() redondant en fin de boucle effacait le suivi a chaque tour. Supprime : seul STALL_S (150 s) relance desormais un balayage complet sans progres.

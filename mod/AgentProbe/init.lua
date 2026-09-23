@@ -52,6 +52,7 @@ local hudPos = 'milieu_droite'                -- position du HUD (panneau CET) ;
 local hudPosList = { 'milieu_droite', 'milieu_gauche', 'bas_gauche', 'bas_droite', 'libre' }
 local hudPosLabels = { 'milieu droite', 'milieu gauche', 'bas gauche', 'bas droite', 'libre (glisser)' }
 local hudW, hudH = 480, 420                   -- taille mesuree du HUD (auto) : ancrage par le bord droit
+local hudScan, hudScanCache, hudScanN = nil, {}, 0   -- analyse de l objet sous le reticule (hors export Python)
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
 local breachCtrl = nil
@@ -137,6 +138,56 @@ local function hudUpdateLocks(player)
         table.sort(list, function(a, b) return a.d < b.d end)
     end
     hudLockTargets = list
+end
+local HUD_ACC = { ['à'] = 'a', ['â'] = 'a', ['ä'] = 'a', ['é'] = 'e', ['è'] = 'e', ['ê'] = 'e', ['ë'] = 'e', ['î'] = 'i',
+                  ['ï'] = 'i', ['ô'] = 'o', ['ö'] = 'o', ['ù'] = 'u', ['û'] = 'u', ['ü'] = 'u', ['ç'] = 'c', ['œ'] = 'oe',
+                  ['É'] = 'E', ['È'] = 'E', ['Ê'] = 'E', ['À'] = 'A', ['Ç'] = 'C', ['’'] = "'", ['«'] = '"', ['»'] = '"' }
+local function hudAscii(str)
+    -- police du HUD sans accents : translitteration, puis suppression de tout octet non ASCII restant
+    str = tostring(str or '')
+    for k, v in pairs(HUD_ACC) do str = str:gsub(k, v) end
+    str = str:gsub('[\128-\255]', '')
+    return str:upper()
+end
+local function hudAnalyze(obj, cls, d, player)
+    -- fil du jeu (tick d export) : analyse de l objet vise ; infos fixes en cache par entite
+    local scan = { cls = cls, d = d }
+    local key = nil
+    pcall(function() key = tostring(obj:GetEntityID().hash) end)
+    local c = key and hudScanCache[key]
+    if not c then
+        c = {}
+        if cls == 'gamePuppet' then
+            pcall(function() c.name = GetLocalizedText(tostring(obj:GetDisplayName())) end)
+            pcall(function()
+                local aff = tostring(TweakDBInterface.GetCharacterRecord(obj:GetRecordID()):Affiliation():Type())
+                c.aff = aff:gsub('gamedataAffiliation : ', ''):gsub(' %(%d+%)', '')
+            end)
+            pcall(function() c.lvl = Game.GetStatsSystem():GetStatValue(obj:GetEntityID(), gamedataStatType.Level) end)
+            pcall(function() c.police = obj:IsPolice() end)
+        elseif cls == 'vehicleBaseObject' then
+            pcall(function() c.name = GetLocalizedText(tostring(obj:GetDisplayName())) end)
+        end
+        if key then
+            hudScanCache[key] = c
+            hudScanN = hudScanN + 1
+            if hudScanN > 200 then hudScanCache, hudScanN = {}, 0 end
+        end
+    end
+    scan.name, scan.aff, scan.lvl, scan.police = c.name, c.aff, c.lvl, c.police
+    if cls == 'gamePuppet' then
+        pcall(function() scan.dead = obj:IsDead() end)
+        pcall(function() scan.hp = Game.GetStatPoolsSystem():GetStatPoolValue(obj:GetEntityID(), gamedataStatPoolType.Health, true) end)
+        pcall(function()
+            local a = obj:GetAttitudeTowards(player)
+            if a == EAIAttitude.AIA_Hostile then scan.att = 'HOSTILE'
+            elseif a == EAIAttitude.AIA_Friendly then scan.att = 'AMICAL'
+            else scan.att = 'NEUTRE' end
+        end)
+        pcall(function() scan.combat = obj:IsInCombat() end)
+        if not scan.dead and hudDown(obj) then scan.down = true end
+    end
+    hudScan = scan
 end
 local function hudCheckTracked()
     -- les requetes de ciblage excluent souvent les morts : un hostile disparu est re-verifie par son entite
@@ -1491,8 +1542,10 @@ registerForEvent('onUpdate', function(dt)
                 local op = obj:GetWorldPosition()
                 lookat = { cls = cls, d = math.sqrt((op.x - pos.x) ^ 2 + (op.y - pos.y) ^ 2) }
                 pcall(function() lookat.dead = obj:IsDead() end)
+                pcall(hudAnalyze, obj, cls, lookat.d, player)
             end
         end)
+        if not lookat then hudScan = nil end
         -- PNJ NON HOSTILES proches (pour engager une conversation de sa propre initiative) :
         -- TSQ_NPC (sonde OK) a 15 m, attitude non hostile, avec leur nom affiche. 5 max.
         local npcs = nil
@@ -3352,6 +3405,15 @@ local function hudBody()
 
     ImGui.Text('V-800  //  UNITE AUTONOME   ' .. (blink and '#' or ' '))
     ImGui.Separator()
+    local fast = (math.floor(os.clock() * 4) % 2 == 0) and 1.0 or 0.35
+    if not e.dead and hp < 30 then
+        ImGui.TextColored(1.0, 0.9, 0.25, fast, string.format('!! ALERTE : INTEGRITE CRITIQUE (%d %%) !!', math.floor(hp + 0.5)))
+    end
+    local nFoes = 0
+    for _, en in ipairs(e.enemies or {}) do if not en.dead and not en.police then nFoes = nFoes + 1 end end
+    if nFoes >= 6 then
+        ImGui.TextColored(1.0, 0.9, 0.25, fast, string.format('!! MENACE CRITIQUE : %d HOSTILES OU PLUS !!', nFoes))
+    end
     ImGui.Text('MODE ............ ' .. mode)
     ImGui.Text('LIAISON IA ...... ' .. link .. ((d.model and not stale) and ('  [' .. tostring(d.model) .. ']') or ''))
     ImGui.Text(string.format('INTEGRITE ....... %d %%', math.floor(hp + 0.5)))
@@ -3378,6 +3440,39 @@ local function hudBody()
         nearest and string.format(', %d M', math.floor(nearest + 0.5)) or ''))
     if police > 0 then ImGui.Text('                  DONT ' .. police .. ' POLICE : NE PAS ENGAGER') end
     ImGui.Text(string.format('PERTES HUMAINES . %d SESSION  /  %d TOTAL', hudKills, hudKillsTotal))
+    local sc = hudScan
+    if sc and (tonumber(sc.d) or 999) < 80 then
+        local dist = string.format('  [%d M]', math.floor((tonumber(sc.d) or 0) + 0.5))
+        if sc.cls == 'gamePuppet' then
+            ImGui.Separator()
+            local nm = (sc.name and sc.name ~= '') and sc.name or sc.aff or 'individu'
+            ImGui.Text('ANALYSE CIBLE ... ' .. hudAscii(nm) .. dist)
+            local parts = {}
+            if sc.aff and sc.aff ~= '' then parts[#parts + 1] = 'FACTION ' .. hudAscii((tostring(sc.aff):gsub('(%l)(%u)', '%1 %2'))) end
+            if tonumber(sc.lvl) then parts[#parts + 1] = 'NIVEAU ' .. math.floor(tonumber(sc.lvl) + 0.5) end
+            if #parts > 0 then ImGui.Text('                  ' .. table.concat(parts, '  |  ')) end
+            local state = sc.dead and 'TERMINE' or (sc.down and 'NEUTRALISE' or (sc.att or '?'))
+            if not sc.dead and not sc.down and sc.combat then state = state .. ' (EN COMBAT)' end
+            local hpT = (not sc.dead and tonumber(sc.hp)) and string.format('  |  INTEGRITE %d %%', math.floor(tonumber(sc.hp) + 0.5)) or ''
+            ImGui.Text('STATUT .......... ' .. state .. hpT)
+            local thr = 'NULLE'
+            if not sc.dead and not sc.down then
+                if sc.police then thr = 'NON-CIBLE (POLICE)'
+                elseif sc.att == 'HOSTILE' then
+                    local diff = (tonumber(sc.lvl) or 0) - (tonumber(e.level) or 0)
+                    thr = (diff >= 5 and 'EXTREME') or (diff >= 0 and 'ELEVEE') or 'MOYENNE'
+                elseif sc.combat then thr = 'INSTABLE' end
+            end
+            ImGui.Text('EVALUATION ...... ' .. thr)
+        elseif sc.cls == 'vehicleBaseObject' then
+            ImGui.Separator()
+            ImGui.Text('ANALYSE CIBLE ... VEHICULE ' .. hudAscii(sc.name or '') .. dist)
+        else
+            local lbl = ({ gameLootContainerBase = 'CONTENEUR', gameContainerObject = 'CONTENEUR', gameItemDropObject = 'OBJET AU SOL',
+                           gameLootBag = 'SAC', gameDevice = 'DISPOSITIF' })[sc.cls]
+            if lbl then ImGui.Separator(); ImGui.Text('ANALYSE CIBLE ... ' .. lbl .. dist) end
+        end
+    end
     ImGui.Separator()
     local st = d.stats or {}
     ImGui.Text(string.format('COMBATS %d   MORTS %d   LOOT %d   EDDIES %+d',
@@ -3485,8 +3580,12 @@ local function drawHud()
         end)
     end
     if lastExport.menu or ((lastExport.breach or {}).state == 1) then return end   -- menus plein ecran, Breach Protocol (clics)
+    local nA, hpA = 0, tonumber(lastExport.hp) or 100
+    for _, en in ipairs(lastExport.enemies or {}) do if not en.dead and not en.police then nA = nA + 1 end end
+    local pulse = (not lastExport.dead) and (hpA < 30 or nA >= 6) and (math.floor(os.clock() * 4) % 2 == 0)
+    local bgR, bgA = (pulse and 0.32 or 0.05), (pulse and 0.78 or 0.62)
     local colors = {
-        { ImGuiCol.WindowBg, 0.05, 0.0, 0.0, 0.62 }, { ImGuiCol.Border, 0.95, 0.12, 0.08, 0.85 },
+        { ImGuiCol.WindowBg, bgR, 0.0, 0.0, bgA }, { ImGuiCol.Border, 0.95, 0.12, 0.08, 0.85 },
         { ImGuiCol.Text, 1.0, 0.17, 0.10, 1.0 }, { ImGuiCol.Separator, 0.8, 0.1, 0.06, 0.8 },
         { ImGuiCol.PlotHistogram, 1.0, 0.14, 0.08, 1.0 }, { ImGuiCol.FrameBg, 0.25, 0.02, 0.02, 0.8 },
     }
