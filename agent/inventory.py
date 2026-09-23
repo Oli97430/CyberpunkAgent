@@ -28,6 +28,13 @@ def melee_score(it: dict) -> float:
     return (it.get('dps') or 0) * (1.25 if (it.get('type') or '') in BLUNT_TYPES else 1.0)
 MAX_DISASSEMBLE = 12
 equip_attempts: dict = {}      # index d objet -> tentatives d equipement (evite de re-equiper en boucle)
+def _is_money(it) -> bool:
+    """23/09 : l argent (« Eurodollars ») sortait de l inventaire comme un objet Gen_Misc -- le « vendre » creait
+    des eddies de rien (6864 -> 88218). Le mod l exclut desormais ; filet de securite si un vieux mod est charge."""
+    n = str(it.get('name') or '').strip().lower()
+    return 'eurodollar' in n or n in ('eddies', 'eddie', 'money', 'argent')
+
+
 SELLABLE: list = []          # rempli par manage() ; consomme par sell_all() chez un marchand
 WEIGHT, CARRY = 0.0, 260.0   # poids porte (somme des objets : la stat Weight du joueur vaut toujours 0) / capacite
 FULL_RATIO = 0.85            # « inventaire plein ou presque » : courses a partir de 85 % de la capacite
@@ -253,7 +260,7 @@ def manage(log=print) -> dict:
                                        or ((it.get('type') or '').startswith('Clo_') and it['i'] not in best_clo)
                                        or (it.get('type') or '').startswith('Prt_')
                                        or (it.get('type') or '') == 'Gen_Misc')
-                and not it.get('iconic') and not it.get('quest') and not it.get('equipped')
+                and not it.get('iconic') and not it.get('quest') and not it.get('equipped') and not _is_money(it)
                 and str(it.get('name') or '').strip() and it['i'] not in dis_idx]
     # valeur estimee : prix du jeu s il est connu (le stat Price est souvent nul), sinon par qualite
     QVAL = {'Legendary': 2500, 'Epic': 1000, 'Rare': 400, 'Uncommon': 150, 'Common': 50}

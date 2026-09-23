@@ -35,6 +35,20 @@ _DIRECTIVE_KEYWORDS = frozenset({
     'modeles', 'liste_modeles', 'modele_liste', 'hud',
 })
 _DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ', 'modele ')
+_STOP_WORDS = ('stop', 'arret', 'arrete-toi', 'arrete toi')
+_RESUME_WORDS = ('reprendre', 'resume', 'continue')
+
+
+def _understand(dtv: str) -> tuple[str, str]:
+    """Directive -> (texte, commande) : mot-cle exact, sinon le modele local traduit la phrase libre vers la
+    commande la plus proche (20/09, « trop basique »)."""
+    low = dtv.lower().strip()
+    if low not in _DIRECTIVE_KEYWORDS and not low.startswith(_DIRECTIVE_PREFIXES):
+        cl = remote.classify(dtv)
+        if cl:
+            _log(f'DIRECTIVE « {dtv} » comprise comme : {cl}')
+            dtv, low = cl, cl.lower().strip()
+    return dtv, low
 
 # HUD : libelle du mode selon la decision du planificateur (le mod affiche lui-meme combat/conduite/danse/dialogue)
 _HUD_MODES = {'objectif': 'EN MISSION', 'attaquer': 'ENGAGEMENT', 'eviter': 'REPLI TACTIQUE', 'secourir': 'INTERVENTION',
@@ -250,6 +264,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             def is_set(self_): return (hard_stop is not None and hard_stop.is_set()) or pause.is_set()
         stop = _Halt()
     paused_logged = False
+    pause_since = 0.0               # debut de la pause en cours (heure murale, comme remote.LAST_T)
     t0 = time.perf_counter()
     stats = {'dialogues': 0, 'interactions': 0, 'trajets': 0, 'attentes': 0}
     last_quest_text = None
@@ -308,6 +323,70 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     def _was_approached(n):
         k = (n.get('name'), round(n['x'] / 8), round(n['y'] / 8))
         return time.perf_counter() - approached.get(k, -9999.0) < 300.0
+    deferred: list = []             # ordres recus en pause / hors premier plan : (texte, commande), executes a la reprise
+    idle_poll_t = [-99.0]
+    def _status_text(st):
+        q_s = st.get('quest') or {}
+        d_s = _dist_to_mappin(st) if st.get('x') is not None else None
+        return (f"V : niveau {st.get('level', '?')}, vie {st.get('hp', 0):.0f} %, {inventory.MONEY} eddies\n"
+                f"Quete : {q_s.get('text') or 'aucune'}" + (f' (a {d_s:.0f} m)' if d_s is not None else '') + '\n'
+                f"Session : {stats.get('combats', 0)} combat(s), {stats.get('morts', 0)} mort(s), "
+                f"{stats.get('loot', 0)} objet(s) loote(s), {stats.get('trajets', 0)} trajet(s), "
+                f"{int(time.perf_counter() - t0)} s ecoulees")
+    def _send_photo(st):
+        img = remote.screenshot_jpeg()
+        if img:
+            sent = remote.send_photo(img, caption=f"V - {st.get('hp', 0):.0f} % de vie, niveau {st.get('level', '?')}")
+            _log(f"  [telegram] photo {'envoyee' if sent else 'echec d envoi'} ({len(img)} octets)")
+        else:
+            _log('  [telegram] capture d ecran impossible (dxcam/cv2 indisponible ?)')
+            remote.notify('Capture d ecran impossible (dxcam indisponible ?).')
+    def _idle_directive(why):
+        """23/09 : en pause (F11 ou directive) et hors premier plan, la boucle ne lisait AUCUN ordre --
+        « reprendre » envoye par Telegram ne pouvait jamais etre lu (piege). File Telegram lue 1 fois/s (pas le
+        panneau CET : sa lecture passe par le mod, jusqu a 3 s d attente si le jeu est dans un menu) ; arret,
+        reprise, etat et photo traites ici, le reste note et execute a la reprise. True = il faut s arreter."""
+        now = time.perf_counter()
+        if now - idle_poll_t[0] < 1.0:
+            return False
+        idle_poll_t[0] = now
+        dtv = remote.poll(log=_log, cet=False)
+        if not dtv:
+            return False
+        dtv, low = _understand(dtv)
+        where = 'en pause' if why == 'pause' else 'jeu hors premier plan'
+        if low in _STOP_WORDS:
+            _log(f'DIRECTIVE ({where}) : arret demande'); remote.notify('V s arrete.')
+            if hard_stop is not None and hasattr(hard_stop, 'set'): hard_stop.set()
+            return True
+        if low in _RESUME_WORDS:
+            if why == 'pause' and pause is not None and remote.LAST_T < pause_since:
+                # recue AVANT cette pause (restee en file) : l appliquer rendrait la main a V malgre F11 / « pause »
+                _log('DIRECTIVE : reprise recue avant la pause, ignoree')
+                remote.notify('« reprendre » recu avant la pause : ignore. Renvoie-le pour relancer V.')
+            elif why == 'pause' and pause is not None:
+                pause.clear(); _log('DIRECTIVE : reprise'); remote.notify('V reprend.')
+            else:
+                remote.notify('Le jeu n est pas au premier plan : V reprendra des qu il y sera.')
+            return False
+        if low == 'pause':
+            if pause is not None: pause.set()
+            remote.notify('V est deja en pause.' if why == 'pause' else 'V est en pause.')
+            return False
+        st_i = motion.read_state() or {}
+        if low in ('status', 'etat', 'etat?'):
+            _log(f'DIRECTIVE ({where}) : etat demande')
+            remote.notify(f'[{where.upper()}] ' + _status_text(st_i))
+        elif low in ('photo', 'screenshot', 'capture'):
+            _log(f'DIRECTIVE ({where}) : capture d ecran demandee')
+            _send_photo(st_i)
+        elif len(deferred) < 5:
+            deferred.append((dtv, low))
+            _log(f'DIRECTIVE ({where}) : « {dtv} » notee pour la reprise')
+            remote.notify(f'Ordre note ({where}) : execute a la reprise.' + (' « reprendre » ou F11 pour relancer V.' if why == 'pause' else ''))
+        else:
+            remote.notify(f'Deja 5 ordres en attente ({where}) : celui-ci est ignore.')
+        return False
     # version du code reellement chargee (evite de diagnostiquer un run perime)
     import os
     def _mt(m):
@@ -320,6 +399,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     _write_diag()
     _log(f'=== cerveau v1 demarre ({duration_s:.0f} s max) | code : {stamp} ===')
     remote.ensure_started(log=_log)
+    remote.bind(hard_stop, pause)          # stop / pause / reprendre Telegram appliques des reception
     hud.update(t0=time.time(), mode='INITIALISATION', paused=False, ended=False, model=_hud_model(),
                temper=hud.ascii_up(f'{CFG.courage} / {CFG.style} / {CFG.aggro}'), stats={})
     hud.start()
@@ -340,11 +420,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 if pause is not None and pause.is_set():
                     kbm.release_all()
                     if not paused_logged:
-                        paused_logged = True; _log('PAUSE (F11) : le joueur a la main ; F11 pour reprendre')
+                        paused_logged = True; pause_since = time.time()
+                        _log('PAUSE : le joueur a la main ; F11 (ou « reprendre » sur Telegram) pour reprendre')
                         hud.update(paused=True)
+                    if _idle_directive('pause'):
+                        break
                     time.sleep(0.3); continue
                 if paused_logged:
-                    paused_logged = False; _log('REPRISE (F11) : V rejoue'); plan.last_t = -99.0
+                    paused_logged = False; _log('REPRISE : V rejoue'); plan.last_t = -99.0
                     hud.update(paused=False)
                 # V aime ecouter la radio de temps a autre (hors combat, dialogue, vehicule) : c est lui qui choisit la station
                 try:
@@ -358,6 +441,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     if not unfocused:
                         unfocused = True
                         _log('jeu hors premier plan : entrees suspendues')
+                    if _idle_directive('focus'):
+                        break
                     time.sleep(0.3); continue
                 if unfocused:
                     unfocused = False
@@ -367,27 +452,28 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     stats['attentes'] += 1; time.sleep(0.5); continue
 
                 # 0a0. DIRECTIVE recue (jeu ou Telegram) : V est redirige en direct, sans attendre qu il ait fini
-                dtv = remote.poll(log=_log)
+                # (ordres notes pendant la pause / hors premier plan d abord : deja compris)
+                dtv, low = deferred.pop(0) if deferred else (remote.poll(log=_log), None)
                 if dtv:
-                    low = dtv.lower().strip()
-                    if low not in _DIRECTIVE_KEYWORDS and not low.startswith(_DIRECTIVE_PREFIXES):
-                        # pas un mot-cle exact : le modele local traduit la phrase libre (20/09, « trop basique »)
-                        cl = remote.classify(dtv)
-                        if cl:
-                            _log(f'DIRECTIVE « {dtv} » comprise comme : {cl}')
-                            dtv, low = cl, cl.lower().strip()
+                    if low is None:
+                        dtv, low = _understand(dtv)
                     stats['directives'] = stats.get('directives', 0) + 1
                     hud.update(order='"' + hud.ascii_up(dtv)[:40] + '"', order_t=time.time())
                     hud.event(f'ordre recu : {dtv}')
-                    if low in ('stop', 'arret', 'arrete-toi', 'arrete toi'):
+                    if low in _STOP_WORDS:
+                        # 23/09 : `stop` est l enveloppe _Halt (sans set) des qu une pause est fournie -> AttributeError,
+                        # V continuait. On arme le VRAI arret (F12) et on sort tout de suite.
                         _log('DIRECTIVE : arret demande'); remote.notify('V s arrete.')
-                        if stop is not None: stop.set()
+                        if hard_stop is not None and hasattr(hard_stop, 'set'): hard_stop.set()
+                        break
                     elif low == 'pause':
                         if pause is not None: pause.set()
                         remote.notify('V est en pause.')
-                    elif low in ('reprendre', 'resume', 'continue'):
-                        if pause is not None: pause.clear()
-                        remote.notify('V reprend.')
+                    elif low in _RESUME_WORDS:
+                        # hors pause : rien a reprendre. Si une pause vient d etre posee (F11 entre le haut de boucle et
+                        # ici), ce « reprendre » est plus ancien qu elle : on ne la leve pas.
+                        remote.notify('Pause posee entre-temps : « reprendre » ignore, renvoie-le pour relancer V.'
+                                      if pause is not None and pause.is_set() else 'V n est pas en pause : il continue.')
                     elif low in ('attaque', 'attaquer', 'combat'):
                         hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')]
                         if hostiles:
@@ -438,24 +524,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             _log(f'DIRECTIVE : lieu « {lieu} » inconnu')
                             remote.notify(f'Lieu « {lieu} » inconnu (marchand/charcudoc/point de voyage rapide deja decouvert seulement).')
                     elif low in ('status', 'etat', 'etat?'):
-                        q_s = st.get('quest') or {}
-                        d_s = _dist_to_mappin(st)
-                        txt = (f"V : niveau {st.get('level', '?')}, vie {st.get('hp', 0):.0f} %, {inventory.MONEY} eddies\n"
-                               f"Quete : {q_s.get('text') or 'aucune'}" + (f' (a {d_s:.0f} m)' if d_s is not None else '') + '\n'
-                               f"Session : {stats.get('combats', 0)} combat(s), {stats.get('morts', 0)} mort(s), "
-                               f"{stats.get('loot', 0)} objet(s) loote(s), {stats.get('trajets', 0)} trajet(s), "
-                               f"{int(time.perf_counter() - t0)} s ecoulees")
                         _log('DIRECTIVE : etat demande')
-                        remote.notify(txt)
+                        remote.notify(_status_text(st))
                     elif low in ('photo', 'screenshot', 'capture'):
                         _log('DIRECTIVE : capture d ecran demandee')
-                        img = remote.screenshot_jpeg()
-                        if img:
-                            sent = remote.send_photo(img, caption=f"V - {st.get('hp', 0):.0f} % de vie, niveau {st.get('level', '?')}")
-                            _log(f"  [telegram] photo {'envoyee' if sent else 'echec d envoi'} ({len(img)} octets)")
-                        else:
-                            _log('  [telegram] capture d ecran impossible (dxcam/cv2 indisponible ?)')
-                            remote.notify('Capture d ecran impossible (dxcam indisponible ?).')
+                        _send_photo(st)
                     elif low == 'niveau':
                         last_levelup_t = -999.0
                         _log('DIRECTIVE : verification niveau/perks forcee')
@@ -1427,6 +1500,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 time.sleep(1.0)
     finally:
         kbm.release_all()
+        remote.bind(None, None)            # entre deux sessions : plus d evenement perime a armer
         try:
             dialog.unload_model()
             radio.turn_off(log=_log)

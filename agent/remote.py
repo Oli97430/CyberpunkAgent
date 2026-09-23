@@ -15,6 +15,8 @@ import queue
 import re
 import threading
 import time
+import unicodedata
+from email.utils import parsedate_to_datetime
 import urllib.parse
 import urllib.request
 
@@ -23,7 +25,8 @@ from .config import DATA_DIR
 
 TELEGRAM_FILE = DATA_DIR / 'telegram.json'   # {"token": "...", "chat_id": "..."} -- jamais commis au depot
 
-_Q: queue.Queue = queue.Queue()
+_Q: queue.Queue = queue.Queue()      # (heure de reception, texte)
+LAST_T = 0.0                         # heure de reception de la derniere directive rendue par poll()
 _screen = None   # capture.Screen() : cree a la demande (premiere « photo »), pas au demarrage (cout ~230 ms)
 
 
@@ -34,34 +37,81 @@ def _creds() -> tuple[str | None, str | None]:
     except Exception:
         return None, None
 _telegram_started = False
+_STOP_EV = None    # evenements de la session en cours (brain.run les lie) : stop / pause / reprendre envoyes
+_PAUSE_EV = None   # par Telegram sont appliques DES RECEPTION, meme en pleine competence longue
+
+
+def bind(stop_ev=None, pause_ev=None) -> None:
+    global _STOP_EV, _PAUSE_EV
+    _STOP_EV, _PAUSE_EV = stop_ev, pause_ev
+
+
+def _plain(txt: str) -> str:
+    return unicodedata.normalize('NFKD', txt).encode('ascii', 'ignore').decode('ascii').lower().strip().lstrip('/').strip()
+
+
+def _urgent(txt: str, log) -> bool:
+    """Mots EXACTS stop / pause / reprendre (pas de comprehension libre ici) : appliques par le fil Telegram
+    lui-meme -- les competences longues (conduite, trajet, charcudoc...) testent deja stop.is_set() et rendent
+    la main. True = traite, ne pas mettre en file."""
+    low = _plain(txt)
+    stop_ev, pause_ev = _STOP_EV, _PAUSE_EV
+    if low in ('stop', 'arret', 'arrete-toi', 'arrete toi') and stop_ev is not None and hasattr(stop_ev, 'set'):
+        stop_ev.set(); log('DIRECTIVE (telegram, immediate) : arret demande'); notify('V s arrete.')
+        return True
+    if low == 'pause' and pause_ev is not None:
+        pause_ev.set(); log('DIRECTIVE (telegram, immediate) : pause')
+        notify('V est en pause. « reprendre » (ou F11) pour qu il rejoue.')
+        return True
+    if low in ('reprendre', 'resume', 'continue') and pause_ev is not None:
+        if pause_ev.is_set():
+            pause_ev.clear(); log('DIRECTIVE (telegram, immediate) : reprise'); notify('V reprend.')
+        else:
+            notify('V n est pas en pause : il continue.')   # pas en file : annulerait une pause posee plus tard
+        return True
+    return False
 
 
 def _cet_poll(log=print) -> None:
     r = nav._wait(nav._send({'cmd': 'get_directive'}), timeout=3.0)
     txt = (r or {}).get('text') or ''
     if txt.strip():
-        _Q.put(txt.strip())
+        _Q.put((time.time(), txt.strip()))
         log(f"  [directive] recue (jeu) : « {txt.strip()} »")
 
 
 def _telegram_loop(token: str, chat_id: str, log) -> None:
     base = f'https://api.telegram.org/bot{token}'
     offset = 0
+    t_start = time.time()              # messages envoyes avant le demarrage (rejoues par Telegram) : ignores
+    skew = 0.0                         # heure du PC - heure du serveur Telegram (en-tete HTTP Date)
     log('  [telegram] connecte, en ecoute')
     while True:
         try:
             url = f'{base}/getUpdates?timeout=25&offset={offset}'
             with urllib.request.urlopen(url, timeout=30) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
+                try:
+                    skew = time.time() - parsedate_to_datetime(resp.headers.get('Date')).timestamp()
+                except Exception:
+                    pass
+            stale = []
             for upd in data.get('result', []):
                 offset = upd['update_id'] + 1
                 msg = upd.get('message') or {}
                 if str((msg.get('chat') or {}).get('id')) != str(chat_id):
                     continue                                  # ignore tout autre chat/utilisateur
                 txt = (msg.get('text') or '').strip()
-                if txt:
-                    _Q.put(txt)
-                    log(f"  [directive] recue (telegram) : « {txt} »")
+                if not txt:
+                    continue
+                if (msg.get('date') or t_start) + skew < t_start - 60:     # date serveur ramenee a l heure du PC
+                    stale.append(txt); log(f"  [telegram] ancien message ignore (envoye avant le demarrage) : « {txt} »")
+                    continue
+                log(f"  [directive] recue (telegram) : « {txt} »")
+                if not _urgent(txt, log):
+                    _Q.put((time.time(), txt))
+            if stale:
+                notify(f'{len(stale)} message(s) envoye(s) avant mon demarrage ignore(s) : ' + ', '.join(f'« {t[:30]} »' for t in stale[:5]))
         except Exception as e:
             log(f'  [telegram] erreur : {e}'); time.sleep(5.0)
 
@@ -133,12 +183,15 @@ def ensure_started(log=print) -> None:
     threading.Thread(target=_telegram_loop, args=(token, chat_id, log), daemon=True).start()
 
 
-def poll(log=print) -> str | None:
-    """A appeler une fois par tour de boucle : lit le panneau in-game, puis renvoie la prochaine
-    directive en attente (jeu ou Telegram) s il y en a une."""
-    _cet_poll(log=log)
+def poll(log=print, cet: bool = True) -> str | None:
+    """A appeler une fois par tour de boucle : lit le panneau in-game (sauf cet=False : pause / hors premier
+    plan), puis renvoie la prochaine directive en attente (jeu ou Telegram) s il y en a une."""
+    global LAST_T
+    if cet:
+        _cet_poll(log=log)
     try:
-        return _Q.get_nowait()
+        LAST_T, txt = _Q.get_nowait()
+        return txt
     except queue.Empty:
         return None
 

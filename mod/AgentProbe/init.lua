@@ -1889,6 +1889,25 @@ local function buyPrice(vendor, player, id)
     return price or 0
 end
 
+local moneyKey = nil
+local function isMoney(id)
+    -- 23/09 : l argent (« Eurodollars ») sortait de l inventaire comme un objet Gen_Misc ; le « vendre »
+    -- (TransferItem au marchand puis GiveItem du prix) creait des eddies de rien (6864 -> 88218).
+    local yes = false
+    pcall(function()
+        if not moneyKey then moneyKey = TDBID.ToStringDEBUG(MarketSystem.Money().id) end
+        local k = TDBID.ToStringDEBUG(id.id)
+        yes = (k == moneyKey) or (k == 'Items.money')
+    end)
+    if not yes then
+        pcall(function()
+            local m = MarketSystem.Money().id
+            if id.id.hash == m.hash and id.id.length == m.length then yes = true end
+        end)
+    end
+    return yes
+end
+
 local function handleCommand(player, cmd)
     local resp = { seq = cmd.seq, ok = false, seqEnd = cmd.seq }
     local target, err
@@ -1924,7 +1943,7 @@ local function handleCommand(player, cmd)
                 end
                 pcall(function() rec.equipped = edata:IsEquipped(id) end)
                 pcall(function() rec.quest = data:HasTag('Quest') end)
-                out[#out + 1] = rec
+                if not isMoney(id) then out[#out + 1] = rec end     -- l argent n est jamais un objet a vendre/demonter
             end
         end
         resp.ok, resp.items = true, out
@@ -2145,6 +2164,7 @@ local function handleCommand(player, cmd)
         pcall(function() owned = ts:GetItemQuantity(player, id) end)
         if not owned or owned <= 0 then pcall(function() owned = ts:GetItemData(player, id):GetQuantity() end) end
         if not owned or owned <= 0 then resp.reason = 'objet absent de l inventaire'; journal('FAIL sell : absent'); return resp end
+        if isMoney(id) then resp.reason = 'argent : jamais vendu'; journal('FAIL sell : argent (refuse)'); return resp end
         local qty = math.max(1, math.min(qtyWanted, owned))
         -- objets proteges : quete, iconique, equipe
         local protected = false
