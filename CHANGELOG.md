@@ -2,6 +2,7 @@
 
 ## 0.1.2 — 2026-09-17 — combat fiable, secours, terminaux, vol de voiture, Breach Protocol validé
 
+- Danse sensorielle, suite (23/09, journal 08:42-08:55) : une fois l unique indice abandonne, V re-balayait la timeline dans le vide toutes les ~13 s pendant 7+ minutes -- un sweep_done.clear() redondant en fin de boucle effacait le suivi a chaque tour. Supprime : seul STALL_S (150 s) relance desormais un balayage complet sans progres.
 - Danse sensorielle, confirme en jeu (23/09, journal 08:08-08:20) : un indice audio restait bloque a 0 % d analyse pendant 12+ minutes, deux fois de suite (~20 min perdues), rien n empechait de le re-selectionner indefiniment. Abandonne desormais apres 3 echecs consecutifs sur le meme indice (choix, balayage ET condition de sortie), V passe aux autres indices ou tente la sortie.
 - Lancer V : « ne fonctionne pas » quand une session tournait deja (mise en pause F11) -- le verrou mono-instance refusait le second lancement en silence. Le panneau detecte maintenant une session en cours AVANT de lancer et l indique clairement (F11 pour reprendre, F12 pour arreter).
 - CyberpunkAgent-Config : interface refaite, par onglets (Modele, Comportements, Temperament, Telegram) avec un theme Windows natif, au lieu d un long formulaire qui defilait. Aucun changement de logique/comportement.
