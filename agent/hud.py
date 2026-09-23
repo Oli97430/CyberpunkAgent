@@ -23,6 +23,11 @@ _lock = threading.Lock()
 _started = False
 
 
+def ascii_plain(s) -> str:
+    """Police ImGui sans accents : translitteration, casse conservee (panneau CET)."""
+    return unicodedata.normalize('NFKD', str(s)).encode('ascii', 'ignore').decode('ascii')
+
+
 def ascii_up(s) -> str:
     """Police du HUD sans accents : on translittere (« Rechercher l indice » -> « RECHERCHER L INDICE »)."""
     s = unicodedata.normalize('NFKD', str(s)).encode('ascii', 'ignore').decode('ascii')

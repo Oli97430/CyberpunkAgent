@@ -3337,7 +3337,9 @@ end
 
 -- ============================ FENETRE IN-GAME (overlay CET) ============================
 -- Reglages de l agent saisis dans le jeu : fournisseur du modele, cle API, modeles, comportements.
--- Ecrits dans agent_config.json (dossier du mod) ; l agent Python les lit en priorite.
+-- Ecrits dans agent_config.json (dossier du mod). 23/09 : seuls les reglages MODIFIES ici sont ecrits, horodates
+-- (_changed_at) ; cote Python, chaque reglage prend la valeur modifiee en dernier (ici ou dans le panneau Windows).
+-- L ancien panneau reecrivait TOUT (defauts compris) et ecrasait en silence le panneau Windows, modele compris.
 local ui = { open = false, provider = 1, key = '', model = 'llama3.2:latest', openai_model = 'gpt-4o-mini',
              anthropic_model = 'claude-haiku-4-5-20251001', minutes = 20, saved = '',
              radio = true, driving = true, rescue = true, sell = true, ripperdoc = true, buffs = true,
@@ -3347,6 +3349,16 @@ local uiCourage = { 'prudent', 'equilibre', 'temeraire' }
 local uiStyle = { 'melee', 'mixte', 'distance' }
 local uiAggro = { 'defensif', 'normal', 'chasseur' }
 local uiProviders = { 'ollama', 'openai', 'anthropic' }
+local UI_FEATS = { 'radio', 'driving', 'rescue', 'sell', 'ripperdoc', 'buffs', 'stealth', 'fasttravel', 'phone', 'sms', 'appearance', 'recipes', 'sprint', 'steal', 'terminals' }
+local UI_KEYS = { 'provider', 'api_key', 'model', 'openai_model', 'anthropic_model', 'minutes', 'courage', 'style', 'aggro' }
+local uiCarry, uiStamp, uiSnap = {}, {}, {}   -- reglages fixes en jeu (conserves), leurs horodatages, valeurs au chargement
+local function uiValues()
+    local v = { provider = uiProviders[ui.provider], api_key = ui.key, model = ui.model, openai_model = ui.openai_model,
+                anthropic_model = ui.anthropic_model, minutes = ui.minutes,
+                courage = uiCourage[ui.courage], style = uiStyle[ui.style], aggro = uiAggro[ui.aggro] }
+    for _, k in ipairs(UI_FEATS) do v['features.' .. k] = ui[k] end
+    return v
+end
 local function uiLoad()
     local f = io.open('agent_config.json', 'r')
     if not f then return end
@@ -3370,18 +3382,84 @@ local function uiLoad()
     if d.hud ~= nil then hudShow = d.hud and true or false end
     if d.hud_locks ~= nil then hudLocks = d.hud_locks and true or false end
     for _, p in ipairs(hudPosList) do if d.hud_pos == p then hudPos = p end end
+    -- reglages deja fixes en jeu : conserves tels quels (sans horodatage pour l ancien format : Python ne s en sert
+    -- alors que pour combler un reglage absent du panneau Windows)
+    local ts = (d._v == 2 and type(d._changed_at) == 'table') and d._changed_at or {}
+    uiCarry, uiStamp = {}, {}
+    for _, k in ipairs(UI_KEYS) do
+        if d[k] ~= nil and d[k] ~= '' then uiCarry[k] = d[k]; uiStamp[k] = tonumber(ts[k]) end
+    end
+    if type(d.features) == 'table' then
+        for _, k in ipairs(UI_FEATS) do
+            if d.features[k] ~= nil then uiCarry['features.' .. k] = d.features[k]; uiStamp['features.' .. k] = tonumber(ts['features.' .. k]) end
+        end
+    end
+    if (uiCarry.provider or 'ollama') == 'ollama' then uiCarry.api_key = nil; uiStamp.api_key = nil end   -- cle inutile avec Ollama
+end
+local function uiWrite(d)
+    local f = io.open('agent_config.json', 'w')
+    if not f then ui.saved = 'echec d ecriture'; return false end
+    f:write(json.encode(d)); f:close()
+    return true
 end
 local function uiSave()
-    local d = { provider = uiProviders[ui.provider], api_key = ui.key, model = ui.model, openai_model = ui.openai_model,
-                anthropic_model = ui.anthropic_model, minutes = ui.minutes, hud = hudShow, hud_locks = hudLocks, hud_pos = hudPos,
-                courage = uiCourage[ui.courage], style = uiStyle[ui.style], aggro = uiAggro[ui.aggro],
-                features = { radio = ui.radio, driving = ui.driving, rescue = ui.rescue, sell = ui.sell, ripperdoc = ui.ripperdoc, buffs = ui.buffs,
-                             stealth = ui.stealth, fasttravel = ui.fasttravel, phone = ui.phone, sms = ui.sms, appearance = ui.appearance, recipes = ui.recipes,
-                             sprint = ui.sprint, steal = ui.steal, terminals = ui.terminals } }
-    local f = io.open('agent_config.json', 'w')
-    if f then f:write(json.encode(d)); f:close(); ui.saved = 'enregistre ' .. os.date('%H:%M:%S') else ui.saved = 'echec d ecriture' end
+    local cur = uiValues()
+    local now = os.time()
+    for k, v in pairs(cur) do
+        if v ~= uiSnap[k] then uiCarry[k] = v; uiStamp[k] = now end     -- modifie ici depuis le chargement : horodate
+    end
+    if (cur.provider or 'ollama') == 'ollama' then uiCarry.api_key = nil; uiStamp.api_key = nil
+    elseif uiCarry.provider and uiCarry.api_key == nil and cur.api_key and cur.api_key ~= '' then
+        uiCarry.api_key = cur.api_key; uiStamp.api_key = uiStamp.provider    -- cle deja saisie : suit le fournisseur fixe en jeu
+    end
+    local d = { _v = 2, hud = hudShow, hud_locks = hudLocks, hud_pos = hudPos, _changed_at = {}, features = {} }
+    for k, v in pairs(uiCarry) do
+        local fk = k:match('^features%.(.+)$')
+        if fk then d.features[fk] = v else d[k] = v end
+        if uiStamp[k] then d._changed_at[k] = uiStamp[k] end
+    end
+    if next(d.features) == nil then d.features = nil end
+    if next(d._changed_at) == nil then d._changed_at = nil end
+    if uiWrite(d) then uiSnap = cur; ui.saved = 'enregistre ' .. os.date('%H:%M:%S') .. ' (effet au prochain lancement de V)' end
+end
+local uiSyncT0 = nil                         -- session de l agent dont la config effective a deja ete reprise
+local function uiSyncEffective(force)
+    -- 23/09 : les champs montraient les defauts du panneau (ou l ancien fichier), pas la config reellement utilisee ;
+    -- « Enregistrer » sur une valeur affichee ne changeait rien. On aligne sur la config effective publiee par
+    -- l agent (table hud, cfgv) les champs que l utilisateur n a PAS touches depuis le dernier chargement.
+    local e = hudData and hudData.cfgv
+    if type(e) ~= 'table' then return end
+    if not force and uiSyncT0 == hudData.t0 then return end
+    uiSyncT0 = hudData.t0
+    local cur = uiValues()
+    local function untouched(k) return cur[k] == uiSnap[k] end
+    if untouched('provider') then for i, p in ipairs(uiProviders) do if p == e.provider then ui.provider = i end end end
+    for _, k in ipairs({ 'model', 'openai_model', 'anthropic_model' }) do
+        if type(e[k]) == 'string' and e[k] ~= '' and untouched(k) then ui[k] = e[k] end
+    end
+    if tonumber(e.minutes) and untouched('minutes') then ui.minutes = math.floor(tonumber(e.minutes)) end
+    for _, p in ipairs({ { 'courage', uiCourage }, { 'style', uiStyle }, { 'aggro', uiAggro } }) do
+        if untouched(p[1]) then for i, v in ipairs(p[2]) do if v == e[p[1]] then ui[p[1]] = i end end end
+    end
+    if type(e.features) == 'table' then
+        for _, k in ipairs(UI_FEATS) do
+            if type(e.features[k]) == 'boolean' and untouched('features.' .. k) then ui[k] = e.features[k] end
+        end
+    end
+    local after = uiValues()
+    for k, v in pairs(after) do if cur[k] == uiSnap[k] then uiSnap[k] = v end end   -- repris de l agent : pas un changement
+end
+local function uiForget()
+    -- « Oublier les reglages in-game » : le panneau Windows redevient seul maitre (cle API effacee du dossier du jeu)
+    uiCarry, uiStamp = {}, {}
+    if uiWrite({ _v = 2, hud = hudShow, hud_locks = hudLocks, hud_pos = hudPos }) then
+        ui.key = ''
+        uiSnap = uiValues(); ui.saved = 'reglages in-game oublies ' .. os.date('%H:%M:%S')
+        pcall(uiSyncEffective, true)
+    end
 end
 pcall(uiLoad)
+uiSnap = uiValues()
 
 -- ============================ HUD « TERMINATOR » ============================
 local function hudAgo(t, now)
@@ -3585,20 +3663,22 @@ local function drawLocks()
                   end)
     end
 end
+local function hudRead()
+    if os.clock() - hudReadT <= 0.5 then return end
+    hudReadT = os.clock()
+    pcall(function()
+        for row in db:nrows('SELECT json FROM hud WHERE id = 1') do
+            local okJ, dj = pcall(json.decode, row.json)
+            if okJ and type(dj) == 'table' then
+                if dj.t0 and dj.t0 ~= hudSessionT0 then hudSessionT0 = dj.t0; hudKills = 0 end   -- nouvelle session de l agent
+                hudData = dj
+            end
+        end
+    end)
+end
 local function drawHud()
     if not hudShow or not lastExport then return end
-    if os.clock() - hudReadT > 0.5 then
-        hudReadT = os.clock()
-        pcall(function()
-            for row in db:nrows('SELECT json FROM hud WHERE id = 1') do
-                local okJ, dj = pcall(json.decode, row.json)
-                if okJ and type(dj) == 'table' then
-                    if dj.t0 and dj.t0 ~= hudSessionT0 then hudSessionT0 = dj.t0; hudKills = 0 end   -- nouvelle session de l agent
-                    hudData = dj
-                end
-            end
-        end)
-    end
+    hudRead()
     if lastExport.menu or ((lastExport.breach or {}).state == 1) then return end   -- menus plein ecran, Breach Protocol (clics)
     local nA, hpA = 0, tonumber(lastExport.hp) or 100
     for _, en in ipairs(lastExport.enemies or {}) do if not en.dead and not en.police then nA = nA + 1 end end
@@ -3671,6 +3751,17 @@ registerForEvent('onDraw', function()
     if not okH and tostring(errH) ~= hudLastErr then hudLastErr = tostring(errH); journal('HUD : ' .. hudLastErr) end
     if not ui.open then return end
     if ImGui.Begin('CyberpunkAgent') then
+        pcall(hudRead)
+        pcall(uiSyncEffective)
+        local cfgE = hudData and hudData.cfg
+        if cfgE then
+            local live = (not hudData.ended) and tonumber(hudData.ts) and (os.time() - tonumber(hudData.ts) <= 8)
+            ImGui.TextWrapped('Agent ' .. (live and '(en cours)' or '(derniere session)') .. ' : ' .. tostring(cfgE))
+        else
+            ImGui.TextWrapped('Agent : reglages effectifs inconnus (pas encore lance).')
+        end
+        ImGui.TextWrapped('Seuls les reglages MODIFIES ici puis Enregistrer s appliquent (au prochain lancement) ; ils l emportent sur le panneau Windows tant qu on ne les y change pas.')
+        ImGui.Separator()
         ImGui.Text('Modele de decision')
         for i, p in ipairs(uiProviders) do
             if ImGui.RadioButton(p, ui.provider == i) then ui.provider = i end
@@ -3728,7 +3819,9 @@ registerForEvent('onDraw', function()
         ImGui.TextWrapped('Commandes : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>')
         ImGui.Separator()
         if ImGui.Button('Enregistrer') then pcall(uiSave) end
-        ImGui.SameLine(); ImGui.Text(ui.saved)
+        ImGui.SameLine()
+        if ImGui.Button('Oublier les reglages in-game') then pcall(uiForget) end
+        ImGui.Text(ui.saved)
         ImGui.Text('Lance ensuite CyberpunkAgent.exe (F11 pause, F12 arret).')
     end
     ImGui.End()

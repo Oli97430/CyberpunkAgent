@@ -32,7 +32,7 @@ _DIRECTIVE_KEYWORDS = frozenset({
     'attaque', 'attaquer', 'combat', 'objectif', 'quete', 'marchand', 'vendre', 'boutique',
     'charcudoc', 'ripperdoc', 'implant', 'explore', 'explorer', 'balade', 'changer_quete', 'autre_quete',
     'status', 'etat', 'etat?', 'photo', 'screenshot', 'capture', 'niveau', 'soigne', 'stats',
-    'modeles', 'liste_modeles', 'modele_liste', 'hud',
+    'modeles', 'liste_modeles', 'modele_liste', 'hud', 'config', 'reglages',
 })
 _DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ', 'modele ')
 _STOP_WORDS = ('stop', 'arret', 'arrete-toi', 'arrete toi')
@@ -64,6 +64,16 @@ def _hud_directive(st: dict, alt_target: dict | None, dist: float | None) -> str
     if dist is not None:
         label = f'{label} [{dist:.0f} m]'
     return hud.ascii_up(label)[:70]
+
+
+def _hud_cfg() -> dict:
+    """Config EFFECTIVE pour le HUD et le panneau CET : resume lisible + valeurs (le panneau y aligne les champs que
+    l utilisateur n a pas touches -- sinon il montrait ses propres defauts). Jamais la cle API."""
+    return {'cfg': hud.ascii_plain(CFG.summary()), 'model': _hud_model(),
+            'temper': hud.ascii_up(f'{CFG.courage} / {CFG.style} / {CFG.aggro}'),
+            'cfgv': {'provider': CFG.provider, 'model': CFG.model, 'openai_model': CFG.openai_model,
+                     'anthropic_model': CFG.anthropic_model, 'courage': CFG.courage, 'style': CFG.style,
+                     'aggro': CFG.aggro, 'minutes': CFG.minutes, 'features': dict(CFG.features)}}
 
 
 def _hud_model() -> str:
@@ -400,8 +410,18 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     _log(f'=== cerveau v1 demarre ({duration_s:.0f} s max) | code : {stamp} ===')
     remote.ensure_started(log=_log)
     remote.bind(hard_stop, pause)          # stop / pause / reprendre Telegram appliques des reception
-    hud.update(t0=time.time(), mode='INITIALISATION', paused=False, ended=False, model=_hud_model(),
-               temper=hud.ascii_up(f'{CFG.courage} / {CFG.style} / {CFG.aggro}'), stats={})
+    # 23/09 : config EFFECTIVE et source de chaque reglage (le panneau CET ecrasait le panneau Windows en silence)
+    _log(f'config : {CFG.summary()}')
+    for w in CFG.warnings:
+        _log(f'  [config] ATTENTION : {w}')
+    if CFG.provider == 'ollama':
+        sz = next((m['size_gb'] for m in llm.list_models(timeout=2.0) if m['name'] == CFG.model), None)
+        if sz is not None and sz >= 6.0:
+            w = (f'modele {CFG.model} ~{sz:.1f} Go de VRAM : le jeu en occupe deja ~14 Go sur 24, risque de plantage '
+                 f'(un modele de 9,5 Go residant faisait planter le jeu). Modele leger conseille : llama3.2:latest (~2 Go).')
+            _log(f'  [config] ATTENTION : {w}')
+            remote.notify('Attention : ' + w)
+    hud.update(t0=time.time(), mode='INITIALISATION', paused=False, ended=False, stats={}, **_hud_cfg())
     hud.start()
     # auto-test : V bouge-t-il ? (touche avant 0,6 s) -> detecte tout de suite un blocage d entree
     s0 = motion.read_state()
@@ -546,7 +566,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     elif low.startswith('courage '):
                         v_c = low.split(' ', 1)[1].strip()
                         if v_c in ('prudent', 'equilibre', 'temeraire'):
-                            CFG.courage = v_c
+                            CFG.courage = v_c; CFG.live.add('courage')
                             CFG.courage_t = {'prudent': (5, 4, 5, 80, 25), 'equilibre': (6, 5, 6, 60, 25), 'temeraire': (8, 7, 8, 40, 35)}[v_c]
                             _log(f'DIRECTIVE : courage regle sur {v_c}')
                             remote.notify(f'V est desormais {v_c}.')
@@ -555,7 +575,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     elif low.startswith('style '):
                         v_s = low.split(' ', 1)[1].strip()
                         if v_s in ('melee', 'mixte', 'distance'):
-                            CFG.style = v_s
+                            CFG.style = v_s; CFG.live.add('style')
                             _log(f'DIRECTIVE : style regle sur {v_s}')
                             remote.notify(f'V se bat desormais en style {v_s}.')
                         else:
@@ -563,7 +583,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     elif low.startswith('aggro '):
                         v_a = low.split(' ', 1)[1].strip()
                         if v_a in ('defensif', 'normal', 'chasseur'):
-                            CFG.aggro = v_a
+                            CFG.aggro = v_a; CFG.live.add('aggro')
                             _log(f'DIRECTIVE : agressivite reglee sur {v_a}')
                             remote.notify(f'V est desormais {v_a}.')
                         else:
@@ -573,6 +593,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         shown = bool((rh or {}).get('hud'))
                         _log(f"DIRECTIVE : HUD {'affiche' if shown else 'masque'}")
                         remote.notify(f"HUD {'affiche' if shown else 'masque'}." if rh else 'HUD : mod muet (jeu lance ?).')
+                    elif low in ('config', 'reglages'):
+                        _log('DIRECTIVE : config demandee')
+                        remote.notify('Config utilisee : ' + CFG.summary()
+                                      + ''.join(f'\nAttention : {w}' for w in CFG.warnings))
                     elif low in ('modeles', 'liste_modeles', 'modele_liste'):
                         _log('DIRECTIVE : liste des modeles Ollama demandee')
                         if CFG.provider != 'ollama':
@@ -592,11 +616,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 remote.notify(f"Modele « {v_m} » non installe localement (`ollama pull {v_m}` d abord). Modeles disponibles :\n" + '\n'.join(f"- {m['name']} (~{m['size_gb']:.1f} Go)" for m in models))
                             else:
                                 CFG.model = v_m
+                                CFG.live.add('model')
                                 _log(f'DIRECTIVE : modele Ollama regle sur {v_m}')
                                 remote.notify(f'V utilise desormais le modele {v_m}.')
                     else:
                         _log(f'DIRECTIVE non reconnue : « {dtv} »')
-                        remote.notify('Directive non reconnue. Essaie : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>, status, photo, niveau, soigne, stats, courage/style/aggro <valeur>, modeles, modele <nom>.')
+                        remote.notify('Directive non reconnue. Essaie : stop, pause, reprendre, attaque, objectif, marchand, charcudoc, explore, changer_quete, va_a <lieu>, status, photo, niveau, soigne, stats, courage/style/aggro <valeur>, modeles, modele <nom>, config.')
+                    hud.update(**_hud_cfg())            # reglages eventuellement changes en direct (modele, courage...)
                     plan.last_t = -99.0; time.sleep(0.3); continue
 
                 # 0a2. BREACH PROTOCOL ouvert (terminal de piratage / point d acces) : le jeu est en pause, le mod relaie

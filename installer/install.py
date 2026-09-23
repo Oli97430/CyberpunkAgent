@@ -196,8 +196,25 @@ def step_config(game: Path, prog: Path, ollama: str | None, prov_cfg: dict | Non
     say('\n[6/6] Configuration et raccourci')
     data = Path(os.environ.get('APPDATA', str(Path.home()))) / APP
     data.mkdir(parents=True, exist_ok=True)
-    cfg = {'game_dir': str(game), 'ollama_exe': ollama, 'model': MODEL, 'ollama_url': 'http://127.0.0.1:11434'}
-    cfg.update(prov_cfg or {})
+    # 23/09 : on FUSIONNE avec la config existante (une reinstallation effacait modele, temperament, comportements)
+    try:
+        cfg = json.loads((data / 'config.json').read_text(encoding='utf-8'))
+        if not isinstance(cfg, dict):
+            cfg = {}
+    except Exception:
+        cfg = {}
+    cfg['game_dir'] = str(game)
+    if ollama:
+        cfg['ollama_exe'] = ollama
+    elif cfg.get('ollama_exe') and not Path(str(cfg['ollama_exe'])).exists():
+        cfg.pop('ollama_exe', None)                 # chemin perime : l autodetection de l agent reprend la main
+    cfg.setdefault('ollama_url', 'http://127.0.0.1:11434')
+    stamps = cfg.get('_changed_at') if isinstance(cfg.get('_changed_at'), dict) else {}
+    if not cfg.get('model'):
+        cfg['model'] = MODEL
+    for k, v in (prov_cfg or {}).items():         # choix explicites de l installation : horodates (gagnent sur le jeu)
+        cfg[k] = v; stamps[k] = time.time()
+    cfg['_changed_at'] = stamps
     (data / 'config.json').write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding='utf-8')
     say(f'      config : {data / "config.json"}')
     # raccourci Bureau via PowerShell (pas de dependance COM cote Python)

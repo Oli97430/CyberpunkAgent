@@ -17,12 +17,13 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agent.config import CFG, DATA_DIR  # noqa: E402
+from agent.config import CFG, DATA_DIR, INGAME_KEYS, Config  # noqa: E402
 from agent import llm, remote  # noqa: E402
 
 CONFIG_PATH = DATA_DIR / 'config.json'
@@ -63,6 +64,13 @@ def load() -> dict:
         return {}
 
 
+def _tracked(d: dict) -> dict:
+    """Reglages que le panneau CET peut aussi fixer, a plat ('features.<nom>') : ceux qu on horodate."""
+    out = {k: d.get(k) for k in INGAME_KEYS if k != 'features'}
+    out.update({'features.' + k: bool(v) for k, v in (d.get('features') or {}).items()})
+    return out
+
+
 def save(d: dict) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding='utf-8')
@@ -96,6 +104,19 @@ class App(tk.Tk):
         except tk.TclError:
             pass
         self.cfg = load()
+        # 23/09 : on affiche les valeurs EFFECTIVES -- un reglage modifie plus recemment dans le panneau in-game
+        # (CET) l emporte ; sinon on montrerait une valeur que l agent n utilise pas
+        self.overrides = ''
+        try:
+            eff = Config()
+            for k in eff.ingame_applied:
+                if k.startswith('features.'):
+                    self.cfg.setdefault('features', {})[k[9:]] = eff.features.get(k[9:], True)
+                else:
+                    self.cfg[k] = getattr(eff, k, None)
+            self.overrides = self._overrides_text(eff)
+        except Exception:
+            pass
         self.tg = load_telegram()
 
         outer = ttk.Frame(self, padding=(14, 12, 14, 8))
@@ -130,6 +151,26 @@ class App(tk.Tk):
 
         self._refresh()
         self._refresh_models()
+        self._initial = _tracked(self.collect())      # valeurs affichees : seules celles que tu changes sont horodatees
+        if self.overrides:
+            self.status.set(self.overrides)
+
+    @staticmethod
+    def _overrides_text(eff) -> str:
+        parts = []
+        for k, t in sorted(eff.ingame_applied.items()):
+            if k == 'api_key':
+                what = 'cle API'
+            elif k.startswith('features.'):
+                what = f"{k[9:]} = {'oui' if eff.features.get(k[9:]) else 'non'}"
+            else:
+                what = f'{k} = {getattr(eff, k, "?")}'
+            when = time.strftime('%d/%m %H:%M', time.localtime(t)) if t > 0 else 'ancien panneau'
+            parts.append(f'{what} ({when})')
+        if not parts:
+            return ''
+        return ('Repris du panneau in-game (CET), plus recent : ' + ', '.join(parts[:6]) + (' ...' if len(parts) > 6 else '')
+                + '. Change-les ici puis Enregistrer pour reprendre la main.')
 
     # ------------------------------------------------------------------ onglets
 
@@ -247,9 +288,11 @@ class App(tk.Tk):
                 if models:
                     self.model_combo['values'] = [m['name'] for m in models]
                     sizes = ', '.join(f"{m['name']} (~{m['size_gb']:.1f} Go VRAM)" for m in models)
-                    self.status.set(f'{len(models)} modele(s) Ollama installe(s) -- taille ~= VRAM necessaire : {sizes}')
+                    self.status.set(f'{len(models)} modele(s) Ollama installe(s) -- taille ~= VRAM necessaire : {sizes}'
+                                    + (f'\n{self.overrides}' if self.overrides else ''))
                 else:
-                    self.status.set('Ollama injoignable : impossible de lister les modeles installes (le champ reste modifiable a la main).')
+                    self.status.set('Ollama injoignable : impossible de lister les modeles installes (le champ reste modifiable a la main).'
+                                    + (f'\n{self.overrides}' if self.overrides else ''))
             self.after(0, apply)
         threading.Thread(target=work, daemon=True).start()
 
@@ -274,10 +317,56 @@ class App(tk.Tk):
     def collect_telegram(self) -> dict:
         return {'token': self.tg_token.get().strip(), 'chat_id': self.tg_chat_id.get().strip()}
 
+    def _vars(self) -> dict:
+        v = {'provider': self.provider, 'model': self.model, 'openai_model': self.openai_model,
+             'anthropic_model': self.anthropic_model, 'minutes': self.minutes, 'api_key': self.api_key,
+             'focus_tracked': self.features.get('focus_tracked')}
+        v.update(self.temper)
+        v.update({'features.' + k: var for k, var in self.features.items() if k != 'focus_tracked'})
+        return v
+
+    def _resync_effective(self) -> None:
+        """Valeurs effectives relues a chaque Enregistrer / Lancer V : un reglage change en jeu PENDANT que la fenetre
+        etait ouverte s affiche ici (seulement dans les champs que tu n as pas touches depuis)."""
+        try:
+            eff = Config()
+        except Exception:
+            return
+        cur = _tracked(self.collect())
+        vars_ = self._vars()
+        synced = []
+        for k in eff.ingame_applied:
+            var = vars_.get(k)
+            if var is None or cur.get(k) != self._initial.get(k):
+                continue
+            val = eff.features.get(k[9:]) if k.startswith('features.') else getattr(eff, k, None)
+            if val in (None, ''):
+                continue
+            var.set(str(val) if k == 'minutes' else val)
+            synced.append(k)
+        if synced:
+            new = _tracked(self.collect())
+            for k in synced:
+                self._initial[k] = new.get(k)    # repris du jeu : pas un changement fait ici, pas d horodatage
+        self.overrides = self._overrides_text(eff)
+
     def on_save(self) -> None:
-        save(self.collect())
+        self._resync_effective()
+        d = self.collect()
+        # horodatage des SEULS reglages changes ici (Lancer V reenregistre tout : sans ca, le panneau Windows
+        # gagnerait toujours sur un reglage fait en jeu depuis)
+        cur = _tracked(d)
+        stamps = dict(d.get('_changed_at')) if isinstance(d.get('_changed_at'), dict) else {}
+        now = time.time()
+        for k, v in cur.items():
+            if v != self._initial.get(k):
+                stamps[k] = now
+        d['_changed_at'] = stamps
+        save(d)
+        self._initial = cur
         save_telegram(self.collect_telegram())
-        self.status.set(f'Enregistre dans {CONFIG_PATH} et {remote.TELEGRAM_FILE.name}')
+        self.status.set(f'Enregistre dans {CONFIG_PATH} et {remote.TELEGRAM_FILE.name}'
+                        + (f'\n{self.overrides}' if self.overrides else ''))
 
     def on_check(self) -> None:
         self.on_save()

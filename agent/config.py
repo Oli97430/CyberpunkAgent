@@ -111,6 +111,52 @@ INGAME_KEYS = {'provider', 'api_key', 'model', 'openai_model', 'anthropic_model'
                'features', 'courage', 'style', 'aggro', 'focus_tracked', 'language'}
 
 
+def _ts(v) -> float:
+    """Horodatage d un reglage (secondes epoch : time.time() / os.time() du mod) ; 0 si absent ou illisible."""
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def merge_ingame(user: dict, ing: dict) -> dict:
+    """23/09 (revue : le panneau CET ecrasait en silence le panneau Windows, modele compris) : chaque reglage
+    prend la valeur MODIFIEE EN DERNIER. Les deux panneaux horodatent chaque cle que l utilisateur change
+    (_changed_at) -- pas la date du fichier : CyberpunkAgent-Config reenregistre tout a chaque « Lancer V ».
+    Une valeur in-game SANS horodatage (ancien panneau, qui reecrivait tout, defauts compris) ne fait que
+    combler une cle absente cote Windows. Modifie `user` en place ; renvoie {cle: horodatage in-game} des
+    valeurs in-game retenues ('features.<nom>' pour un comportement). Liste blanche INGAME_KEYS : ce fichier
+    est dans le dossier du JEU et ne doit jamais fixer un executable, une URL ou un chemin."""
+    win_ts = user.get('_changed_at') if isinstance(user.get('_changed_at'), dict) else {}
+    ts = ing.get('_changed_at') if isinstance(ing.get('_changed_at'), dict) else {}
+    applied: dict = {}
+    for k in ['provider'] + sorted(INGAME_KEYS - {'features', 'provider'}):     # fournisseur d abord (voir plus bas)
+        v = ing.get(k)
+        if v in ('', None):
+            continue
+        t = _ts(ts.get(k))
+        if t <= 0:
+            # ancien panneau : il ecrivait TOUT ; on ne comble jamais une cle API ni le modele d un fournisseur
+            # inutilise (sinon le panneau Windows recopierait la cle en clair du dossier du jeu dans config.json)
+            prov = str(user.get('provider') or 'ollama').lower()
+            if (k == 'api_key' and prov == 'ollama') or (k == 'openai_model' and prov != 'openai') \
+                    or (k == 'anthropic_model' and prov != 'anthropic'):
+                continue
+        # non horodatee : ne comble qu une cle que le panneau Windows n a jamais fixee (ni videe expres)
+        if (t > 0 and t > _ts(win_ts.get(k))) or (t <= 0 and user.get(k) in ('', None) and _ts(win_ts.get(k)) <= 0):
+            user[k] = v; applied[k] = t
+    ifeats = ing.get('features') if isinstance(ing.get('features'), dict) else {}
+    if ifeats:
+        feats = dict(user.get('features') or {})
+        for fk, fv in ifeats.items():
+            t = _ts(ts.get('features.' + fk))
+            if isinstance(fv, bool) and ((t > 0 and t > _ts(win_ts.get('features.' + fk)))
+                                         or (t <= 0 and fk not in feats and _ts(win_ts.get('features.' + fk)) <= 0)):
+                feats[fk] = fv; applied['features.' + fk] = t
+        user['features'] = feats
+    return applied
+
+
 class Config:
     def __init__(self) -> None:
         base = _base_dir()
@@ -121,12 +167,18 @@ class Config:
         gd = user.get('game_dir')
         self.game_dir: Path | None = Path(gd) if gd else detect_game_dir()
         self.mod_dir: Path | None = (self.game_dir / MOD_REL) if self.game_dir else None
-        # reglages saisis DANS LE JEU (fenetre CET du mod) : ecrits par le mod dans son dossier, prioritaires
-        if self.mod_dir and (self.mod_dir / 'agent_config.json').exists():
-            # liste blanche : ce fichier est dans le dossier du JEU (inscriptible par n importe quel mod) ; il ne doit
-            # jamais pouvoir fixer un executable (ollama_exe), une URL (base_url) ou un chemin de fichier
-            user.update({k: v for k, v in _load_json(self.mod_dir / 'agent_config.json').items()
-                         if k in INGAME_KEYS and v not in ('', None)})
+        # reglages saisis DANS LE JEU (fenetre CET du mod) : la valeur modifiee en dernier l emporte (merge_ingame)
+        self._file_keys = {k for k, v in user.items() if v not in ('', None)} | {'features.' + f for f in (user.get('features') or {})}
+        self.ingame_applied: dict = {}       # cle -> horodatage in-game (0 = ancien panneau) des valeurs in-game retenues
+        self.warnings: list = []
+        self.live: set = set()               # reglages changes en direct par directive (modele, courage...)
+        ing_file = (self.mod_dir / 'agent_config.json') if self.mod_dir else None
+        if ing_file and ing_file.exists():
+            ing = _load_json(ing_file)
+            self.ingame_applied = merge_ingame(user, ing)
+            if ing.get('api_key') and str(user.get('provider') or 'ollama').lower() == 'ollama':
+                self.warnings.append('cle API en clair dans le dossier du jeu (agent_config.json), inutile avec Ollama : '
+                                     'bouton « Oublier les reglages in-game » du panneau CET pour l effacer')
         self.cet_log: Path | None = (self.game_dir / CET_LOG_REL) if self.game_dir else None
         self.user_settings = Path(user.get('user_settings') or detect_user_settings())
         self.ollama_exe = user.get('ollama_exe') or detect_ollama()
@@ -156,6 +208,26 @@ class Config:
         self.courage_t = {'prudent': (5, 4, 5, 80, 25), 'equilibre': (6, 5, 6, 60, 25), 'temeraire': (8, 7, 8, 40, 35)}.get(self.courage, (8, 7, 8, 40, 35))
         self.log_file = DATA_DIR / 'brain_log.txt'
         self.deaths_file = DATA_DIR / 'deaths.json'
+
+    def source(self, key: str) -> str:
+        """D ou vient la valeur effective d un reglage ('features.<nom>' pour un comportement)."""
+        if key in self.live:
+            return 'directive en direct'
+        if key in self.ingame_applied:
+            return 'panneau in-game'
+        return 'panneau Windows' if key in self._file_keys else 'defaut'
+
+    def summary(self) -> str:
+        """Config effective en une ligne, sans cle API (journal de debut de session, directive « config »)."""
+        mk = 'model' if self.provider == 'ollama' else f'{self.provider}_model'
+        mdl = self.model if self.provider == 'ollama' else (getattr(self, mk, None) or 'defaut du fournisseur')
+        tsrc = ' / '.join(sorted({self.source(k) for k in ('courage', 'style', 'aggro')}))
+        off = [k for k, v in self.features.items() if not v]
+        fsrc = [k for k in self.features if self.source('features.' + k) == 'panneau in-game']
+        return (f"fournisseur {self.provider} ({self.source('provider')}), modele {mdl} ({self.source(mk)}), "
+                f"temperament {self.courage} / {self.style} / {self.aggro} ({tsrc}), "
+                f"comportements coupes : {', '.join(off) or 'aucun'}"
+                + (f" (regles en jeu : {', '.join(fsrc)})" if fsrc else ''))
 
     def state_file(self) -> Path:
         return (self.mod_dir or Path('.')) / 'state.bin'
