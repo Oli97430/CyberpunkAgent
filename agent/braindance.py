@@ -156,6 +156,10 @@ def run(stop=None, log=print) -> dict:
     tried_windows: set[tuple] = set()
     sweep_done: set[int] = set()
     exit_tries = 0
+    fail_counts: dict[str, int] = {}   # id d indice -> echecs de scan consecutifs ; 3 -> abandonne (23/09 : un
+                                        # gameAudioClueObject reste bloque a 0 % pour toujours -- rien ne l ecartait,
+                                        # V a passe 2x 10-12 min a le reviser sans jamais avancer)
+    given_up: set[str] = set()
     while time.perf_counter() - t0 < MAX_S:
         if stop is not None and stop.is_set():
             return {'ok': False, 'reason': 'arret', 'scans': scans, 'seconds': time.perf_counter() - t0}
@@ -174,12 +178,19 @@ def run(stop=None, log=print) -> dict:
                     kbm.act('bd_exit', 0.1); time.sleep(2.0)
                 continue
             last_progress = time.perf_counter()
-        pend = _pending_focus(bd)
+        pend = [f for f in _pending_focus(bd) if f.get('id') not in given_up]
         active = [f for f in pend if not f.get('blocked')]
         if active:
             f = active[0]
             if scan_focus(f, log, stop):
                 scans += 1; last_progress = time.perf_counter()
+                fail_counts.pop(f.get('id'), None)
+            else:
+                fid = f.get('id')
+                fail_counts[fid] = fail_counts.get(fid, 0) + 1
+                if fail_counts[fid] >= 3:
+                    given_up.add(fid)
+                    log(f"  [bd] « {f.get('name') or f.get('cls') or fid} » impossible a scanner apres 3 essais : abandonne")
             continue
         # indices de la timeline non termines : on saute dans leur fenetre, sur leur couche
         todo = [c for c in (bd.get('clues') or []) if not c.get('done') and c.get('t0') is not None
@@ -216,11 +227,18 @@ def run(stop=None, log=print) -> dict:
                     break
                 time.sleep(0.6)
                 st, bd = _state()
-                act = [f for f in _pending_focus(bd) if not f.get('blocked')]
+                act = [f for f in _pending_focus(bd) if not f.get('blocked') and f.get('id') not in given_up]
                 if act:
                     log(f"  [bd] indice actif a {tt:.0f} s : « {act[0].get('name') or act[0].get('cls')} »")
                     if scan_focus(act[0], log, stop):
                         scans += 1; last_progress = time.perf_counter()
+                        fail_counts.pop(act[0].get('id'), None)
+                    else:
+                        fid = act[0].get('id')
+                        fail_counts[fid] = fail_counts.get(fid, 0) + 1
+                        if fail_counts[fid] >= 3:
+                            given_up.add(fid)
+                            log(f"  [bd] « {act[0].get('name') or act[0].get('cls') or fid} » impossible a scanner apres 3 essais : abandonne")
                     swept = True
                     break
             if swept:
