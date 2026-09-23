@@ -2,6 +2,7 @@
 
 ## 0.1.2 — 2026-09-17 — combat fiable, secours, terminaux, vol de voiture, Breach Protocol validé
 
+- Danse sensorielle, confirme en jeu (23/09, journal 08:08-08:20) : un indice audio restait bloque a 0 % d analyse pendant 12+ minutes, deux fois de suite (~20 min perdues), rien n empechait de le re-selectionner indefiniment. Abandonne desormais apres 3 echecs consecutifs sur le meme indice (choix, balayage ET condition de sortie), V passe aux autres indices ou tente la sortie.
 - Lancer V : « ne fonctionne pas » quand une session tournait deja (mise en pause F11) -- le verrou mono-instance refusait le second lancement en silence. Le panneau detecte maintenant une session en cours AVANT de lancer et l indique clairement (F11 pour reprendre, F12 pour arreter).
 - CyberpunkAgent-Config : interface refaite, par onglets (Modele, Comportements, Temperament, Telegram) avec un theme Windows natif, au lieu d un long formulaire qui defilait. Aucun changement de logique/comportement.
 - Combat, confirme en jeu (20/09, journal 14:57-14:58) : V restait colle 37+ s a un hostile intouchable (vitre, autre niveau) -- la mise en sourdine fonctionnait, mais le planificateur n en avait pas connaissance et redecidait « attaquer » toutes les 3 s, ecrasant la retombee sur 'objectif' avant qu elle ne soit jamais mise en cache. Le planificateur (decide/fallback/_decide_llm) exclut maintenant les hostiles en sourdine de la decision d engager.
