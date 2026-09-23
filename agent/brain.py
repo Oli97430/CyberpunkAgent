@@ -378,6 +378,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             dtv, low = cl, cl.lower().strip()
                     stats['directives'] = stats.get('directives', 0) + 1
                     hud.update(order='"' + hud.ascii_up(dtv)[:40] + '"', order_t=time.time())
+                    hud.event(f'ordre recu : {dtv}')
                     if low in ('stop', 'arret', 'arrete-toi', 'arrete toi'):
                         _log('DIRECTIVE : arret demande'); remote.notify('V s arrete.')
                         if stop is not None: stop.set()
@@ -771,6 +772,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 if q.get('text') and q['text'] != last_quest_text:
                     last_quest_text = q['text']
                     _log(f"objectif : {q['text']}  (marqueur : {'oui' if q.get('hasMappin') else 'non'})")
+                    hud.event(f"nouvel objectif : {q['text']}")
 
                 # 2. dialogue (avec detection de boucle : meme hub re-propose N fois = bloque)
                 d = st.get('dialog')
@@ -845,6 +847,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     if _near_h > 12.0 and (st.get('hp') or 100) >= 50:
                         buffs.apply(st, log=_log, in_combat=True)  # se buffer AVANT de frapper, seulement si on a 3 s devant soi
                     _log(f"combat detecte : {len(st.get('enemies') or [])} hostile(s), vie {st.get('hp', 0):.0f} %")
+                    hud.event(f"engagement : {len([e for e in (st.get('enemies') or []) if not e.get('dead')])} hostile(s)")
                     r = combat.fight(stop=stop, log=_log)
                     stats['combats'] = stats.get('combats', 0) + 1
                     remote.notify(f"Combat termine : {r.get('coups', 0)} coup(s), {r.get('tirs', 0)} tir(s), {r.get('quickhacks', 0)} hack(s), {r.get('seconds', 0):.0f} s" + (' -- V est mort' if r.get('mort') else ''))

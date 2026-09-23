@@ -45,6 +45,9 @@ local hudReadT, hudHexT, hudLastErr = -99.0, -99.0, nil
 local hudHex = {}
 local hudTrack, hudKilled = {}, {}            -- hostiles vus debout (cle -> EntityID, instant) / deja comptes
 local hudKills, hudKillsTotal, hudSessionT0, hudCheckT = 0, 0, nil, -99.0
+local hudLocks = true                         -- cadres de verrouillage sur les hostiles
+local hudLockTargets = {}                     -- { sx, sy, d, police } calcules dans onUpdate, dessines dans onDraw
+local hudEvents = {}                          -- evenements cote mod (pertes) : { instant, texte }
 local lastFtPoints = {}                  -- positions des bornes de voyage rapide (garde du teleport)
 local lastVendorKey, lastVendorQty = nil, {}   -- marchand de vendor_stock (hash) et quantites en stock
 local breachCtrl = nil
@@ -94,6 +97,8 @@ local function hudCountKill(key)
     hudKilled[key] = true
     hudKills = hudKills + 1
     hudKillsTotal = hudKillsTotal + 1
+    hudEvents[#hudEvents + 1] = { os.time(), string.format('CIBLE NEUTRALISEE  (TOTAL %d)', hudKillsTotal) }
+    while #hudEvents > 8 do table.remove(hudEvents, 1) end
     pcall(function() db:exec(string.format("INSERT OR REPLACE INTO hud_stats (k, v) VALUES ('kills', %d)", hudKillsTotal)) end)
 end
 local function hudNote(key, ent, dead)
@@ -105,6 +110,29 @@ local function hudNote(key, ent, dead)
         pcall(function() id = ent:GetEntityID() end)
         hudTrack[key] = { id = id, t = os.clock() }
     end
+end
+local function hudUpdateLocks(player)
+    -- fil du jeu (onUpdate), a chaque image : onDraw ne fera que dessiner ces donnees
+    local list = {}
+    local en = lastExport and lastExport.enemies
+    if hudShow and hudLocks and en and #en > 0 then
+        local pos, fwd = player:GetWorldPosition(), player:GetWorldForward()
+        local cam = Game.GetCameraSystem()
+        for _, t in ipairs(en) do
+            if not t.dead and t.x then
+                local dx, dy = t.x - pos.x, t.y - pos.y
+                local dist = math.sqrt(dx * dx + dy * dy)
+                if dist > 0.5 and (dx * fwd.x + dy * fwd.y) / dist > 0.3 then       -- devant V (derriere, la projection est fausse)
+                    local okP, sc = pcall(function() return cam:ProjectPoint(Vector4.new(t.x, t.y, (t.z or pos.z) + 0.95, 1.0)) end)
+                    if okP and sc and math.abs(sc.x) <= 1.05 and math.abs(sc.y) <= 1.05 then
+                        list[#list + 1] = { sx = sc.x, sy = sc.y, d = t.d or dist, police = t.police }
+                    end
+                end
+            end
+        end
+        table.sort(list, function(a, b) return a.d < b.d end)
+    end
+    hudLockTargets = list
 end
 local function hudCheckTracked()
     -- les requetes de ciblage excluent souvent les morts : un hostile disparu est re-verifie par son entite
@@ -925,6 +953,7 @@ registerForEvent('onUpdate', function(dt)
     attachedFor = attachedFor + dt
     lastUpdateClock = os.clock()
     if attachedFor < WARMUP then return end
+    pcall(hudUpdateLocks, player)
 
     -- une sonde par image, apres l'echauffement
     if not probesDone then runNextProbe() end
@@ -3262,10 +3291,11 @@ local function uiLoad()
     for i, v in ipairs(uiStyle) do if d.style == v then ui.style = i end end
     for i, v in ipairs(uiAggro) do if d.aggro == v then ui.aggro = i end end
     if d.hud ~= nil then hudShow = d.hud and true or false end
+    if d.hud_locks ~= nil then hudLocks = d.hud_locks and true or false end
 end
 local function uiSave()
     local d = { provider = uiProviders[ui.provider], api_key = ui.key, model = ui.model, openai_model = ui.openai_model,
-                anthropic_model = ui.anthropic_model, minutes = ui.minutes, hud = hudShow,
+                anthropic_model = ui.anthropic_model, minutes = ui.minutes, hud = hudShow, hud_locks = hudLocks,
                 courage = uiCourage[ui.courage], style = uiStyle[ui.style], aggro = uiAggro[ui.aggro],
                 features = { radio = ui.radio, driving = ui.driving, rescue = ui.rescue, sell = ui.sell, ripperdoc = ui.ripperdoc, buffs = ui.buffs,
                              stealth = ui.stealth, fasttravel = ui.fasttravel, phone = ui.phone, sms = ui.sms, appearance = ui.appearance, recipes = ui.recipes,
@@ -3349,14 +3379,91 @@ local function hudBody()
         tonumber(st.combats) or 0, tonumber(st.morts) or 0, tonumber(st.loot) or 0, tonumber(st.eddies) or 0))
     if d.t0 and not stale then ImGui.Text('SESSION ......... ' .. hudHms(now - (tonumber(d.t0) or now))) end
     if d.temper then ImGui.Text('PROTOCOLE ....... ' .. tostring(d.temper)) end
+    local evs = {}
+    for _, ev in ipairs(d.events or {}) do
+        if type(ev) == 'table' and ev[1] and ev[2] then evs[#evs + 1] = { tonumber(ev[1]) or 0, tostring(ev[2]) } end
+    end
+    for _, ev in ipairs(hudEvents) do evs[#evs + 1] = ev end
+    if #evs > 0 then
+        table.sort(evs, function(a, b) return a[1] > b[1] end)
+        ImGui.Separator()
+        ImGui.Text('JOURNAL')
+        for i = 1, math.min(5, #evs) do
+            ImGui.Text(os.date('%H:%M:%S', math.floor(evs[i][1])) .. '  ' .. evs[i][2])
+        end
+    end
     if os.clock() - hudHexT > 0.12 then
         hudHexT = os.clock()
-        for i = 1, 3 do
+        for i = 1, 2 do
             hudHex[i] = string.format('%04X %04X %04X %04X %04X %04X %04X', math.random(0, 65535), math.random(0, 65535),
                 math.random(0, 65535), math.random(0, 65535), math.random(0, 65535), math.random(0, 65535), math.random(0, 65535))
         end
     end
-    for i = 1, 3 do ImGui.TextColored(0.65, 0.07, 0.05, 0.8, hudHex[i] or '') end
+    for i = 1, 2 do ImGui.TextColored(0.65, 0.07, 0.05, 0.8, hudHex[i] or '') end
+end
+local function hudFlagsOf(names)
+    local v = 0
+    for _, n in ipairs(names) do
+        local f = ImGuiWindowFlags[n]
+        if f then v = (bit and bit.bor) and bit.bor(v, f) or (v + f) end
+    end
+    return v
+end
+local function hudStyled(colors, vars, fn)
+    -- pousse/retire les styles de facon equilibree meme si un appel echoue (sinon ils fuiraient sur les autres fenetres)
+    local nc, nv = 0, 0
+    pcall(function()
+        for _, c in ipairs(colors) do if c[1] ~= nil then ImGui.PushStyleColor(c[1], c[2], c[3], c[4], c[5]); nc = nc + 1 end end
+        for _, v in ipairs(vars) do
+            if v[1] ~= nil then
+                if v[3] then ImGui.PushStyleVar(v[1], v[2], v[3]) else ImGui.PushStyleVar(v[1], v[2]) end
+                nv = nv + 1
+            end
+        end
+    end)
+    local ok, err = pcall(fn)
+    if nv > 0 then ImGui.PopStyleVar(nv) end
+    if nc > 0 then ImGui.PopStyleColor(nc) end
+    if not ok and tostring(err) ~= hudLastErr then hudLastErr = tostring(err); journal('HUD cadres : ' .. hudLastErr) end
+end
+local function drawLocks()
+    local targets = hudLockTargets
+    if not (hudLocks and targets and #targets > 0) then return end
+    local okR, W, H = pcall(GetDisplayResolution)
+    if not okR or not W or not H or W <= 0 or H <= 0 then return end
+    local boxFlags = hudFlagsOf({ 'NoTitleBar', 'NoResize', 'NoMove', 'NoScrollbar', 'NoCollapse', 'NoSavedSettings', 'NoFocusOnAppearing', 'NoInputs' })
+    local tagFlags = hudFlagsOf({ 'NoTitleBar', 'NoResize', 'NoMove', 'NoScrollbar', 'NoCollapse', 'NoSavedSettings', 'NoFocusOnAppearing', 'NoInputs', 'AlwaysAutoResize' })
+    local locked = false
+    for i, t in ipairs(targets) do
+        if i > 6 then break end
+        local h = math.max(40, math.min(0.6 * H, 1.4 * H / math.max(t.d, 1.5)))
+        local w = h * 0.5
+        local px, py = (t.sx + 1) * 0.5 * W, (1 - t.sy) * 0.5 * H
+        local r, g, b, label, thick = 1.0, 0.12, 0.08, 'HOSTILE', 1.5
+        if t.police then r, g, b, label = 1.0, 0.7, 0.1, 'POLICE : NON-CIBLE'
+        elseif not locked then label, thick, locked = 'CIBLE VERROUILLEE', 2.5, true end
+        hudStyled({ { ImGuiCol.WindowBg, 0, 0, 0, 0.0 }, { ImGuiCol.Border, r, g, b, 0.95 } },
+                  { { ImGuiStyleVar.WindowBorderSize, thick }, { ImGuiStyleVar.WindowRounding, 0.0 }, { ImGuiStyleVar.WindowMinSize, 1.0, 1.0 } },
+                  function()
+                      ImGui.SetNextWindowPos(px - w / 2, py - h / 2, ImGuiCond.Always)
+                      ImGui.SetNextWindowSize(w, h, ImGuiCond.Always)
+                      ImGui.Begin('##agentlockbox' .. i, boxFlags)
+                      ImGui.End()
+                  end)
+        hudStyled({ { ImGuiCol.WindowBg, 0, 0, 0, 0.35 }, { ImGuiCol.Text, r, g, b, 1.0 } },
+                  { { ImGuiStyleVar.WindowBorderSize, 0.0 }, { ImGuiStyleVar.WindowPadding, 3.0, 1.0 } },
+                  function()
+                      ImGui.SetNextWindowPos(px - w / 2, py - h / 2 - 34, ImGuiCond.Always)
+                      if ImGui.Begin('##agentlocktag' .. i, tagFlags) then
+                          pcall(function()
+                              ImGui.SetWindowFontScale(0.85)
+                              ImGui.Text(label)
+                              ImGui.Text(string.format('%d M', math.floor(t.d + 0.5)))
+                          end)
+                      end
+                      ImGui.End()
+                  end)
+    end
 end
 local function drawHud()
     if not hudShow or not lastExport then return end
@@ -3395,6 +3502,8 @@ local function drawHud()
     if not okW and tostring(errW) ~= hudLastErr then hudLastErr = tostring(errW); journal('HUD fenetre : ' .. hudLastErr) end
     if nv > 0 then ImGui.PopStyleVar(nv) end
     if nc > 0 then ImGui.PopStyleColor(nc) end
+    local okL, errL = pcall(drawLocks)           -- apres les styles du HUD : les cadres ont les leurs
+    if not okL and tostring(errL) ~= hudLastErr then hudLastErr = tostring(errL); journal('HUD cadres : ' .. hudLastErr) end
 end
 registerHotkey('agent_hud_toggle', 'Afficher / masquer le HUD de V', function() hudShow = not hudShow end)
 registerForEvent('onOverlayOpen', function() ui.open = true end)
@@ -3456,6 +3565,7 @@ registerForEvent('onDraw', function()
         ui.appearance = ImGui.Checkbox('Changer d apparence au miroir de temps en temps', ui.appearance)
         ui.recipes = ImGui.Checkbox('Acheter et apprendre des plans de craft', ui.recipes)
         hudShow = ImGui.Checkbox('HUD Terminator (statut de V a l ecran)', hudShow)
+        hudLocks = ImGui.Checkbox('Cadres de verrouillage sur les hostiles', hudLocks)
         ImGui.Separator()
         ImGui.Text('Temperament')
         ImGui.Text('Courage :'); ImGui.SameLine()

@@ -18,7 +18,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import nav
+from . import hud, nav
 from .config import DATA_DIR
 
 TELEGRAM_FILE = DATA_DIR / 'telegram.json'   # {"token": "...", "chat_id": "..."} -- jamais commis au depot
@@ -68,7 +68,9 @@ def _telegram_loop(token: str, chat_id: str, log) -> None:
 
 def notify(text: str) -> None:
     """Compte-rendu a l utilisateur sur Telegram, si configure (silencieux sinon) -- V parle de lui-meme
-    (mort, fin de combat, niveau, secteur bloque, fin de session), pas seulement en reponse a une directive."""
+    (mort, fin de combat, niveau, secteur bloque, fin de session), pas seulement en reponse a une directive.
+    Chaque compte-rendu alimente aussi le journal du HUD in-game, Telegram configure ou non."""
+    hud.event(text)
     token, chat_id = _creds()
     if not (token and chat_id):
         return

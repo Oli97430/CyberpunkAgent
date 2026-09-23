@@ -34,6 +34,15 @@ def update(**kw) -> None:
         STATE.update(kw)
 
 
+def event(text) -> None:
+    """Ligne du journal defilant du HUD (le mod garde les 5 plus recentes, melangees a ses propres pertes)."""
+    line = ascii_up(' / '.join(str(text).splitlines()))[:64]
+    with _lock:
+        ev = STATE.setdefault('events', [])
+        ev.append([time.time(), line])
+        del ev[:-8]
+
+
 def _write() -> None:
     with _lock:
         payload = dict(STATE)

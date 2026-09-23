@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-from . import nav
+from . import hud, nav
 
 _visited: dict[int, float] = {}   # index du point -> heure de derniere visite (evite le ping-pong entre 2 points)
 REVISIT_S = 2400.0                # 40 min : le temps que de nouveaux appels/hold-ups apparaissent ailleurs
@@ -37,6 +37,7 @@ def pick(log=print) -> dict | None:
     _visited[_key(best)] = now
     label = best.get('name') or best.get('district') or '?'
     log(f"  [exploration] aucun objectif accessible : V part decouvrir « {label} » ({best.get('district')}, {best.get('d', 0):.0f} m)")
+    hud.event(f'exploration : {label}')
     # hash negatif tres eloigne des hash de quete (floor(x)*100000+floor(y), toujours < 1e9 en valeur absolue
     # sur la carte de Night City) : jamais confondu avec un vrai objectif dans les compteurs de blocage/visite.
     return {'x': best['x'], 'y': best['y'], 'z': best.get('z'), 'text': f"exploration : {label}",
