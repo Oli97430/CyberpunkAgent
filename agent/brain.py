@@ -316,6 +316,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_overlevel_t = -999.0
     mute_hostiles = MUTE_HOSTILES
     last_ripper_t = -999.0
+    ripper_forced = False           # directive « charcudoc » : passe outre la suspension et le delai
     money_start = None
     vendor_fail_streak = 0
     last_drive_t = -999.0
@@ -515,7 +516,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log('DIRECTIVE : course chez le marchand forcee')
                         remote.notify('V part faire ses courses.')
                     elif low in ('charcudoc', 'ripperdoc', 'implant'):
-                        last_ripper_t = -999.0
+                        last_ripper_t = -999.0; ripper_forced = True
                         _log('DIRECTIVE : passage charcudoc force')
                         remote.notify('V va chez le charcudoc.')
                     elif low in ('explore', 'explorer', 'balade'):
@@ -1037,8 +1038,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         continue
 
                 # 3a-quater. CHARCUDOC : assez d eddies -> V s optimise lui-meme (meilleur cyberware abordable, pose par script)
-                if CFG.features.get('ripperdoc', True) and inventory.MONEY >= 6000 and time.perf_counter() - last_ripper_t > 1800.0 and not st.get('combat') and not _threat_near(st) and not focus:
-                    last_ripper_t = time.perf_counter()
+                # 23/09 : 85 passages, 0 implant pose -> memoire entre sessions, suspension 6 h apres 3 passages sans pose,
+                # rien en debut de session ni pendant une cible choisie par V ; la directive « charcudoc » force
+                if CFG.features.get('ripperdoc', True) and inventory.MONEY >= 6000 and not st.get('combat') and not _threat_near(st) and not focus \
+                        and (ripper_forced or (alt_target is None and time.perf_counter() - last_ripper_t > 1800.0
+                                               and vendor.ripper_allowed(time.perf_counter() - t0)[0])):
+                    last_ripper_t = time.perf_counter(); ripper_forced = False
                     vendor.MAX_VENDOR_M = 5000.0
                     rip = vendor.pick_vendor(vendor.list_vendors(), prefer='ripper')
                     if rip and 'ripper' in (rip.get('variant') or '').lower():
@@ -1052,8 +1057,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             if rr.get('useless'):
                                 # rien a poser ici (pas de stock, ne parle pas, stock illisible) : on n y revient pas de sitot
                                 vendor.mark_useless(rip, rr['useless'], days=7.0, log=_log)
+                            if not (stop is not None and stop.is_set()):
+                                vendor.ripper_result(int(rr.get('poses') or 0), rr.get('useless') or rr.get('reason') or 'aucun implant abordable', log=_log)
                         else:
                             _log(f"charcudoc : non atteint ({tr.get('reason')})"); vendor.mark_failed(rip, log=_log)
+                            if not (stop is not None and stop.is_set()):
+                                vendor.ripper_result(0, f"non atteint ({tr.get('reason')})", log=_log)
                         continue
 
                 # 3a-quinquies. APPARENCE : une fois par mois, si un appartement de V est proche, passage au miroir

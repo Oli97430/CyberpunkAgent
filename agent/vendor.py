@@ -62,6 +62,66 @@ def mark_useless(v: dict, reason: str, days: float = 7.0, log=print) -> None:
     log(f"  [marchand] « {v.get('name') or v.get('variant')} » ecarte {days:g} jour(s) : {reason}")
 
 
+RIPPER_FILE = CFG.log_file.parent / 'ripperdoc_state.json'   # dernier passage et echecs de suite, d une session a l autre
+RIPPER_FAILS = 3              # passages sans implant pose avant suspension...
+RIPPER_SUSPEND_S = 6 * 3600.0  # ... pendant 6 h
+RIPPER_GAP_S = 1800.0          # 30 min minimum entre deux passages, meme apres un redemarrage
+RIPPER_WARMUP_S = 600.0        # rien pendant les 10 premieres minutes d une session
+_ripper: dict | None = None
+
+
+def _ripper_state() -> dict:
+    global _ripper
+    if _ripper is None:
+        try:
+            d = json.loads(RIPPER_FILE.read_text(encoding='utf-8'))
+            _ripper = d if isinstance(d, dict) else {}
+        except Exception:
+            _ripper = {}
+    return _ripper
+
+
+def ripper_allowed(session_age_s: float, now: float | None = None) -> tuple[bool, str]:
+    """23/09 : 85 passages au charcudoc sur tout le journal, 0 implant pose, un trajet a chaque debut de session.
+    Tant que le stock reel du charcudoc n est pas lu (idee MarketSystem), on limite la casse."""
+    now = time.time() if now is None else now
+    s = _ripper_state()
+    if session_age_s < RIPPER_WARMUP_S:
+        return False, 'debut de session'
+    try:
+        until, last = float(s.get('suspended_until') or 0), float(s.get('last_t') or 0)
+    except (TypeError, ValueError):
+        until, last = 0.0, 0.0
+    if now < until:
+        return False, f'suspendu encore {(until - now) / 60:.0f} min (passages sans implant pose)'
+    if now - last < RIPPER_GAP_S:
+        return False, 'dernier passage il y a moins de 30 min'
+    return True, ''
+
+
+def ripper_result(posed: int, reason: str = '', log=print) -> None:
+    """Fin d un passage (atteint ou non). 3 passages de suite sans implant pose -> suspension 6 h."""
+    s = _ripper_state()
+    now = time.time()
+    s['last_t'] = now
+    if posed > 0:
+        s['fails'] = 0; s.pop('suspended_until', None)
+    else:
+        try:
+            s['fails'] = int(s.get('fails') or 0) + 1
+        except (TypeError, ValueError):
+            s['fails'] = 1
+        if s['fails'] >= RIPPER_FAILS:
+            s['suspended_until'] = now + RIPPER_SUSPEND_S; s['fails'] = 0
+            log(f'  [charcudoc] {RIPPER_FAILS} passages de suite sans implant pose ({reason}) : plus de charcudoc pendant '
+                f'{RIPPER_SUSPEND_S / 3600:.0f} h (directive « charcudoc » pour forcer)')
+    try:
+        RIPPER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RIPPER_FILE.write_text(json.dumps(s, ensure_ascii=False), encoding='utf-8')
+    except Exception as e:
+        log(f'  [charcudoc] memoire non sauvee : {e}')
+
+
 def mark_failed(v: dict, log=print) -> None:
     k = (round(v.get('x', 0)), round(v.get('y', 0)))
     _failed[k] = time.perf_counter()
