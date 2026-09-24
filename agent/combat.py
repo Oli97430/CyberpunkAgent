@@ -50,25 +50,48 @@ def quickhack_first(slot: int = 0) -> None:
     kbm.tap('BACKSPACE', 0.08)
 
 
-# Priorite des hacks (mots-cles francais, insensibles a la casse) : du plus decisif au moins.
-# Cles d action (TweakDB, ex. QuickHack.OverheatHack) : independantes de la langue du jeu.
-HACK_PRIORITY = ('cyberpsycho', 'suicide', 'overheat', 'shortcircuit', 'contagion', 'synapse', 'detonate',
-                 'grenade', 'weaponmalfunction', 'malfunction', 'cripple', 'rebootoptics', 'blind', 'memorywipe',
-                 'whistle', 'ping')
+# Priorite des hacks, du plus decisif au moins. Chaque rang : identifiants TweakDB (ex. QuickHack.EMPOverloadLvl2Hack,
+# independants de la langue) + titres francais du jeu. 24/09 : court-circuit s appelle EMPOverload et surcharge
+# synaptique BrainMelt dans le TweakDB -- sans eux, Ping ou Redemarrage optique passaient devant.
+HACK_PRIORITY = (('cyberpsycho', 'madness'), ('suicide',), ('systemcollapse', 'systemreset', 'reinitialisation'),
+                 ('overheat', 'surchauffe'), ('shortcircuit', 'empoverload', 'courtcircuit'), ('contagion',),
+                 ('synapse', 'brainmelt', 'synaptique'), ('detonate', 'grenadeexplode', 'grenade'),
+                 ('weaponmalfunction', 'malfunction', 'defaillance', 'enrayage'), ('cripple', 'locomotion', 'paralysie'),
+                 ('rebootoptics', 'blind', 'redemarrage'), ('memorywipe', 'effacement'), ('whistle', 'sifflement'),
+                 ('ping',))
+
+
+def _norm(s: str) -> str:
+    import unicodedata
+    s = unicodedata.normalize('NFKD', str(s)).encode('ascii', 'ignore').decode('ascii').lower()
+    return ''.join(c for c in s if c.isalnum())
 
 
 def _hack_score(h: dict) -> int:
-    t = ((h.get('action') or '') + ' ' + (h.get('title') or '')).lower().replace('_', '')
-    for rank, kw in enumerate(HACK_PRIORITY):
-        if kw in t:
+    t = _norm(h.get('action') or '') + ' ' + _norm(h.get('title') or '')
+    for rank, kws in enumerate(HACK_PRIORITY):
+        if any(kw in t for kw in kws):
             return len(HACK_PRIORITY) - rank
     return 0
+
+
+_min_cost = [None, -1e9]   # (cout du hack le moins cher du dernier panneau lisible, heure) : RAM trop basse -> on n ouvre pas
+
+
+def _readable(h: dict) -> bool:
+    a, t = str(h.get('action') or ''), str(h.get('title') or '')
+    return bool((a and not a.startswith('userdata')) or (t and not t.startswith('userdata')))
 
 
 def quickhack_best(log=print) -> str | None:
     """Ouvre le panneau sur la cible visee, lit la liste (blackboard), choisit le meilleur hack
     utilisable (non verrouille, RAM suffisante), fait defiler jusqu a ce qu il soit SURLIGNE
-    (boucle fermee sur qh.sel), applique (F), ferme (Retour arriere). Renvoie le titre applique."""
+    (boucle fermee sur qh.sel), applique (F), ferme (Retour arriere). Renvoie le titre applique.
+    24/09 : liste REELLEMENT affichee (nom, cout, verrouille) ; rien d utilisable -> panneau referme sans hacker au
+    hasard, renvoie 'ram' (RAM connue trop basse : on n ouvre meme pas) ; surlignage illisible -> rang dans la liste."""
+    ram0 = (motion.read_state() or {}).get('ram')
+    if ram0 is not None and _min_cost[0] is not None and ram0 < _min_cost[0] and time.perf_counter() - _min_cost[1] < 30.0:
+        return 'ram'
     kbm.act_hold('scanner'); time.sleep(0.45)
     kbm.act('ui_confirm', 0.1)
     qh = None
@@ -80,23 +103,45 @@ def quickhack_best(log=print) -> str | None:
             break
         time.sleep(0.05)
     chosen = None
-    if qh and qh.get('list'):
+    readable = [h for h in ((qh or {}).get('list') or []) if _readable(h)]
+    if readable:
         ram = qh.get('ram')
-        usable = [h for h in qh['list'] if not h.get('locked') and (ram is None or (h.get('cost') or 0) <= ram)]
-        if usable:
-            chosen = max(usable, key=_hack_score)
+        # toute la liste : un hack trop cher en RAM est justement « verrouille », et les verrous dependent de la cible
+        costs = [h['cost'] for h in readable if isinstance(h.get('cost'), (int, float)) and h['cost'] > 0]
+        _min_cost[0], _min_cost[1] = (min(costs) if costs else None), time.perf_counter()
+        usable = [h for h in readable if not h.get('locked') and (ram is None or (h.get('cost') or 0) <= ram)]
+        if not usable:
+            log(f"  [combat] quickhacks : rien d utilisable (RAM {ram}, {len(readable)} hack(s) lus) : panneau referme")
+            kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
+            return 'ram'
+        chosen = max(usable, key=_hack_score)
     if chosen is None:
         # liste indisponible : hack surligne par defaut (comportement a l aveugle)
         kbm.act('ui_confirm', 0.1); time.sleep(0.25)
         kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
         return None
-    # amener la selection sur le hack choisi (molette), 8 crans max
-    for _ in range(8):
+    # amener la selection sur le hack choisi (molette) : sens choisi d apres le rang du hack surligne
+    want = str(chosen.get('action') or '').strip().lower()
+    target_i = int(chosen.get('i') or 1)
+    rank_of = {str(h.get('action') or '').strip().lower(): int(h.get('i') or 0) for h in readable if h.get('action')}
+    stepped, matched = 0, False
+    for _ in range(len(readable) + 2):
         st = motion.read_state()
-        sel = ((st or {}).get('qh') or {}).get('sel') or ''
-        if chosen.get('action') and sel.strip().lower() == chosen['action'].strip().lower():
-            break
-        kbm.wheel(-1); time.sleep(0.12)
+        sel = str(((st or {}).get('qh') or {}).get('sel') or '')
+        if want and sel.strip().lower() == want:
+            matched = True; break
+        if not sel or sel.startswith('userdata'):
+            # surlignage illisible : on descend jusqu au rang du hack (le panneau s ouvre sur le premier)
+            for _ in range(max(0, target_i - 1 - stepped)):
+                kbm.wheel(-1); time.sleep(0.12)
+            matched = True; break
+        cur_i = rank_of.get(sel.strip().lower())
+        kbm.wheel(1 if (cur_i is not None and cur_i > target_i) else -1); stepped += 1; time.sleep(0.12)
+    if not matched:
+        # jamais surligne (hack absent du panneau...) : on referme SANS valider plutot que lancer un autre hack
+        log(f"  [combat] quickhack « {chosen.get('title') or chosen.get('action')} » jamais surligne : panneau referme sans hacker")
+        kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
+        return None
     kbm.act('ui_confirm', 0.1); time.sleep(0.25)
     kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
     return chosen.get('title') or chosen.get('action')
@@ -378,6 +423,10 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
                 if tgt is not e:
                     aim_at(tgt, st)
                 title = quickhack_best(log=log)
+                if title == 'ram':
+                    hacks_done = max_hacks; t_hack0 = time.perf_counter(); seq = None
+                    log('  [combat] RAM insuffisante : pas de hack d ouverture, on engage')
+                    continue
                 hacks_done += 1; hacked = True; t_hack0 = time.perf_counter(); seq = None
                 log(f"  [combat] hack d ouverture « {title or 'par defaut'} » sur cible a {tgt['d']:.0f} m ({hacks_done}/{max_hacks})")
                 continue
@@ -628,8 +677,11 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                     tgt = alive[hack_i % len(alive)]; hack_i += 1
                     if tgt is not e:
                         aim_at(tgt, st)
-                    title = quickhack_best(log=log); stats['quickhacks'] += 1
+                    title = quickhack_best(log=log)
                     t_hack = time.perf_counter()                        # le delai court APRES le hack (il dure ~4 s)
+                    if title == 'ram':
+                        log('  [combat] quickhack : RAM insuffisante, on tire'); seq = None; continue
+                    stats['quickhacks'] += 1
                     if title and str(title).startswith('userdata'):
                         title = None
                     if title:
@@ -661,8 +713,11 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 tgt = alive[hack_i % len(alive)]; hack_i += 1
                 if tgt is not e and tgt['d'] > 3.0:
                     aim_at(tgt, st); e = tgt
-                title = quickhack_best(log=log); stats['quickhacks'] += 1
+                title = quickhack_best(log=log)
                 t_hack = time.perf_counter()
+                if title == 'ram':
+                    log('  [combat] quickhack : RAM insuffisante'); seq = None; continue
+                stats['quickhacks'] += 1
                 if title and not str(title).startswith('userdata'):
                     blind_hacks = 0
                 else:

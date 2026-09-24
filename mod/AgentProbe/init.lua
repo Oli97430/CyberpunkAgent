@@ -64,6 +64,9 @@ local enemyDiag, lastEnemyDiag = '', ''
 local aliveMemory, bodyMemory = {}, {}      -- derniere position des ennemis vus / corps (loot)
 local lastInventory = {}                    -- ItemID par index de la derniere liste d inventaire
 local qhListLogged = false                  -- structure de la liste des hacks journalisee une fois
+local qhPopList, qhPopT, qhPopLogged = nil, -99.0, false   -- liste REELLEMENT affichee par le panneau (hook PopulateData)
+local qhPopOk = false                      -- au moins une entree lisible (sinon : liste en cache)
+local qhOpenT, qhWasOpen = -99.0, false    -- ouverture du panneau en cours (la liste du hook doit etre de ce panneau)
 local lastRecipes = {}                       -- TweakDBID par index de la derniere liste de recettes
 local craftDiagDone = false
 
@@ -952,6 +955,32 @@ local function breachInfo(cmd)
     return info
 end
 
+local function qhShort(s)
+    s = tostring(s or '')
+    if s == '' or s == 'nil' or s:find('^userdata') then return nil end
+    return (s:gsub('^QuickHack%.', ''))
+end
+local function qhFromData(q, i)
+    -- 24/09 : QuickhackData du panneau (m_title, m_action, m_cost, m_isLocked...). La liste en cache ne donnait que
+    -- des handles illisibles (« userdata: 0x... ») : V hachait au hasard (141 « par defaut » le 23/09).
+    local r = { i = i }
+    pcall(function() r.action = qhShort(TDBID.ToStringDEBUG(q.m_action:GetObjectActionID())) end)
+    if not r.action then pcall(function() r.action = qhShort(TDBID.ToStringDEBUG(q.m_action:GetObjectActionRecord():GetID())) end) end
+    pcall(function()
+        local raw = tostring(q.m_title or '')
+        local t = GetLocalizedText(raw)
+        if not t or t == '' then t = raw end
+        if t ~= '' and t ~= 'nil' and not t:find('^ToCName') then r.title = t:sub(1, 28) end
+    end)
+    pcall(function() r.cost = tonumber(q.m_cost) end)
+    pcall(function() if q.m_isLocked then r.locked = true end end)
+    pcall(function()
+        local rs = tostring(q.m_inactiveReason or '')
+        if rs ~= '' and rs ~= 'nil' then r.why = (GetLocalizedText(rs) or rs):sub(1, 24) end
+    end)
+    return r
+end
+
 registerForEvent('onInit', function()
     os.remove('probe_progress.txt')
     journal('onInit ' .. os.date('%H:%M:%S'))
@@ -976,6 +1005,24 @@ registerForEvent('onInit', function()
         end)
     end)
     journal('BREACH hooks : ' .. tostring(okO) .. (okO and '' or (' ' .. tostring(errO))))
+    -- 24/09 : liste des quickhacks REELLEMENT affichee (titre, action, cout RAM, verrouille), a l ouverture du panneau
+    local okQ, errQ = pcall(function()
+        Observe('QuickhacksListGameController', 'PopulateData', function(self, data)
+            local list = {}
+            pcall(function()
+                for i = 1, math.min(#data, 10) do list[#list + 1] = qhFromData(data[i], i) end
+            end)
+            local okL = false
+            for _, r in ipairs(list) do if r.action or r.title then okL = true end end
+            qhPopList, qhPopT, qhPopOk = list, os.clock(), okL
+            if not qhPopLogged and #list > 0 then
+                qhPopLogged = true
+                journal('QHPOP ' .. json.encode(list):sub(1, 900))
+                pcall(function() journal('QHPOPDUMP ' .. GameDump(data[1]):gsub('%s+', ' '):sub(1, 1200)) end)
+            end
+        end)
+    end)
+    journal('QUICKHACK hook : ' .. tostring(okQ) .. (okQ and '' or (' ' .. tostring(errQ))))
     fh = io.open('state.bin', 'w+b')
     journal('state.bin ouvert : ' .. tostring(fh ~= nil))
     -- table de commandes SQLite (canal Python -> Lua). NB: db:exec = SQLite, pas un shell.
@@ -1291,13 +1338,21 @@ registerForEvent('onUpdate', function(dt)
             if not d then return end
             local bb2 = Game.GetBlackboardSystem():Get(d)
             local open = bb2:GetBool(d.quickhackPanelOpen)
-            if not open then return end
+            if not open then qhWasOpen = false; return end
+            if not qhWasOpen then qhWasOpen = true; qhOpenT = os.clock() end
             qh = { open = true }
             pcall(function()
                 local sel = FromVariant(bb2:GetVariant(d.quickHackDataSelected))
-                if sel then qh.sel = tostring(sel.actionRecord):gsub('^.-%.', '') end
+                if sel then
+                    local r = qhFromData(sel, 0)                 -- c est un QuickhackData (pas un PlayerQuickhackData)
+                    qh.sel, qh.selTitle = r.action, r.title
+                    if not qh.sel then pcall(function() qh.sel = qhShort(TDBID.ToStringDEBUG(sel.actionRecord:GetID())) end) end
+                end
             end)
-            pcall(function()
+            if qhPopOk and qhPopList and #qhPopList > 0 and qhPopT >= qhOpenT - 1.0 then
+                qh.list, qh.src = qhPopList, 'panneau'
+            end
+            if not qh.list then pcall(function()
                 local pd = defs.PlayerQuickHackData
                 local bb3 = Game.GetBlackboardSystem():Get(pd)
                 local lst = FromVariant(bb3:GetVariant(pd.CachedQuickHackList))
@@ -1306,12 +1361,16 @@ registerForEvent('onUpdate', function(dt)
                     for i = 1, math.min(#lst, 12) do
                         local h = lst[i]
                         local rec = { i = i }
-                        pcall(function() rec.action = tostring(h.actionRecord):gsub('^.-%.', '') end)   -- ex. OverheatHack
-                        pcall(function() rec.title = tostring(GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(h.itemID.id):DisplayName())) end)
+                        pcall(function() rec.action = qhShort(TDBID.ToStringDEBUG(h.actionRecord:GetID())) end)   -- ex. OverheatHack
+                        pcall(function()
+                            -- Caption() est un CName : GetLocalizedTextByKey (tostring donnerait « ToCName{ hash_lo... »)
+                            local t = tostring(GetLocalizedTextByKey(h.actionRecord:ObjectActionUI():Caption()) or '')
+                            if t ~= '' and t ~= 'nil' and not t:find('^ToCName') then rec.title = t:sub(1, 28) end
+                        end)
                         pcall(function() rec.quality = h.quality end)
                         list[#list + 1] = rec
                     end
-                    qh.list = list
+                    qh.list, qh.src = list, 'cache'
                     if not qhListLogged then
                         qhListLogged = true
                         journal('QHLIST ' .. json.encode(list):sub(1, 900))
@@ -1320,7 +1379,7 @@ registerForEvent('onUpdate', function(dt)
                         pcall(function() journal('QHTYPE ' .. tostring(lst[1]) .. ' / ' .. type(lst[1])) end)
                     end
                 end
-            end)
+            end) end
             pcall(function() qh.ram = Game.GetStatPoolsSystem():GetStatPoolValue(id, gamedataStatPoolType.Memory, false) end)
         end)
         -- OBJETS LOOTABLES a < 20 m : conteneurs, objets au sol, corps (par nom de classe), avec
@@ -1695,8 +1754,10 @@ registerForEvent('onUpdate', function(dt)
         table.sort(bodies, function(a, b) return a.d < b.d end)
         while #bodies > 8 do table.remove(bodies) end
         if #bodies == 0 then bodies = nil end
+        local ramNow = nil
+        pcall(function() ramNow = math.floor(Game.GetStatPoolsSystem():GetStatPoolValue(id, gamedataStatPoolType.Memory, false) * 10 + 0.5) / 10 end)
         seq = seq + 1
-        return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(),
+        return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(), ram = ramNow,
                  hp = hp, dead = isDead, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
                  lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, summon = summon, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
                  enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, ftLoading = ftLoading, seqEnd = seq }
