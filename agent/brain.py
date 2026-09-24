@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, planner, quests, radio, remote, sms, terminals, vendor
+from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, planner, quests, radio, remote, sms, terminals, travel, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -319,6 +319,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     money_start = None
     vendor_fail_streak = 0
     last_drive_t = -999.0
+    ft_tried: dict = {}             # cible (cellule de 50 m) -> heure du dernier voyage rapide tente vers elle
     inter_tries: dict = {}          # (titre, choix, zone) -> (essais, ignore_jusqu_a)
     alt_target = None               # marqueur de quete choisi par V (x, y, texte, t0) quand l objectif suivi est bloque
     approached: dict = {}           # (nom, zone) -> heure : PNJ deja abordes (pas de harcelement pendant 5 min)
@@ -412,6 +413,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     remote.bind(hard_stop, pause)          # stop / pause / reprendre Telegram appliques des reception
     # 23/09 : config EFFECTIVE et source de chaque reglage (le panneau CET ecrasait le panneau Windows en silence)
     _log(f'config : {CFG.summary()}')
+    _log(f'transport : {travel.summary()}')
     for w in CFG.warnings:
         _log(f'  [config] ATTENTION : {w}')
     if CFG.provider == 'ollama':
@@ -1323,25 +1325,34 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         if _approach_machine(tx, ty, dist, _log, stop):
                             stats['interactions'] += 1
                         continue
-                if dist is not None and dist > 500.0 and kbm.ACTIONS.get('autodrive') and CFG.features.get('driving', True) \
-                        and time.perf_counter() - last_drive_t > 240.0:
-                    last_drive_t = time.perf_counter()
-                    _log(f'objectif a {dist:.0f} m : V prend la voiture (autodrive)')
-                    plan.note('a pris la voiture')
-                    # aussi vers une cible alternative (19/09 : 2 200 m a pied parce que la quete etait « alternative »)
-                    q0 = {'mx': alt_target['x'], 'my': alt_target['y']} if alt_target is not None else (st.get('quest') or {})
-                    r = driving.drive_to(q0.get('mx'), q0.get('my'), stop=stop, log=_log)
-                    stats['conduites'] = stats.get('conduites', 0) + 1
-                    _log(f"conduite : {'arrive' if r.get('ok') else r.get('reason')}")
-                    if not r.get('ok') and r.get('reason') == 'embarquement echoue':
-                        last_drive_t = time.perf_counter() + 360.0      # ici la moto ne vient pas / ne se monte pas : pas avant 10 min
-                        if dist > 1500.0 and time.perf_counter() - last_ft_t > 600.0 and CFG.features.get('fasttravel', True):
-                            last_ft_t = time.perf_counter()
-                            ft = nav.fast_travel_to(q0.get('mx'), q0.get('my'), log=_log)
-                            _log(f"voyage rapide : {('arrive a ' + str(ft.get('point'))) if ft.get('ok') else ft.get('reason')}")
-                            if ft.get('ok'):
-                                stats['voyages'] = stats.get('voyages', 0) + 1
-                    continue
+                # 23/09 : 3 conduites abouties sur ~193 (~4 h perdues). Voiture tant qu elle marche (travel.py), jamais
+                # vers une autre cible quand la quete suivie a un marqueur ailleurs (l autodrive irait vers lui) ;
+                # sinon voyage rapide d abord, puis a pied.
+                if dist is not None and dist > 500.0:
+                    route_ok = alt_target is None or not q.get('hasMappin')
+                    tx_t, ty_t = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
+                    ft_key = (round(tx_t / 50.0), round(ty_t / 50.0)) if tx_t is not None and ty_t is not None else None
+                    how, why_not = travel.choose(dist, route_ok, bool(kbm.ACTIONS.get('autodrive') and CFG.features.get('driving', True)),
+                                                 time.perf_counter() - last_drive_t, CFG.features.get('fasttravel', True),
+                                                 ft_key is None or time.perf_counter() - ft_tried.get(ft_key, -1e9) < 600.0)
+                    if how == 'fasttravel':
+                        _log(f'objectif a {dist:.0f} m : voyage rapide d abord ({why_not})')
+                        ft = nav.fast_travel_to(tx_t, ty_t, log=_log, min_gain_m=300.0)
+                        _log(f"voyage rapide : {('arrive a ' + str(ft.get('point'))) if ft.get('ok') else ft.get('reason')}")
+                        if ft.get('ok'):
+                            stats['voyages'] = stats.get('voyages', 0) + 1
+                            continue
+                        ft_tried[ft_key] = time.perf_counter()     # echec seulement : pas de nouvel essai vers cette cible avant 10 min
+                    if how == 'drive':
+                        _log(f'objectif a {dist:.0f} m : V prend la voiture (autodrive)')
+                        plan.note('a pris la voiture')
+                        r = driving.drive_to(tx_t, ty_t, stop=stop, log=_log)
+                        last_drive_t = time.perf_counter()               # delai compte a partir de la FIN de la conduite
+                        stats['conduites'] = stats.get('conduites', 0) + 1
+                        _log(f"conduite : {'arrive' if r.get('ok') else r.get('reason')}")
+                        if not r.get('ok') and r.get('reason') == 'embarquement echoue':
+                            last_drive_t = time.perf_counter() + 360.0      # ici la moto ne vient pas / ne se monte pas : pas avant 10 min
+                        continue
 
                 if dist is not None and dist > ARRIVE_M:
                     no_mappin_since = None

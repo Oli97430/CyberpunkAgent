@@ -361,7 +361,20 @@ def exit_vehicle(log=print) -> bool:
 
 def drive_to(tx: float, ty: float, stop=None, log=print) -> dict:
     if not summon_and_board(stop=stop, log=log):
-        return {'ok': False, 'reason': 'embarquement echoue'}
-    r = autodrive_to(tx, ty, stop=stop, log=log)
-    exit_vehicle(log=log)
+        r = {'ok': False, 'reason': 'embarquement echoue'}
+    else:
+        r = autodrive_to(tx, ty, stop=stop, log=log)
+        exit_vehicle(log=log)
+    record_drive(r, stop)
     return r
+
+
+def record_drive(r: dict, stop=None) -> None:
+    """Statistiques de conduite (travel.py) ; un trajet coupe par pause / arret n est ni un succes ni un echec."""
+    if stop is not None and stop.is_set():
+        return
+    try:
+        from . import travel
+        travel.record('drive', bool(r.get('ok')), r.get('reason'))
+    except Exception:
+        pass

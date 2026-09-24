@@ -278,10 +278,23 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
     """Va au marchand, ouvre la boutique (F maintenu), vend la camelote (G), valide (F), sort."""
     t0 = time.perf_counter()
     log(f"  [vente] direction marchand « {vendor.get('variant')} » a {vendor['dist']:.0f} m")
-    if vendor['dist'] > 300.0 and kbm.ACTIONS.get('autodrive'):
-        from . import driving
-        rd = driving.drive_to(vendor['x'], vendor['y'], stop=stop, log=log)
-        log(f"  [vente] en vehicule : {'arrive' if rd.get('ok') else rd.get('reason')}")
+    ft_first = False
+    if vendor['dist'] > 300.0 and CFG.features.get('fasttravel', True):
+        # 23/09 : la voiture vers un marchand n est arrivee qu une fois sur 71 essais -> voyage rapide d abord, puis la
+        # voiture seulement si elle marche (travel.py) et si aucun marqueur de quete suivie ne l attire ailleurs
+        ft_first = True
+        ft = nav.fast_travel_to(vendor['x'], vendor['y'], log=log, min_gain_m=150.0)
+        log(f"  [vente] voyage rapide : {('arrive a ' + str(ft.get('point'))) if ft.get('ok') else ft.get('reason')}")
+    s_v = motion.read_state() or {}
+    d_v = math.hypot(vendor['x'] - s_v['x'], vendor['y'] - s_v['y']) if s_v.get('x') is not None else vendor['dist']
+    if d_v > 500.0 and kbm.ACTIONS.get('autodrive') and CFG.features.get('driving', True):
+        from . import driving, travel
+        can, why = travel.drive_allowed(not (s_v.get('quest') or {}).get('hasMappin'))
+        if can:
+            rd = driving.drive_to(vendor['x'], vendor['y'], stop=stop, log=log)
+            log(f"  [vente] en vehicule : {'arrive' if rd.get('ok') else rd.get('reason')}")
+        else:
+            log(f'  [vente] pas de voiture ({why}) : a pied')
     r = nav.goto(lambda: nav.request_path_to(vendor['x'], vendor['y'], vendor.get('z')), arrive_m=2.5,
                  max_legs=8, timeout=240.0, stop=stop, log=log)
     if not r.get('ok'):
@@ -294,7 +307,7 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
                 r = motion.walk_to(vendor['x'], vendor['y'], timeout=30.0, stop=stop)
             finally:
                 motion.ARRIVE_M = old
-        if not r.get('ok') and d0 >= 40.0:
+        if not r.get('ok') and d0 >= 40.0 and not ft_first:
             # quartier sans maillage (Kabuki : 12 h d echecs) : voyage rapide vers le point le plus proche du marchand
             ft = nav.fast_travel_to(vendor['x'], vendor['y'], log=log, min_gain_m=150.0)
             log(f"  [vente] voyage rapide : {('arrive a ' + str(ft.get('point'))) if ft.get('ok') else ft.get('reason')}")
