@@ -154,11 +154,21 @@ def knife_throw() -> None:
     kbm.mouse('right', False)
 
 
+_seen_pos: set = set()      # compteurs (heal, gren) deja vus > 0 : leur 0 veut vraiment dire « plus de charge »
+
+
 def charges(st: dict, kind: str) -> bool:
     """24/09 : soin / grenade seulement s il reste une charge (le mod exporte res.heal / res.gren ; inconnu = on
-    essaie, comme avant). 13:29-13:30 : 3 soins appuyes a vide a 40-44 % de vie, puis mort."""
+    essaie, comme avant). 13:29-13:30 : 3 soins appuyes a vide a 40-44 % de vie, puis mort.
+    24/09, journal 06:26 : le jeu a exporte heal=0 alors que V avait 3 soins -- un 0 ne bloque donc que si ce
+    compteur a deja ete vu > 0 (sa semantique est alors prouvee) ; sinon V essaie, comme avant."""
     v = ((st or {}).get('res') or {}).get(kind)
-    return not isinstance(v, (int, float)) or v > 0
+    if not isinstance(v, (int, float)):
+        return True
+    if v > 0:
+        _seen_pos.add(kind)
+        return True
+    return kind not in _seen_pos
 
 
 def n_foes(st: dict, alive: list) -> int:

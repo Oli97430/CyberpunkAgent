@@ -67,7 +67,7 @@ local qhListLogged = false                  -- structure de la liste des hacks j
 local qhPopList, qhPopT, qhPopLogged = nil, -99.0, false   -- liste REELLEMENT affichee par le panneau (hook PopulateData)
 local qhPopOk = false                      -- au moins une entree lisible (sinon : liste en cache)
 local qhOpenT, qhWasOpen = -99.0, false    -- ouverture du panneau en cours (la liste du hook doit etre de ce panneau)
-local resCache, resT, resLogged = nil, -99.0, false   -- charges de V (soins, grenades, lance-projectiles), 4 fois/s
+local resCache, resT, resLogged = nil, -99.0, ''     -- charges de V (soins, grenades, lance-projectiles), 4 fois/s ; dernier journalise
 local function enemyOrder(a, b)
     -- 24/09 : les VIVANTS d abord, puis les plus proches (les morts proches evincaient les vivants plus loin) ;
     -- un ennemi assomme (down) est range avec les morts
@@ -1784,7 +1784,11 @@ registerForEvent('onUpdate', function(dt)
                 pcall(function() r[k] = math.floor(sps:GetStatPoolValue(id, gamedataStatPoolType[pool], false) + 0.01) end)
             end
             resCache = next(r) and r or nil
-            if resCache and not resLogged then resLogged = true; pcall(function() journal('RES ' .. json.encode(resCache)) end) end
+            -- journal a chaque changement (validation en jeu : le 24/09, heal=0 alors que V avait 3 soins)
+            pcall(function()
+                local js = resCache and json.encode(resCache) or 'nil'
+                if js ~= resLogged then resLogged = js; journal('RES ' .. js) end
+            end)
         end
         local ramNow = nil
         pcall(function() ramNow = math.floor(Game.GetStatPoolsSystem():GetStatPoolValue(id, gamedataStatPoolType.Memory, false) * 10 + 0.5) / 10 end)
