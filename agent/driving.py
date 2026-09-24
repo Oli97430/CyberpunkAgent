@@ -214,10 +214,18 @@ def summon_and_board(stop=None, log=print) -> bool:
     elif rv and rv.get('ok') and rv.get('spawned', True):
         log(f"  [conduite] V appelle « {rv.get('name')} » ({rv.get('vtype')}) parmi ses {rv.get('total')} vehicules")
     elif rv and rv.get('ok'):
-        # le systeme a refuse le spawn (cooldown, zone sans route, restriction de scene) : inutile d attendre 30 s
-        log(f"  [conduite] vehicule « {rv.get('name')} » : {rv.get('reason')} -> touche d appel en secours")
-        kbm.act('callvehicle', 0.15)
-        if rv.get('cooldown') or rv.get('restricted'):
+        # le systeme a refuse le spawn (cooldown, zone sans route, restriction de scene) : inutile d attendre 30 s.
+        # 24/09 : un « refus » peut quand meme faire apparaitre le vehicule (Olivier : 3 vehicules d un coup, embouteillage)
+        # -> on regarde 3 s avant d appuyer sur la touche d appel
+        time.sleep(3.0)
+        s_chk = motion.read_state() or {}
+        coming = int((s_chk.get('summon') or {}).get('state') or 0) in (1, 2, 4) or [v for v in (s_chk.get('vehicles') or []) if v.get('player')]
+        if coming:
+            log(f"  [conduite] « {rv.get('name')} » arrive malgre le refus annonce : pas de second appel")
+        else:
+            log(f"  [conduite] vehicule « {rv.get('name')} » : {rv.get('reason')} -> touche d appel en secours")
+            kbm.act('callvehicle', 0.15)
+        if not coming and (rv.get('cooldown') or rv.get('restricted')):
             time.sleep(1.5)
             s0 = motion.read_state() or {}
             if not [v for v in (s0.get('vehicles') or []) if v.get('player')]:

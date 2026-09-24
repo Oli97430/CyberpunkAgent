@@ -2830,16 +2830,16 @@ local function handleCommand(player, cmd)
         end)
         pcall(function() resp.vcooldown = vs:IsPlayerVehicleOnCooldown(typeEnum, pick.v.recordID) end)
         vehCallT = os.clock()
+        -- 24/09 (Olivier : « au moins trois vehicules apparaissent en meme temps, d ou un embouteillage ») : les trois
+        -- methodes etaient appelees a la suite -- SpawnPlayerVehicle renvoyait false mais faisait apparaitre le vehicule
+        -- quand meme (journal : route=false, false, puis SpawnActivePlayerVehicle=true). UNE seule methode : celle du
+        -- jeu (vehicule actif, choisi juste avant par TogglePlayerActiveVehicle) ; l autre seulement si elle n existe pas.
         local spawned = false
-        local okS, rS = pcall(function() return vs:SpawnPlayerVehicle(typeEnum, pick.v.recordID, true) end)   -- sur une VOIE valide d abord
-        if okS then did[#did + 1] = 'SpawnPlayerVehicle(route)=' .. tostring(rS); spawned = (rS == true) end
-        if not spawned then
-            local okS2, rS2 = pcall(function() return vs:SpawnPlayerVehicle(typeEnum, pick.v.recordID, false) end)
-            if okS2 then did[#did + 1] = 'SpawnPlayerVehicle=' .. tostring(rS2); spawned = (rS2 == true) end
-        end
-        if not spawned then
-            local okA, rA = pcall(function() return vs:SpawnActivePlayerVehicle(typeEnum) end)
-            if okA then did[#did + 1] = 'SpawnActivePlayerVehicle=' .. tostring(rA); spawned = spawned or (rA == true) end
+        local okA, rA = pcall(function() return vs:SpawnActivePlayerVehicle(typeEnum) end)
+        if okA then did[#did + 1] = 'SpawnActivePlayerVehicle=' .. tostring(rA); spawned = (rA ~= false) end
+        if not okA then
+            local okS, rS = pcall(function() return vs:SpawnPlayerVehicle(typeEnum, pick.v.recordID, true) end)   -- sur une VOIE valide
+            if okS then did[#did + 1] = 'SpawnPlayerVehicle(route)=' .. tostring(rS); spawned = (rS ~= false) end
         end
         resp.ok, resp.name, resp.vtype, resp.methodes, resp.total = (#did > 0), pick.name, pick.vtype, did, #list
         resp.spawned, resp.cooldown, resp.restricted = spawned, cooldown, restricted
