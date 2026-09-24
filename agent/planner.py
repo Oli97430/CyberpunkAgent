@@ -104,7 +104,7 @@ RULES = (
 def _situation(st: dict, extra: dict) -> str:
     q = st.get('quest') or {}
     inter = st.get('interact') or {}
-    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
+    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down')
                 and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
     lines = [
         f"Vie : {st.get('hp', 0):.0f} %. En combat : {'oui' if st.get('combat') else 'non'}.",
@@ -120,7 +120,7 @@ def _situation(st: dict, extra: dict) -> str:
 
 def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
     """Regles d abord pour les cas nets ; le modele n arbitre que le cas ouvert (parler ?)."""
-    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
+    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down')
                 and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
     if st.get('combat'):
         return 'attaquer', 'regle : deja en combat'
@@ -131,12 +131,18 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
         return 'objectif', f"regle : police hostile a {police[0]['d']:.0f} m -> on ne provoque pas, on continue"
     hp0 = st.get('hp'); hp0 = 100.0 if hp0 is None else hp0
     near45 = [e for e in hostiles if e['d'] < 45]
+    # 24/09 : la liste exportee est plafonnee a 6 -> les seuils temeraires (8) n etaient jamais atteints ; le mod
+    # exporte aussi le total d hostiles vivants a < 45 m (foes.n45)
+    try:
+        n45 = max(len(near45), int((st.get('foes') or {}).get('n45') or 0))
+    except (TypeError, ValueError):
+        n45 = len(near45)
     # V n est pas un couard : il evite seulement les groupes vraiment trop gros pour un solo (ou quand il
     # est deja bien entame). 2 a 5 hostiles = il se bat (il a gagne ces combats), 6+ = trop.
     from .config import CFG as _C
     T_AVOID, T_AVOID_HURT, _, T_RESCUE_HP, ENGAGE_R = _C.courage_t
-    if len(near45) >= T_AVOID or (len(near45) >= T_AVOID_HURT and hp0 < 60) or (len(near45) >= T_AVOID_HURT - 1 and hp0 < 35):
-        return 'eviter', f'regle : {len(near45)} hostiles a < 45 m, vie {hp0:.0f} % -> zone trop dangereuse'
+    if n45 >= T_AVOID or (n45 >= T_AVOID_HURT and hp0 < 60) or (n45 >= T_AVOID_HURT - 1 and hp0 < 35):
+        return 'eviter', f'regle : {n45} hostiles a < 45 m, vie {hp0:.0f} % -> zone trop dangereuse'
     if _C.aggro == 'defensif':
         hostiles_engage = [e for e in hostiles if e['d'] < 8]           # defensif : seulement au contact
     elif _C.aggro == 'chasseur':
@@ -230,7 +236,7 @@ def _decide_llm(st: dict, extra: dict, timeout: float) -> tuple[str, str]:
         why = re.search(r'"raison"\s*:\s*"([^"]{0,120})"', txt)
         if m and m.group(1) in ACTIONS:
             act = m.group(1)
-            hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
+            hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down')
                 and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
             muted = extra.get('muted') or (lambda e: False)
             hostiles = [e for e in hostiles if not muted(e)]
@@ -249,7 +255,7 @@ def _decide_llm(st: dict, extra: dict, timeout: float) -> tuple[str, str]:
 
 def fallback(st: dict, extra: dict) -> str:
     """Regle prudente si le modele ne repond pas."""
-    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
+    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down')
                 and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
     if st.get('combat'):
         return 'attaquer'
@@ -279,7 +285,7 @@ class Planner:
     def maybe_decide(self, st: dict, extra: dict, log=print) -> str:
         """Redecide si PERIOD_S ecoulees ou si la situation a change de nature."""
         inter = st.get('interact') or {}
-        hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')
+        hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down')
                 and (e.get('z') is None or st.get('z') is None or abs(e['z'] - st['z']) < 3.5)]   # pas un autre etage
         sig = (bool(inter), len(hostiles) > 0, bool(st.get('combat')), (st.get('quest') or {}).get('text'),
                (st.get('hp') or 100) < 40)

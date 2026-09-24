@@ -154,10 +154,27 @@ def knife_throw() -> None:
     kbm.mouse('right', False)
 
 
+def charges(st: dict, kind: str) -> bool:
+    """24/09 : soin / grenade seulement s il reste une charge (le mod exporte res.heal / res.gren ; inconnu = on
+    essaie, comme avant). 13:29-13:30 : 3 soins appuyes a vide a 40-44 % de vie, puis mort."""
+    v = ((st or {}).get('res') or {}).get(kind)
+    return not isinstance(v, (int, float)) or v > 0
+
+
+def n_foes(st: dict, alive: list) -> int:
+    """Vrai nombre d hostiles vivants : la liste exportee est plafonnee a 6, le mod exporte aussi le total (foes.n,
+    police a part dans foes.np : en combat elle compte, c est de la legitime defense)."""
+    f = (st or {}).get('foes') or {}
+    try:
+        return max(len(alive), int(f.get('n') or 0) + int(f.get('np') or 0))
+    except (TypeError, ValueError):
+        return len(alive)
+
+
 def _alive(enemies, allow_police: bool = True):
     """Hostiles vivants. allow_police=False exclut la police (engagement proactif interdit).
     En combat (fight), la police reste une cible : c est de la legitime defense."""
-    return [e for e in (enemies or []) if not e.get('dead') and (allow_police or not e.get('police'))]
+    return [e for e in (enemies or []) if not e.get('dead') and not e.get('down') and (allow_police or not e.get('police'))]
 
 
 # ---- visee --------------------------------------------------------------------------
@@ -498,7 +515,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 log('  [combat] V EST MORT : arret du combat'); stats['mort'] = True; break
 
             # -- soin
-            if hp < HEAL_BELOW and now - t_heal > HEAL_CD:
+            if hp < HEAL_BELOW and now - t_heal > HEAL_CD and charges(st, 'heal'):
                 kbm.act('consumable', 0.1); t_heal = now; stats['soins'] += 1
                 log(f'  [combat] soin (vie {hp:.0f} %)')
 
@@ -509,6 +526,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 last_hp, last_hp_t = hp, now
 
             alive = _alive(st.get('enemies'))
+            n_alive = n_foes(st, alive)             # 24/09 : total reel (la liste exportee est plafonnee a 6)
             if not st.get('combat'):
                 # le jeu ne marque V « en combat » qu apres le premier echange : pendant 5 s, s il reste des hostiles
                 # vivants a portee, on continue (et on frappe) au lieu de conclure que c est fini
@@ -579,27 +597,27 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             from .config import CFG as _C
             T_FLEE = _C.courage_t[2]
             if _C.courage == 'temeraire':
-                want_flee = only_police or (len(alive) >= T_FLEE and hp < 50) or (len(alive) >= 3 and hp < 22) or hp < 12
+                want_flee = only_police or (n_alive >= T_FLEE and hp < 50) or (n_alive >= 3 and hp < 22) or hp < 12
             elif _C.courage == 'prudent':
-                want_flee = only_police or len(alive) >= T_FLEE or (len(alive) >= 3 and hp < 45) or (len(alive) >= 2 and hp < 30)
+                want_flee = only_police or n_alive >= T_FLEE or (n_alive >= 3 and hp < 45) or (n_alive >= 2 and hp < 30)
             else:
-                want_flee = only_police or len(alive) >= T_FLEE or (len(alive) >= 4 and hp < 35) or (len(alive) >= 2 and hp < 22)
+                want_flee = only_police or n_alive >= T_FLEE or (n_alive >= 4 and hp < 35) or (n_alive >= 2 and hp < 22)
             if now < flee_until or (want_flee and now - last_flee_end > 4.0):
                 if now >= flee_until:
                     flee_until = now + 8.0; last_flee_end = flee_until; stats['fuites'] = stats.get('fuites', 0) + 1
-                    log(f'  [combat] FUITE ({len(alive)} hostiles, vie {hp:.0f} %) : on decroche')
+                    log(f'  [combat] FUITE ({n_alive} hostiles, vie {hp:.0f} %) : on decroche')
                 away = motion.wrap(motion.bearing_to(cx, cy, st['x'], st['y']))
                 aim_bearing(away, st, gain=0.7)
                 kbm.hold('W'); kbm.act_hold('sprint')
-                if now - t_heal > HEAL_CD and hp < 70:
+                if now - t_heal > HEAL_CD and hp < 70 and charges(st, 'heal'):
                     kbm.act('consumable', 0.1); t_heal = now; stats['soins'] += 1
-                if now - t_gren > 6.0 and e['d'] > 6.0:
+                if now - t_gren > 6.0 and e['d'] > 6.0 and charges(st, 'gren'):
                     kbm.mouse_tap('middle', 0.12); t_gren = now; stats['grenades'] += 1   # grenade vers l arriere (on regarde devant : elle part devant... on ne vise pas)
                 if now - t_dodge > 2.0:
                     dodge('W'); t_dodge = now; stats['esquives'] += 1
                 continue
             # -- REPLI tactique : vie basse sous pression -> dos aux ennemis, sprint, soin
-            outnumbered = len(alive) >= OUTNUMBERED
+            outnumbered = n_alive >= OUTNUMBERED
             want_retreat = (hp < RETREAT_HP and pressure >= RETREAT_PRESSURE) or hp < 20 \
                 or (outnumbered and hp < 45 and pressure >= 3) \
                 or (only_police and (hp < 60 or pressure >= 2))
@@ -610,14 +628,14 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 away = motion.wrap(motion.bearing_to(cx, cy, st['x'], st['y']))   # cap opposé au centre des ennemis
                 aim_bearing(away, st, gain=0.7)
                 kbm.hold('W'); kbm.act_hold('sprint')
-                if now - t_heal > HEAL_CD and hp < HEAL_BELOW:
+                if now - t_heal > HEAL_CD and hp < HEAL_BELOW and charges(st, 'heal'):
                     kbm.act('consumable', 0.1); t_heal = now; stats['soins'] += 1
                 continue
             kbm.act_release('sprint')
 
             # -- grenade sur un ennemi ELOIGNE (pas forcement le plus proche), si groupe
             far = [x for x in alive if GRENADE_MIN_M <= x['d'] <= GRENADE_MAX_M]
-            if far and len(alive) >= 2 and now - t_gren > GRENADE_CD:
+            if far and len(alive) >= 2 and now - t_gren > GRENADE_CD and charges(st, 'gren'):
                 tgt = far[-1]
                 gap = aim_at(tgt, st)
                 if gap < 10:
@@ -795,7 +813,7 @@ def loot_bodies(stop=None, log=print, max_bodies: int = 5, radius_m: float = 25.
         return {'ok': False, 'reason': 'etat illisible'}
     # corps memorises par le mod (les requetes de ciblage excluent les morts) + morts encore listes
     bodies = [b for b in (st.get('bodies') or []) if b['d'] <= radius_m]
-    bodies += [e for e in (st.get('enemies') or []) if e.get('dead') and e['d'] <= radius_m]
+    bodies += [e for e in (st.get('enemies') or []) if (e.get('dead') or e.get('down')) and e['d'] <= radius_m]   # assommes : lootables aussi
     bodies.sort(key=lambda e: e['d'])
     looted = 0
     for b in bodies[:max_bodies]:

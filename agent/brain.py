@@ -254,7 +254,7 @@ def _threat_near(st: dict) -> bool:
     """Interrompt un trajet : combat, hostile vivant (non ignore) a moins de ENGAGE_M, ou agression proche a secourir."""
     if st.get('combat'):
         return True
-    if any((not e.get('dead')) and (not e.get('police')) and e['d'] < ENGAGE_M and not _muted(e)
+    if any((not e.get('dead')) and (not e.get('down')) and (not e.get('police')) and e['d'] < ENGAGE_M and not _muted(e)
            and (e.get('z') is None or abs(e['z'] - st.get('z', e['z'])) < 3.5) for e in (st.get('enemies') or [])):
         return True
     return _rescue_pending(st)
@@ -498,7 +498,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         remote.notify('Pause posee entre-temps : « reprendre » ignore, renvoie-le pour relancer V.'
                                       if pause is not None and pause.is_set() else 'V n est pas en pause : il continue.')
                     elif low in ('attaque', 'attaquer', 'combat'):
-                        hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead')]
+                        hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down')]
                         if hostiles:
                             _log(f'DIRECTIVE : attaque ({len(hostiles)} hostile(s) en vue)')
                             combat.fight(stop=stop, log=_log)
@@ -557,7 +557,9 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log('DIRECTIVE : verification niveau/perks forcee')
                         remote.notify('V verifie son niveau et ses perks.')
                     elif low == 'soigne':
-                        if kbm.ACTIONS.get('consumable'):
+                        if not combat.charges(st, 'heal'):
+                            remote.notify(f"Plus aucune charge de soin (vie {st.get('hp', 0):.0f} %).")
+                        elif kbm.ACTIONS.get('consumable'):
                             kbm.act('consumable', 0.1); last_heal_t = time.perf_counter()
                             _log('DIRECTIVE : soin force')
                             remote.notify(f"V se soigne (vie {st.get('hp', 0):.0f} %).")
@@ -945,11 +947,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
 
                 # 3. combat : melee + grenades + soin (agent/combat.py)
                 if st.get('combat'):
-                    _near_h = min([e['d'] for e in (st.get('enemies') or []) if not e.get('dead')] or [99.0])
+                    _near_h = min([e['d'] for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down')] or [99.0])
                     if _near_h > 12.0 and (st.get('hp') or 100) >= 50:
                         buffs.apply(st, log=_log, in_combat=True)  # se buffer AVANT de frapper, seulement si on a 3 s devant soi
                     _log(f"combat detecte : {len(st.get('enemies') or [])} hostile(s), vie {st.get('hp', 0):.0f} %")
-                    hud.event(f"engagement : {len([e for e in (st.get('enemies') or []) if not e.get('dead')])} hostile(s)")
+                    hud.event(f"engagement : {len([e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down')])} hostile(s)")
                     r = combat.fight(stop=stop, log=_log)
                     stats['combats'] = stats.get('combats', 0) + 1
                     remote.notify(f"Combat termine : {r.get('coups', 0)} coup(s), {r.get('tirs', 0)} tir(s), {r.get('quickhacks', 0)} hack(s), {r.get('seconds', 0):.0f} s" + (' -- V est mort' if r.get('mort') else ''))
@@ -1075,7 +1077,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     appearance._last['t'] = time.time() - appearance.PERIOD_S + 900.0   # pas d appartement : on reverra dans 15 min (sans l enregistrer)
 
                 # 3b. soin hors combat si la vie est basse
-                if (st.get('hp') or 100) < 40 and time.perf_counter() - last_heal_t > 8.0:
+                if (st.get('hp') or 100) < 40 and time.perf_counter() - last_heal_t > 8.0 and combat.charges(st, 'heal'):
                     kbm.act('consumable', 0.1); last_heal_t = time.perf_counter()
                     _log(f"soin hors combat (vie {st.get('hp'):.0f} %)")
 
@@ -1105,7 +1107,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                   'eddies': (inventory.MONEY - money_start) if money_start is not None else 0})
 
                 if action == 'eviter':
-                    hs = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('police')]
+                    hs = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down') and not e.get('police')]
                     if hs:
                         cx = sum(e['x'] for e in hs) / len(hs); cy = sum(e['y'] for e in hs) / len(hs)
                         nav.add_avoid(cx, cy)
@@ -1258,7 +1260,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         action = 'objectif'
 
                 if action == 'attaquer':
-                    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('police')
+                    hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down') and not e.get('police')
                                 and (e.get('z') is None or abs(e['z'] - st.get('z', e['z'])) < 3.5)]
                     # hostiles « muets » : cibles qui n entrent jamais en combat (PNJ fuyards, tourelles hors portee...) ->
                     # ignorees 3 min apres un engagement sans combat, pour ne pas perdre 25 s a chaque fois

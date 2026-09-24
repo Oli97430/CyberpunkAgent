@@ -67,6 +67,14 @@ local qhListLogged = false                  -- structure de la liste des hacks j
 local qhPopList, qhPopT, qhPopLogged = nil, -99.0, false   -- liste REELLEMENT affichee par le panneau (hook PopulateData)
 local qhPopOk = false                      -- au moins une entree lisible (sinon : liste en cache)
 local qhOpenT, qhWasOpen = -99.0, false    -- ouverture du panneau en cours (la liste du hook doit etre de ce panneau)
+local resCache, resT, resLogged = nil, -99.0, false   -- charges de V (soins, grenades, lance-projectiles), 4 fois/s
+local function enemyOrder(a, b)
+    -- 24/09 : les VIVANTS d abord, puis les plus proches (les morts proches evincaient les vivants plus loin) ;
+    -- un ennemi assomme (down) est range avec les morts
+    local da, db = (a.dead or a.down) and true or false, (b.dead or b.down) and true or false
+    if da ~= db then return not da end
+    return a.d < b.d
+end
 local lastRecipes = {}                       -- TweakDBID par index de la derniere liste de recettes
 local craftDiagDone = false
 
@@ -1212,6 +1220,7 @@ registerForEvent('onUpdate', function(dt)
         -- ennemis hostiles (TargetTrackerComponent, sonde OK) : position, distance, cap,
         -- et projection ecran (pour viser en boucle fermee). 6 plus proches.
         local enemies = nil
+        local foes = nil                 -- nombre total d hostiles vivants (hors police), avant la troncature a 6
         -- UNE seule methode, verifiee en jeu : TSQ_EnemyNPC (GetHostileThreats renvoyait vide en
         -- combat -> V ne voyait aucune cible et ne faisait que se soigner, 2026-09-10 20:18).
         -- Portee 60 m en combat, 40 m hors combat. Diagnostic journalise si vide en combat.
@@ -1287,11 +1296,24 @@ registerForEvent('onUpdate', function(dt)
                                 rec.sx, rec.sy = sc.x, sc.y
                             end)
                             pcall(function() rec.dead = ent:IsDead() end)
+                            if not rec.dead then pcall(function() if hudDown(ent) then rec.down = true end end) end   -- assomme
                             pcall(hudNote, key, ent, rec.dead)
                             list[#list + 1] = rec
                         end
                     end
-                    table.sort(list, function(a, b) return a.d < b.d end)
+                    local nA, nA45, nP = 0, 0, 0
+                    for _, r in ipairs(list) do
+                        if not r.dead and not r.down then
+                            if r.police then nP = nP + 1
+                            else
+                                nA = nA + 1
+                                -- a < 45 m ET au meme etage (meme regle que le planificateur : |dz| < 3.5)
+                                if r.d < 45 and math.abs((r.z or pos.z) - pos.z) < 3.5 then nA45 = nA45 + 1 end
+                            end
+                        end
+                    end
+                    foes = { n = nA, n45 = nA45, np = nP }
+                    table.sort(list, enemyOrder)
                     while #list > 6 do table.remove(list) end
                     if #list > 0 then enemies = list end
                 end
@@ -1754,13 +1776,23 @@ registerForEvent('onUpdate', function(dt)
         table.sort(bodies, function(a, b) return a.d < b.d end)
         while #bodies > 8 do table.remove(bodies) end
         if #bodies == 0 then bodies = nil end
+        if os.clock() - resT > 0.25 then
+            resT = os.clock()
+            local sps = Game.GetStatPoolsSystem()
+            local r = {}
+            for k, pool in pairs({ heal = 'HealingItemsCharges', gren = 'GrenadesCharges', proj = 'ProjectileLauncherCharges' }) do
+                pcall(function() r[k] = math.floor(sps:GetStatPoolValue(id, gamedataStatPoolType[pool], false) + 0.01) end)
+            end
+            resCache = next(r) and r or nil
+            if resCache and not resLogged then resLogged = true; pcall(function() journal('RES ' .. json.encode(resCache)) end) end
+        end
         local ramNow = nil
         pcall(function() ramNow = math.floor(Game.GetStatPoolsSystem():GetStatPoolValue(id, gamedataStatPoolType.Memory, false) * 10 + 0.5) / 10 end)
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(), ram = ramNow,
                  hp = hp, dead = isDead, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
                  lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, summon = summon, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
-                 enemies = enemies, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, ftLoading = ftLoading, seqEnd = seq }
+                 enemies = enemies, foes = foes, res = resCache, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, ftLoading = ftLoading, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)
     if ok and data then
