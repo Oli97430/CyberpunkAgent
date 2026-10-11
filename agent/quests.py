@@ -82,6 +82,96 @@ def track(hash_: int) -> bool:
 
 LEVEL_MARGIN = 2                # une quete est « de son niveau » si niveau recommande <= niveau de V + 2
 
+# 24/09 : marqueurs STERILES memorises d une session a l autre (V revisitait 17-18 fois les memes marqueurs vides :
+# ~283 min de revisites sur le journal). Exclusion croissante a chaque visite sterile de suite ; une visite utile remet
+# a zero.
+MEMORY_FILE = CFG.log_file.parent / 'markers_memory.json'
+BACKOFF_S = (900.0, 3600.0, 4 * 3600.0, 16 * 3600.0, 72 * 3600.0)
+_mem: dict | None = None
+
+
+def _mem_load() -> dict:
+    global _mem
+    if _mem is None:
+        try:
+            d = json.loads(MEMORY_FILE.read_text(encoding='utf-8'))
+            _mem = d if isinstance(d, dict) else {}
+        except Exception:
+            _mem = {}
+    return _mem
+
+
+def _mkey(text, x: float, y: float, z=None) -> str:
+    zc = round(float(z) / 3.0) if isinstance(z, (int, float)) else '?'
+    return f'{text}|{round(float(x) / 2.0)},{round(float(y) / 2.0)},{zc}'
+
+
+def _find(text, x: float, y: float, z=None) -> str:
+    """Cle memorisee du marqueur : meme cellule (2 m, etage), sinon meme variante a moins de 2,5 m et meme etage
+    (bord de cellule ; des marqueurs distincts a 3-10 m l un de l autre ne doivent pas se confondre)."""
+    m = _mem_load()
+    k = _mkey(text, x, y, z)
+    if k in m:
+        return k
+    for kk, e in m.items():
+        try:
+            if not (isinstance(e, dict) and e.get('text') == text and math.hypot(float(e['x']) - x, float(e['y']) - y) < 2.5):
+                continue
+            if isinstance(z, (int, float)) and isinstance(e.get('z'), (int, float)) and abs(e['z'] - z) >= 3.0:
+                continue
+            return kk
+        except (KeyError, TypeError, ValueError):
+            continue
+    return k
+
+
+def marker_wait(q: dict, now: float | None = None) -> float:
+    """Secondes restantes d exclusion d un marqueur juge sterile (0 = libre)."""
+    if q.get('x') is None or q.get('y') is None:
+        return 0.0
+    e = _mem_load().get(_find(q.get('text'), float(q['x']), float(q['y']), q.get('z')))
+    if not isinstance(e, dict):
+        return 0.0
+    try:
+        return max(0.0, float(e.get('until') or 0) - (time.time() if now is None else now))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def marker_result(text, x: float, y: float, useful: bool, why: str = '', z=None, log=print) -> None:
+    """Bilan d une visite de marqueur choisi par V : utile (remise a zero) ou sterile (exclusion croissante)."""
+    if x is None or y is None:
+        return
+    m = _mem_load()
+    k = _find(text, float(x), float(y), z)
+    e = m.get(k) if isinstance(m.get(k), dict) else {}
+    e['text'], e['x'], e['y'] = text, round(float(x), 1), round(float(y), 1)
+    if isinstance(z, (int, float)):
+        e['z'] = round(float(z), 1)
+    now = time.time()
+    e['visits'] = int(e.get('visits') or 0) + 1 if str(e.get('visits') or 0).isdigit() else 1
+    e['t'] = now
+    if useful:
+        e['streak'] = 0; e['until'] = 0; e['last'] = 'utile'
+        log(f'  [quetes] marqueur « {text} » ({x:.0f},{y:.0f}) : visite utile ({why})')
+    else:
+        try:
+            n = int(e.get('streak') or 0) + 1
+        except (TypeError, ValueError):
+            n = 1
+        wait = BACKOFF_S[min(n, len(BACKOFF_S)) - 1]
+        e['streak'] = n; e['until'] = now + wait; e['last'] = 'sterile'
+        log(f'  [quetes] marqueur « {text} » ({x:.0f},{y:.0f}) sans interet ({why}, {n}x de suite) : ignore '
+            + (f'{wait / 3600:.0f} h' if wait >= 3600 else f'{wait / 60:.0f} min'))
+    m[k] = e
+    if len(m) > 500:                                             # purge : les 300 plus recents
+        for old in sorted(m, key=lambda kk: float((m[kk] or {}).get('t') or 0) if isinstance(m[kk], dict) else 0)[:len(m) - 300]:
+            m.pop(old, None)
+    try:
+        MEMORY_FILE.write_text(json.dumps(m, ensure_ascii=False), encoding='utf-8')
+    except Exception as ex:
+        log(f'  [quetes] memoire des marqueurs non sauvee : {ex}')
+
 
 def pick_next(quests: list[dict], current_hash: int | None = None, player_level: int | None = None, prefer_givers: bool = False) -> dict | None:
     """Objectif de son NIVEAU d abord (niveau recommande connu et <= niveau de V + 2), puis le plus proche ;
@@ -90,6 +180,7 @@ def pick_next(quests: list[dict], current_hash: int | None = None, player_level:
              if q.get('hasMappin') and q.get('dist') is not None
              and time.perf_counter() - _blocked.get(int(q['hash']), -1e9) > BLOCKED_S and q['hash'] != current_hash
              and q['dist'] >= 8.0 and time.perf_counter() - _visited.get(int(q['hash']), -1e9) > 900.0
+             and marker_wait(q) <= 0.0
              and not near_danger(q['x'], q['y'])]
     if not cands:
         return None

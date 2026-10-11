@@ -321,6 +321,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     vendor_fail_streak = 0
     last_drive_t = -999.0
     ft_tried: dict = {}             # cible (cellule de 50 m) -> heure du dernier voyage rapide tente vers elle
+    marker_watch = None             # arrivee sur un marqueur choisi par V : observee 60 s (utile ou sterile ?)
     inter_tries: dict = {}          # (titre, choix, zone) -> (essais, ignore_jusqu_a)
     alt_target = None               # marqueur de quete choisi par V (x, y, texte, t0) quand l objectif suivi est bloque
     approached: dict = {}           # (nom, zone) -> heure : PNJ deja abordes (pas de harcelement pendant 5 min)
@@ -473,6 +474,23 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 st = motion.read_state()
                 if st is None:
                     stats['attentes'] += 1; time.sleep(0.5); continue
+                # 24/09 : bilan d une arrivee sur un marqueur choisi par V (memoire persistante des marqueurs steriles).
+                # Evenement compte seulement pres du marqueur ; temps observe cumule (pas le temps mural : pauses et
+                # competences longues ne comptent pas) ; V reparti loin sans resultat = sterile.
+                if marker_watch is not None:
+                    _mw = marker_watch
+                    _now = time.perf_counter()
+                    _mw['seen'] += min(5.0, max(0.0, _now - _mw['last'])); _mw['last'] = _now
+                    _dm = math.hypot(st['x'] - _mw['x'], st['y'] - _mw['y'])
+                    _ch = (st.get('dialog') or {}).get('choices') or []
+                    _why = ''
+                    if _dm < 20.0:
+                        _why = ('dialogue' if (len(_ch) >= 2 or (_ch and _mw['used'])) else 'combat' if st.get('combat')
+                                else 'objectif change' if (st.get('quest') or {}).get('text') != _mw['quest'] else '')
+                    if _why or _dm > 30.0 or _mw['seen'] > 60.0:
+                        quests.marker_result(_mw['text'], _mw['x'], _mw['y'], bool(_why),
+                                             _why or ('reparti sans resultat' if _dm > 30.0 else 'rien en 60 s'), z=_mw.get('z'), log=_log)
+                        marker_watch = None
 
                 # 0a0. DIRECTIVE recue (jeu ou Telegram) : V est redirige en direct, sans attendre qu il ait fini
                 # (ordres notes pendant la pause / hors premier plan d abord : deja compris)
@@ -1085,11 +1103,25 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 if alt_target is not None:
                     dist = math.hypot(st['x'] - alt_target['x'], st['y'] - alt_target['y'])
                     if dist < ARRIVE_M or time.perf_counter() - alt_target['t0'] > 900:
+                        _used = None
                         if dist < ARRIVE_M and not st.get('combat') and not ((st.get('interact') or {}).get('choices')):
+                            _used = False
                             if _approach_machine(alt_target['x'], alt_target['y'], dist, _log, stop):   # console / donneur de quete
                                 stats['interactions'] += 1
                                 last_close_t = time.perf_counter()
                                 time.sleep(1.5)
+                                _used = True
+                        # 24/09 : bilan du marqueur (seulement ceux de quete choisis par V, pas exploration / directive) :
+                        # toujours observe (une invite visible, ex. porte « Forcer » sans effet, ne prouve rien) ;
+                        # « jamais atteint en 15 min » n est pas penalise (pauses, courses, combats faussent le delai)
+                        if str(alt_target.get('text') or '').endswith('Variant') and dist < ARRIVE_M \
+                                and not (stop is not None and stop.is_set()):
+                            if marker_watch is not None:                # grappe de marqueurs : on clot l observation en cours
+                                _pw = marker_watch
+                                quests.marker_result(_pw['text'], _pw['x'], _pw['y'], False, 'reparti sans resultat', z=_pw.get('z'), log=_log)
+                            marker_watch = {'text': alt_target.get('text'), 'x': alt_target['x'], 'y': alt_target['y'],
+                                            'z': alt_target.get('z'), 'seen': 0.0, 'last': time.perf_counter(),
+                                            'used': bool(_used), 'quest': (st.get('quest') or {}).get('text')}
                         _log('cible alternative atteinte ou expiree : retour a la quete suivie')
                         quests.mark_visited(alt_target.get('hash'))
                         alt_target = None
@@ -1297,10 +1329,17 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 if action == 'changer_quete':
                     nxt = quests.switch(q.get('hash') if alt_target is None else alt_target.get('hash'), log=_log)
                     if nxt:
-                        alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                        alt_target = {'x': nxt['x'], 'y': nxt['y'], 'z': nxt.get('z'), 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
                         stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                         plan.note('a change de cible')
                         plan.last_t = -99.0; plan.action = 'objectif'     # forcer une nouvelle decision (3 changements en 3 s sinon)
+                        time.sleep(1.0); continue
+                    # 24/09 : plus aucun marqueur accessible (steriles exclus, bloques...) -> exploration plutot qu attendre
+                    nxe = explore.pick(log=_log)
+                    if nxe:
+                        alt_target = {'x': nxe['x'], 'y': nxe['y'], 'text': nxe.get('text'), 'hash': nxe.get('hash'), 't0': time.perf_counter()}
+                        stats['explorations'] = stats.get('explorations', 0) + 1
+                        plan.last_t = -99.0; plan.action = 'objectif'
                         time.sleep(1.0); continue
                     action = 'attendre'
 
