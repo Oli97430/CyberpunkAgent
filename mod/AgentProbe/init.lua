@@ -968,22 +968,35 @@ local function qhShort(s)
     if s == '' or s == 'nil' or s:find('^userdata') then return nil end
     return (s:gsub('^QuickHack%.', ''))
 end
+local function qhField(q, name)
+    -- 12/10 (releve QHPOPDUMP en jeu, 3.0.80) : les champs s appellent title, cost, isLocked... SANS prefixe m_
+    -- (noms des scripts 2.x) ; on essaie les deux
+    local v = nil
+    pcall(function() v = q[name] end)
+    if v == nil then pcall(function() v = q['m_' .. name] end) end
+    return v
+end
 local function qhFromData(q, i)
-    -- 24/09 : QuickhackData du panneau (m_title, m_action, m_cost, m_isLocked...). La liste en cache ne donnait que
+    -- 24/09 : QuickhackData du panneau (title, action, cost, isLocked...). La liste en cache ne donnait que
     -- des handles illisibles (« userdata: 0x... ») : V hachait au hasard (141 « par defaut » le 23/09).
     local r = { i = i }
-    pcall(function() r.action = qhShort(TDBID.ToStringDEBUG(q.m_action:GetObjectActionID())) end)
-    if not r.action then pcall(function() r.action = qhShort(TDBID.ToStringDEBUG(q.m_action:GetObjectActionRecord():GetID())) end) end
+    local act = qhField(q, 'action')
+    pcall(function() r.action = qhShort(TDBID.ToStringDEBUG(act:GetObjectActionID())) end)
+    if not r.action then pcall(function() r.action = qhShort(TDBID.ToStringDEBUG(act:GetObjectActionRecord():GetID())) end) end
     pcall(function()
-        local raw = tostring(q.m_title or '')
+        local raw = tostring(qhField(q, 'title') or '')
         local t = GetLocalizedText(raw)
         if not t or t == '' then t = raw end
         if t ~= '' and t ~= 'nil' and not t:find('^ToCName') then r.title = t:sub(1, 28) end
     end)
-    pcall(function() r.cost = tonumber(q.m_cost) end)
-    pcall(function() if q.m_isLocked then r.locked = true end end)
+    pcall(function() r.cost = tonumber(qhField(q, 'cost')) end)
+    pcall(function() if qhField(q, 'isLocked') == true then r.locked = true end end)
+    pcall(function()                                -- DeviceQuickHack / PuppetQuickHack : en combat, les hacks d appareil ne servent a rien
+        local k = tostring(qhField(q, 'type') or ''):gsub('^.-: ', ''):gsub(' %(%d+%)', '')
+        if k ~= '' and k ~= 'nil' then r.kind = k end
+    end)
     pcall(function()
-        local rs = tostring(q.m_inactiveReason or '')
+        local rs = tostring(qhField(q, 'inactiveReason') or '')
         if rs ~= '' and rs ~= 'nil' then r.why = (GetLocalizedText(rs) or rs):sub(1, 24) end
     end)
     return r

@@ -56,7 +56,7 @@ def quickhack_first(slot: int = 0) -> None:
 HACK_PRIORITY = (('cyberpsycho', 'madness'), ('suicide',), ('systemcollapse', 'systemreset', 'reinitialisation'),
                  ('overheat', 'surchauffe'), ('shortcircuit', 'empoverload', 'courtcircuit'), ('contagion',),
                  ('synapse', 'brainmelt', 'synaptique'), ('detonate', 'grenadeexplode', 'grenade'),
-                 ('weaponmalfunction', 'malfunction', 'defaillance', 'enrayage'), ('cripple', 'locomotion', 'paralysie'),
+                 ('weaponmalfunction', 'weaponglitch', 'defaillance', 'enrayage'), ('cripple', 'locomotion', 'paralysie'),
                  ('rebootoptics', 'blind', 'redemarrage'), ('memorywipe', 'effacement'), ('whistle', 'sifflement'),
                  ('ping',))
 
@@ -68,6 +68,10 @@ def _norm(s: str) -> str:
 
 
 def _hack_score(h: dict) -> int:
+    # 12/10 : hack d APPAREIL (DeviceAction.*, ex. « Distraire les ennemis » d un distributeur) = sans interet en
+    # combat ; il etait choisi 26 fois sur 27 (mot-cle « malfunction » de DeviceAction.MalfunctionClassHack)
+    if 'device' in _norm(h.get('kind') or '') or str(h.get('action') or '').startswith('DeviceAction.'):
+        return -1
     t = _norm(h.get('action') or '') + ' ' + _norm(h.get('title') or '')
     for rank, kws in enumerate(HACK_PRIORITY):
         if any(kw in t for kw in kws):
@@ -115,6 +119,11 @@ def quickhack_best(log=print) -> str | None:
             kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
             return 'ram'
         chosen = max(usable, key=_hack_score)
+        if _hack_score(chosen) < 0:
+            # 12/10 : rien que des hacks d APPAREIL (« Distraire les ennemis » d un distributeur...) : inutile en combat
+            log(f"  [combat] quickhacks : seulement des hacks d appareil ({chosen.get('title') or chosen.get('action')}) : panneau referme")
+            kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
+            return 'aucun'
     if chosen is None:
         # liste indisponible : hack surligne par defaut (comportement a l aveugle)
         kbm.act('ui_confirm', 0.1); time.sleep(0.25)
@@ -450,9 +459,9 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
                 if tgt is not e:
                     aim_at(tgt, st)
                 title = quickhack_best(log=log)
-                if title == 'ram':
+                if title in ('ram', 'aucun'):
                     hacks_done = max_hacks; t_hack0 = time.perf_counter(); seq = None
-                    log('  [combat] RAM insuffisante : pas de hack d ouverture, on engage')
+                    log('  [combat] ' + ('RAM insuffisante' if title == 'ram' else 'aucun hack offensif') + ' : pas de hack d ouverture, on engage')
                     continue
                 hacks_done += 1; hacked = True; t_hack0 = time.perf_counter(); seq = None
                 log(f"  [combat] hack d ouverture « {title or 'par defaut'} » sur cible a {tgt['d']:.0f} m ({hacks_done}/{max_hacks})")
@@ -707,8 +716,8 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                         aim_at(tgt, st)
                     title = quickhack_best(log=log)
                     t_hack = time.perf_counter()                        # le delai court APRES le hack (il dure ~4 s)
-                    if title == 'ram':
-                        log('  [combat] quickhack : RAM insuffisante, on tire'); seq = None; continue
+                    if title in ('ram', 'aucun'):
+                        log('  [combat] quickhack : ' + ('RAM insuffisante' if title == 'ram' else 'aucun hack offensif') + ', on tire'); seq = None; continue
                     stats['quickhacks'] += 1
                     if title and str(title).startswith('userdata'):
                         title = None
@@ -743,8 +752,8 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                     aim_at(tgt, st); e = tgt
                 title = quickhack_best(log=log)
                 t_hack = time.perf_counter()
-                if title == 'ram':
-                    log('  [combat] quickhack : RAM insuffisante'); seq = None; continue
+                if title in ('ram', 'aucun'):
+                    log('  [combat] quickhack : ' + ('RAM insuffisante' if title == 'ram' else 'aucun hack offensif')); seq = None; continue
                 stats['quickhacks'] += 1
                 if title and not str(title).startswith('userdata'):
                     blind_hacks = 0
