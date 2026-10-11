@@ -102,6 +102,19 @@ def mod_is_stale() -> str | None:
 def play(minutes: float, wait_forever: bool = False) -> bool:
     """Renvoie True si F12 (arret demande par le joueur) a mis fin a la session."""
     from agent import brain, dialog, input_kbm as kbm
+    vr = CFG.vr_mode()
+    if vr:
+        # 12/10 : l agent joue a plat seulement (30/09 : 12 min avec V immobile en mode VR) ; True = comme F12,
+        # le mode --loop s arrete au lieu de relancer sans fin
+        msg = f'MODE VR ACTIF ({vr}) : V ne joue qu a plat. Lance VR-OFF.bat (dossier du jeu), puis relance V.'
+        print('\n  !!! ' + msg, flush=True)
+        try:
+            from agent import remote
+            remote.notify(msg)
+        except Exception:
+            pass
+        time.sleep(6)
+        return True
     stale = mod_is_stale()
     if stale:
         print(f'\n  !!! {stale}\n'); time.sleep(4)

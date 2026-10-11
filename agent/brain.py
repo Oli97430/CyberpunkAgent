@@ -411,6 +411,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                      for m in ('brain', 'combat', 'planner', 'motion'))
     _write_diag()
     _log(f'=== cerveau v1 demarre ({duration_s:.0f} s max) | code : {stamp} ===')
+    _vr = CFG.vr_mode()
+    if _vr:
+        _log(f'MODE VR ACTIF ({_vr}) : l agent joue a plat seulement -- VR-OFF.bat puis relancer V. Session annulee.')
+        stats['vr'] = True
+        return stats
     remote.ensure_started(log=_log)
     remote.bind(hard_stop, pause)          # stop / pause / reprendre Telegram appliques des reception
     # 23/09 : config EFFECTIVE et source de chaque reglage (le panneau CET ecrasait le panneau Windows en silence)
@@ -430,10 +435,23 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     # auto-test : V bouge-t-il ? (touche avant 0,6 s) -> detecte tout de suite un blocage d entree
     s0 = motion.read_state()
     if s0 and kbm.game_focused():
-        kbm.hold('W'); time.sleep(0.6); kbm.release('W'); time.sleep(0.3)
-        s1 = motion.read_state() or s0
-        moved = math.hypot(s1['x'] - s0['x'], s1['y'] - s0['y'])
+        moved = 0.0
+        for _try in range(3):                      # 12/10 : 3 essais (menu qui se ferme, animation qui finit...)
+            s0 = motion.read_state() or s0
+            kbm.hold('W'); time.sleep(0.6); kbm.release('W'); time.sleep(0.3)
+            s1 = motion.read_state() or s0
+            moved = math.hypot(s1['x'] - s0['x'], s1['y'] - s0['y'])
+            if moved > 0.3:
+                break
+            if _try < 2:
+                time.sleep(2.0)
         _log(f"auto-test deplacement : {moved:.2f} m en 0,6 s -> {'OK' if moved > 0.3 else 'V NE BOUGE PAS (menu ? animation ? touche ?)'}")
+        _busy = (s0.get('dialog') or {}).get('choices') or s0.get('scene') or s0.get('vehicle') or s0.get('menu')
+        if moved <= 0.3 and not _busy and pause is not None:
+            # 30/09 16:21 : la session a tourne 12 min a vide (V immobile) avant un F12
+            _log('auto-test : V ne bouge toujours pas apres 3 essais -> PAUSE ; debloque le jeu puis F11 ou « reprendre »')
+            remote.notify('V ne bouge pas au demarrage (3 essais) : mis en pause. Debloque le jeu, puis F11 ou « reprendre ».')
+            pause.set()
 
     crashes = 0
     try:

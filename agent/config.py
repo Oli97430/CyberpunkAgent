@@ -209,6 +209,20 @@ class Config:
         self.log_file = DATA_DIR / 'brain_log.txt'
         self.deaths_file = DATA_DIR / 'deaths.json'
 
+    def vr_mode(self) -> str | None:
+        """12/10 : l agent joue a PLAT seulement. Mode VR actif (bascule VR-ON.bat ou plugin du VR port present dans
+        le jeu) -> raison, sinon None. 30/09 16:21 : 12 min de session avec V immobile en mode VR."""
+        if not self.game_dir:
+            return None
+        try:
+            if (self.game_dir / '_VR_TOGGLE' / 'etat.txt').read_text(encoding='ascii').strip() == 'vr':
+                return 'bascule VR-ON active'
+        except Exception:
+            pass
+        if (self.game_dir / 'red4ext' / 'plugins' / 'CyberpunkVR_Stereo' / 'CyberpunkVR_Stereo.dll').exists():
+            return 'plugin VR (CyberpunkVR_Stereo) present'
+        return None
+
     def source(self, key: str) -> str:
         """D ou vient la valeur effective d un reglage ('features.<nom>' pour un comportement)."""
         if key in self.live:
