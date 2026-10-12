@@ -616,6 +616,27 @@ def swap_ranged(key: str, log=print, why: str = '') -> bool:
     return True
 
 
+def gunfu_weapon(alive, st) -> str | None:
+    """12/10 succes « Gun Fu » (dataTrackingSystem.script:644) : 3 eliminations au pistolet / revolver en 3,5 s, chacune a
+    < 7,5 m. Si 3 humains visibles sont a < 7 m et V a au moins 50 % de vie : la cle du meilleur pistolet / revolver."""
+    try:
+        from . import achievements as _ach
+        if 'GunKata' in (_ach._STATE.get('unlocked') or set()):
+            return None
+    except Exception:
+        pass
+    hp = (st or {}).get('hp')
+    if isinstance(hp, (int, float)) and hp < 50:
+        return None
+    close = [x for x in alive if _kind(x) == 'human' and not x.get('police') and x.get('d') is not None and x['d'] < 7.0
+             and x.get('los') is not False]
+    if len(close) < 3:
+        return None
+    guns = [((w.get('dps') or 0), k) for k, w in ARSENAL.items()
+            if FAMILY.get(w.get('type') or '') == 'pistol' and (w.get('ammo') is None or w['ammo'] > 0) and w.get('eq_ok') is not False]
+    return max(guns)[1] if guns else None
+
+
 def prepare_ranged(alive, st, log=print) -> None:
     """Avant de degainer RANGED_SLOT (V tient encore la melee) : y range la meilleure arme pour CES ennemis."""
     if not ARSENAL or not RANGED_SLOT:
@@ -794,6 +815,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     mode = 'melee'; shots = 0
     blocked_t, blocked_log_t = None, -99.0   # 12/10 : pas de ligne de tir depuis... / dernier message
     adv_t0, adv_d0, adv_block = None, 0.0, -1.0   # 12/10 : pompe hors de portee (avance verifiee)
+    gunfu_until, gunfu_t = -1.0, -99.0            # 12/10 : mode Gun Fu (succes) : jusqu a / dernier essai
     dry, dry_until, t_reload = 0, -1.0, -99.0     # 12/10 : chargeur vide sans reserve -> corps a corps
     hack_i = 0
     last_hp, last_hp_t = None, time.perf_counter()
@@ -988,15 +1010,26 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 rmin, rback = 8.0, 5.0
             else:
                 rmin, rback = RANGED_MIN_M, RANGED_BACK_M  # melee : arme a feu seulement loin / en hauteur
-            want_ranged = RANGED_SLOT is not None and now >= dry_until and (high or rmin < e['d'] < RANGED_MAX_M)
+            # 12/10 succes « Gun Fu » : 3 humains a < 7 m -> pistolet / revolver, 8 s de tirs rapproches (une fois / min)
+            gf_key = None
+            if RANGED_SLOT is not None and mode != 'ranged' and now >= gunfu_until and now - gunfu_t > 60.0 and now >= dry_until:
+                gf_key = gunfu_weapon(alive, st)
+                if gf_key:
+                    gunfu_t = now
+                    if gf_key == RANGED_KEY or swap_ranged(gf_key, log, why=' (Gun Fu)'):
+                        gunfu_until = now + 8.0
+                        log(f"  [succes] Gun Fu : {sum(1 for x in alive if x['d'] < 7.0)} ennemis a < 7 m -> « {(ARSENAL.get(gf_key) or {}).get('name')} » 8 s")
+            gunfu = now < gunfu_until
+            want_ranged = RANGED_SLOT is not None and now >= dry_until and (gunfu or high or rmin < e['d'] < RANGED_MAX_M)
             if want_ranged and mode != 'ranged':
-                prepare_ranged(alive, st, log)                     # 12/10 : arme adaptee aux ennemis, avant de degainer
+                if not gunfu:
+                    prepare_ranged(alive, st, log)                 # 12/10 : arme adaptee aux ennemis, avant de degainer
                 if draw_slot(RANGED_SLOT, False):
                     mode = 'ranged'; shots = 0; time.sleep(0.3)
                 else:
                     wsync_fail += 1                                    # l arme a feu ne sort pas : on reste melee et on fonce
                 log(f"  [combat] arme a distance (cible a {e['d']:.0f} m{', en hauteur' if high else ''})")
-            elif mode == 'ranged' and ((e['d'] <= rback and not high) or now < dry_until):
+            elif mode == 'ranged' and not gunfu and ((e['d'] <= rback and not high) or now < dry_until):
                 draw_slot(MELEE_SLOT, True); mode = 'melee'; time.sleep(0.4)
                 log('  [combat] retour au corps a corps')
             # l arme REELLEMENT tenue (export du mod) : si elle ne correspond pas au mode, on corrige (la touche
