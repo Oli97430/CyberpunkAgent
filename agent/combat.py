@@ -94,6 +94,7 @@ def _hack_score(h: dict) -> int:
     return 0
 
 
+_QH_NOPEN = [0, -1e9]      # 12/10 : panneaux jamais ouverts de suite / heure du dernier (11 essais en 1 min sur une tourelle)
 _min_cost = [None, -1e9]   # (cout du hack le moins cher du dernier panneau lisible, heure) : RAM trop basse -> on n ouvre pas
 
 
@@ -160,6 +161,9 @@ def quickhack_best(log=print, want=None) -> str | None:
         la = (st_q or {}).get('lookat') or {}
         why = 'panneau jamais ouvert' if not qh else ('panneau ouvert sans liste' if not qh.get('list') else f"liste illisible ({len(qh['list'])} entrees)")
         log(f"  [combat] quickhacks : {why} ; reticule {la.get('cls')} a {float(la.get('d') or 0):.0f} m : referme sans hacker")
+        if not qh:
+            _QH_NOPEN[0] = (_QH_NOPEN[0] + 1) if time.perf_counter() - _QH_NOPEN[1] < 60.0 else 1
+            _QH_NOPEN[1] = time.perf_counter()
         kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
         return None
     # amener la selection sur le hack choisi (molette) : sens choisi d apres le rang du hack surligne
@@ -826,7 +830,13 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
                         continue
                 elif tgt is not e:
                     aim_at(tgt, st)
+                if _QH_NOPEN[0] >= 2 and time.perf_counter() - _QH_NOPEN[1] < 60.0:
+                    hacks_done = max_hacks; t_hack0 = time.perf_counter(); seq = None   # 12/10 : panneau qui ne s ouvre pas
+                    log('  [combat] le panneau de quickhack ne s ouvre pas ici : pas de hack d ouverture pendant 60 s, on engage')
+                    continue
                 title = quickhack_best(log=log)
+                if title and title not in ('ram', 'aucun'):
+                    _QH_NOPEN[0] = 0
                 if title in ('ram', 'aucun'):
                     hacks_done = max_hacks; t_hack0 = time.perf_counter(); seq = None
                     log('  [combat] ' + ('RAM insuffisante' if title == 'ram' else 'aucun hack offensif') + ' : pas de hack d ouverture, on engage')
