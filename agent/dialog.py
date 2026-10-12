@@ -183,8 +183,12 @@ def answer_once(stop=None, log=print) -> dict | None:
         tried.clear()
     t0 = time.perf_counter()
     idx, source = None, 'modele'
+    lp = [int(k) - 1 for k in (d.get('lp') or []) if isinstance(k, (int, float)) and int(k) - 1 in allowed]
     if len(allowed) == 1:
         idx, source = allowed[0], 'seul choix possible'
+    elif lp:
+        # 12/10 : succes « Methode de Stanislavski » (10 choix lies au parcours de V) : la ligne de parcours d abord
+        idx, source = lp[0], 'parcours de vie (succes)'
     else:
         sub = [choices[i] for i in allowed]
         k = llm_choice(title, sub)

@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, travel, vendor
+from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, travel, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -518,6 +518,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     # 23/09 : config EFFECTIVE et source de chaque reglage (le panneau CET ecrasait le panneau Windows en silence)
     _log(f'config : {CFG.summary()}')
     _log(f'transport : {travel.summary()}')
+    achievements.start(log=_log)                    # 12/10 : succes Steam (lecture seule du cache local)
     for w in CFG.warnings:
         _log(f'  [config] ATTENTION : {w}')
     if CFG.provider == 'ollama':
@@ -932,6 +933,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 # 0a4b. 12/10 V FIGE PAR LE JEU (workspot de scene) : on laisse la scene se derouler (la scene Takemura
                 # demandait 88 s) ; ni touche ni voyage (la teleportation la cassait : V fige 15 min le 12/10) ; puis
                 # sorties de workspot par le mod, puis pause + Telegram
+                achievements.tick(log=_log, notify=remote.notify)   # 12/10 : succes debloques (toutes les 5 min)
                 lock = motion.game_lock(st)
                 if lock and not (st.get('dialog') or {}).get('choices') and not st.get('combat'):
                     now_l = time.perf_counter()

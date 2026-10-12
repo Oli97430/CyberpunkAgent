@@ -338,6 +338,24 @@ function AgentDriveCtx(inVeh)
     return o
 end
 
+-- 12/10 SUCCES « Methode de Stanislavski » : un choix de dialogue lie au PARCOURS DE V (LifePathBluelinePart dans la
+-- legende du choix, bluelineBuilder.script:7) ; lecture seule
+function AgentLifePath(c)
+    local found = false
+    pcall(function()
+        for _, p in ipairs(c.captionParts.parts or {}) do
+            local bl = nil
+            pcall(function() bl = p.blueline end)
+            if bl then
+                for _, bp in ipairs(bl.parts or {}) do
+                    local ok, isLP = pcall(function() return bp:IsA('LifePathBluelinePart') end)
+                    if ok and isLP then found = true end
+                end
+            end
+        end
+    end)
+    return found
+end
 -- 12/10 V FIGE PAR LE JEU (globales, aucune upvalue) : workspot (Locomotion natif 9), tier de scene (HighLevel 1-5), effets
 -- de restriction. Valeurs natives lues dans tools/redmod/metadata.json (l ordre de psmImports.script donnerait 8).
 AGENT_FRZ_TAGS = { 'NoMovement', 'NoCameraControl', 'FastForward', 'NoJump', 'NoWorldInteractions' }
@@ -1501,9 +1519,12 @@ registerForEvent('onUpdate', function(dt)
                     local inactive = false
                     pcall(function() inactive = ChoiceTypeWrapper.IsType(c.type, gameinteractionsChoiceType.Inactive) end)
                     inactiveList[#inactiveList + 1] = inactive and 1 or 0
+                    local okL, isLP = pcall(AgentLifePath, c)                 -- 12/10 : ligne de parcours de vie
+                    if okL and isLP then inactiveList.lp = inactiveList.lp or {}; inactiveList.lp[#inactiveList.lp + 1] = #list end
                 end
             end
-            dlg = { title = tostring(hubs.choiceHubs[1].title), choices = list, inactive = inactiveList,
+            local lpIdx = inactiveList.lp; inactiveList.lp = nil
+            dlg = { title = tostring(hubs.choiceHubs[1].title), choices = list, inactive = inactiveList, lp = lpIdx,
                     sel = ui:GetInt(defs.UIInteractions.SelectedIndex), hubs = #hubs.choiceHubs }
         end
         -- invite d interaction dans le monde ("Parler", "Ouvrir"...) : hub unique
