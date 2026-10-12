@@ -2755,6 +2755,39 @@ local function handleCommand(player, cmd)
         resp.ok, resp.price, resp.total, resp.qty = true, price, total, qty
         journal(string.format('OK   sell : %d x -> %d eddies', qty, total))
         return resp
+    elseif cmd.cmd == 'devices_near' then
+        -- 12/10 succes « Surement des rats » : appareils PIRATABLES a moins de x m (leurres « Distraire les ennemis »),
+        -- avec position ecran pour viser
+        local q = Game['TSQ_ALL;']()
+        q.maxDistance = tonumber(cmd.x) or 25.0
+        q.filterObjectByDistance = true
+        pcall(function() q.testedSet = TargetingSet.Complete end)
+        local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
+        local pos, cam, out, seen = player:GetWorldPosition(), Game.GetCameraSystem(), {}, {}
+        if okT and parts then
+            for i = 1, #parts do
+                local comp = TS_TargetPartInfo.GetComponent(parts[i])
+                local ent = comp and comp:GetEntity() or nil
+                local okD, isD = false, false
+                if ent then okD, isD = pcall(function() return ent:IsA('gameDevice') or ent:IsA('Device') end) end
+                if okD and isD then
+                    local key = tostring(ent)
+                    pcall(function() key = tostring(ent:GetEntityID().hash) end)
+                    local qh = false
+                    pcall(function() qh = ent:IsQuickHackAble() end)
+                    if qh and not seen[key] and #out < 12 then
+                        seen[key] = true
+                        local p = ent:GetWorldPosition()
+                        local rec = { x = p.x, y = p.y, z = p.z, d = math.sqrt((p.x - pos.x) ^ 2 + (p.y - pos.y) ^ 2) }
+                        pcall(function() rec.name = GetLocalizedText(tostring(ent:GetDisplayName())) end)
+                        pcall(function() local s2 = cam:ProjectPoint(Vector4.new(p.x, p.y, p.z + 0.5, 1.0)); rec.sx, rec.sy = s2.x, s2.y end)
+                        out[#out + 1] = rec
+                    end
+                end
+            end
+        end
+        resp.ok, resp.devices = true, out
+        return resp
     elseif cmd.cmd == 'vendor_locate' then
         -- 12/10 : le VRAI marchand dans un rayon x (le marqueur de carte est a l entree ; le charcudoc est dedans / en bas)
         local v = findNearbyVendor(player, tonumber(cmd.x) or 40.0)

@@ -102,7 +102,7 @@ def _readable(h: dict) -> bool:
     return bool((a and not a.startswith('userdata')) or (t and not t.startswith('userdata')))
 
 
-def quickhack_best(log=print) -> str | None:
+def quickhack_best(log=print, want=None) -> str | None:
     """Ouvre le panneau sur la cible visee, lit la liste (blackboard), choisit le meilleur hack
     utilisable (non verrouille, RAM suffisante), fait defiler jusqu a ce qu il soit SURLIGNE
     (boucle fermee sur qh.sel), applique (F), ferme (Retour arriere). Renvoie le titre applique.
@@ -136,8 +136,17 @@ def quickhack_best(log=print) -> str | None:
             log(f"  [combat] quickhacks : rien d utilisable (RAM {ram}, {len(readable)} hack(s) lus) : panneau referme")
             kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
             return 'ram'
-        chosen = max(usable, key=_hack_score)
-        if _hack_score(chosen) < 0:
+        if want is not None:
+            # 12/10 : hack PRECIS demande (« Distraire les ennemis » sur un appareil-leurre)
+            pool = [h for h in usable if want(h)]
+            if not pool:
+                log(f"  [combat] quickhacks : hack voulu absent ({len(usable)} utilisable(s)) : panneau referme")
+                kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
+                return 'aucun'
+            chosen = pool[0]
+        else:
+            chosen = max(usable, key=_hack_score)
+        if want is None and _hack_score(chosen) < 0:
             # 12/10 : rien que des hacks d APPAREIL (« Distraire les ennemis » d un distributeur...) : inutile en combat
             log(f"  [combat] quickhacks : seulement des hacks d appareil ({chosen.get('title') or chosen.get('action')}) : panneau referme")
             kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
@@ -637,6 +646,42 @@ def gunfu_weapon(alive, st) -> str | None:
     return max(guns)[1] if guns else None
 
 
+def _is_distract(h: dict) -> bool:
+    t = _norm(h.get('action') or '') + ' ' + _norm(h.get('title') or '')
+    return 'distract' in t or 'distraire' in t
+
+
+def rats_decoy(e: dict, st: dict, log=print):
+    """12/10 succes « Surement des rats » (dataTrackingSystem : +1 quand un PNJ enquete sur un appareil distrait, 30) :
+    appareil piratable a < 20 m de V et < 12 m de la cible inconsciente -> « Distraire les ennemis ». Vrai si lance."""
+    try:
+        from . import achievements as _ach
+        if 'MustBeTheRats' in (_ach._STATE.get('unlocked') or set()):
+            return False
+    except Exception:
+        pass
+    r = nav._wait(nav._send({'cmd': 'devices_near', 'x': 20}), timeout=1.5) or {}
+    devs = [dv for dv in (r.get('devices') or []) if 3.0 < float(dv.get('d') or 0) <= 20.0
+            and math.hypot(dv['x'] - e['x'], dv['y'] - e['y']) <= 12.0]
+    if not devs:
+        return False
+    dv = min(devs, key=lambda x: math.hypot(x['x'] - e['x'], x['y'] - e['y']))
+    for _ in range(3):
+        s2 = motion.read_state(timeout=0.2) or st
+        r2 = nav._wait(nav._send({'cmd': 'devices_near', 'x': 20}), timeout=1.0) or {}
+        cur = min((x for x in (r2.get('devices') or []) if math.hypot(x['x'] - dv['x'], x['y'] - dv['y']) < 1.0),
+                  key=lambda x: x['d'], default=dv)
+        if aim_at(cur, s2) < 2.0:
+            break
+        time.sleep(0.1)
+    title = quickhack_best(log=log, want=_is_distract)
+    if title and title not in ('ram', 'aucun'):
+        log(f"  [succes] Surement des rats : « {title} » sur « {dv.get('name')} » a {dv['d']:.0f} m (cible a "
+            f"{math.hypot(dv['x'] - e['x'], dv['y'] - e['y']):.0f} m du leurre)")
+        return True
+    return False
+
+
 def prepare_ranged(alive, st, log=print) -> None:
     """Avant de degainer RANGED_SLOT (V tient encore la melee) : y range la meilleure arme pour CES ennemis."""
     if not ARSENAL or not RANGED_SLOT:
@@ -704,6 +749,7 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
     last_pos = {'x': target.get('x'), 'y': target.get('y')}
     struck = 0
     hacks_done, t_hack0 = 0, -99.0
+    rats_n = 0                                     # 12/10 : leurres « Distraire les ennemis » (succes)
     max_hacks = 1 if rescue else 2                      # en secours l agresseur se bat deja : un hack, puis on FONCE
     best_d, t_best = d_init, t0                         # progression : tant que V se rapproche, on ne renonce pas
     if stealth:
@@ -758,6 +804,12 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
             if stealth is False and _C3.features.get('stealth', True) and not rescue and not crouched and e['d'] <= STEALTH_MAX_M and d_init > STEALTH_MAX_M and not st.get('swim'):
                 kbm.act_release('sprint'); kbm.act('crouch', 0.1); crouched = True; stealth = True; time.sleep(0.2)
                 log('  [combat] a portee : approche en discretion (accroupi)')
+            # 12/10 succes « Surement des rats » : cible inconsciente, V accroupi -> un appareil-leurre pres d elle (2 max)
+            if stealth and rats_n < 2 and not st.get('combat') and not rescue and 8.0 < e['d'] < 25.0 and gap < 30                     and e.get('x') is not None and time.perf_counter() - t_hack0 > 2.5:
+                rats_n += 1; t_hack0 = time.perf_counter()
+                if rats_decoy(e, st, log=log):
+                    time.sleep(5.0)                         # l ennemi va enqueter (c est ce qui compte pour le succes)
+                    seq = None; continue
             # HACKS D OUVERTURE : avant le contact, V pirate a distance jusqu a 3 hostiles differents (RAM permettant)
             if hacks_done < max_hacks and e['d'] > 12.0 and gap < 8 and time.perf_counter() - t0 > 1.0 and time.perf_counter() - t_hack0 > 2.5:
                 vis = [x for x in (alive if len(alive) > 1 else [e])]
