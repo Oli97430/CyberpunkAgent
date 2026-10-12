@@ -1304,6 +1304,8 @@ registerForEvent('onUpdate', function(dt)
                                 if aff:find('NCPD') or aff:find('MaxTac') or aff:find('Police') then rec.police = true end
                             end)
                             pcall(function() if not rec.police and ent:IsPolice() then rec.police = true end end)
+                            -- 12/10 : nom affiche (journal : « hostile » au QG de Delamain engage 5 fois sans reaction, non identifie)
+                            if rec.d < 40.0 then pcall(function() rec.name = GetLocalizedText(tostring(ent:GetDisplayName())) end) end
                             pcall(function()
                                 local sc = cam:ProjectPoint(Vector4.new(ep.x, ep.y, ep.z + 1.3, 1.0))
                                 rec.sx, rec.sy = sc.x, sc.y

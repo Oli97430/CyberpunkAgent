@@ -1503,7 +1503,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     # ignorees 3 min apres un engagement sans combat, pour ne pas perdre 25 s a chaque fois
                     hostiles = [e for e in hostiles if not _muted(e)]
                     if hostiles:
-                        _log(f"V engage le combat : {len(hostiles)} hostile(s), le plus proche a {hostiles[0]['d']:.0f} m")
+                        _log(f"V engage le combat : {len(hostiles)} hostile(s), le plus proche a {hostiles[0]['d']:.0f} m"
+                             + (f" (« {hostiles[0]['name']} »)" if hostiles[0].get('name') else ''))
                         plan.note('a engage un combat')
                         engaged = combat.engage(hostiles[0], stop=stop, log=_log)
                         s_now = motion.read_state() or {}

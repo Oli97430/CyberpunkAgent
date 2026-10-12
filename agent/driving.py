@@ -101,11 +101,15 @@ def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
         time.sleep(0.4)
         s_c = motion.read_state() or {}
         car = _refresh(car, s_c.get('vehicles') or [])
-    if car['d'] > 2.5:                                    # deja a portee sinon (les poses gerent 1-2 m)
+    for attempt in range(3):
+        if car['d'] <= 2.5:                               # deja a portee (les poses gerent 1-2 m)
+            break
+        if stop is not None and stop.is_set():
+            return False
         # le vehicule arrive sur la ROUTE la plus proche : V y va par le maillage (nav.goto), puis tout droit
-        r = nav.goto(lambda: nav.request_path_to(car['x'], car['y'], car.get('z')), arrive_m=2.0, max_legs=4, timeout=40.0, stop=stop, log=log)
+        r = nav.goto(lambda c=car: nav.request_path_to(c['x'], c['y'], c.get('z')), arrive_m=2.0, max_legs=4, timeout=40.0, stop=stop, log=log)
         s1 = motion.read_state() or {}
-        if s1 and math.hypot(s1['x'] - car['x'], s1['y'] - car['y']) > 2.5:
+        if s1 and math.hypot(s1['x'] - car['x'], s1['y'] - car['y']) > 2.5 and not (stop is not None and stop.is_set()):
             old = motion.ARRIVE_M; motion.ARRIVE_M = 1.3  # une moto est fine : l invite « Enfourcher » exige ~1 m
             try:
                 r = motion.walk_to(car['x'], car['y'], timeout=20.0, stop=stop)
@@ -113,6 +117,18 @@ def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
                 motion.ARRIVE_M = old
         if not r.get('ok'):
             log(f"  [conduite] marche vers le vehicule : {r.get('reason')} (on tente les poses quand meme)")
+        # 12/10 : le vehicule appele a-t-il bouge pendant la marche ? (09:20 : V l avait rate de 35 m) -> position VIVE
+        s_v = motion.read_state() or {}
+        sm_v = s_v.get('summon') or {}
+        if sm_v.get('x') is None or s_v.get('x') is None or math.hypot(sm_v['x'] - car['x'], sm_v['y'] - car['y']) <= 3.0:
+            break
+        d_v = math.hypot(sm_v['x'] - s_v['x'], sm_v['y'] - s_v['y'])
+        if d_v > 80.0:
+            break
+        log(f"  [conduite] le vehicule a bouge pendant la marche : nouvelle position a {d_v:.0f} m (recalage {attempt + 1}/2)")
+        car = dict(car, x=sm_v['x'], y=sm_v['y'], z=sm_v.get('z', car.get('z')), d=d_v)
+        if attempt >= 2:
+            break
     # d abord PAR SCRIPT (le siege conducteur, sans invite) : c est le plus fiable
     if stop is not None and stop.is_set():
         return False
@@ -286,6 +302,7 @@ def summon_and_board(stop=None, log=print) -> bool:
     SUMMON = {0: 'inactif', 1: 'en route', 2: 'deja appele', 3: 'ECHEC de trajet', 4: 'arrive'}
     last_log, last_state = -99.0, None
     fresh = None                                     # 12/10 : preuve NEUVE que l appel a abouti (pas un etat perime)
+    still_since, last_sm_pos = None, None            # 12/10 : vehicule appele immobile depuis... (il est arrive)
     while time.perf_counter() - t0 < 60.0:
         if stop is not None and stop.is_set():
             return False
@@ -300,7 +317,17 @@ def summon_and_board(stop=None, log=print) -> bool:
         vs = s2.get('vehicles') or []
         mine = [v for v in vs if v.get('player')]
         fresh = fresh or _summon_evidence(s2, sm_pre, mine_pre)
-        if fresh and sm.get('x') is not None and (s_state == 4 or (sm.get('d') or 999) <= 60.0):
+        if sm.get('x') is not None:
+            p_now = (sm['x'], sm['y'])
+            if last_sm_pos is not None and math.hypot(p_now[0] - last_sm_pos[0], p_now[1] - last_sm_pos[1]) < 0.5 \
+                    and float(sm.get('speed') or 0) <= 0.5:
+                still_since = still_since or time.perf_counter()
+            else:
+                still_since = None
+            last_sm_pos = p_now
+        # 12/10 : « en route » = il roule vers V : on l attend (avant, V marchait vers sa position de depart et le ratait)
+        arrived_car = s_state == 4 or (still_since is not None and time.perf_counter() - still_since >= 4.0)
+        if fresh and sm.get('x') is not None and arrived_car and (s_state == 4 or (sm.get('d') or 999) <= 60.0):
             car = {'name': sm.get('name') or 'vehicule', 'x': sm['x'], 'y': sm['y'], 'z': sm.get('z'), 'd': float(sm.get('d') or 0), 'player': True, 'speed': sm.get('speed') or 0}
             break
         if mine and (mine[0].get('d') or 999) <= 60.0 and s_state != 1:
