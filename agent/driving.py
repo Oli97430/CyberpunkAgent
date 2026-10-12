@@ -520,8 +520,23 @@ def autodrive_to(tx: float, ty: float, stop=None, log=print, stolen: dict | None
         log('  [conduite] autodrive enclenche (G maintenu 1,5 s)')
     _AUTODRIVE_ON['left_on'] = True
     if modd:
-        return _watch_drive(tx, ty, st, t0, stop=stop, log=log, relaunch=lambda: _own_start(log=log, stop=stop), relaunches=3, own_cmd=True)
+        return _watch_drive(tx, ty, st, t0, stop=stop, log=log, relaunch=lambda: _own_relaunch(log=log, stop=stop), relaunches=3, own_cmd=True)
     return _watch_drive(tx, ty, st, t0, stop=stop, log=log, relaunch=autodrive_toggle, relaunches=1)
+
+
+def _own_relaunch(log=print, stop=None) -> bool:
+    """12/10 (journal 14:29 : commande refusee 3 fois, 65 s sur place) : commande du mod, sinon G -- seulement si
+    l autodrive est bien COUPE (G est une bascule)."""
+    if _own_start(log=log, stop=stop):
+        return True
+    if stop is not None and stop.is_set():
+        return False
+    if not ((motion.read_state() or {}).get('dx') or {}).get('on') and kbm.ACTIONS.get('autodrive'):
+        autodrive_toggle()
+        log('  [conduite] relance par G (commande du mod refusee)')
+        time.sleep(1.0)
+        return bool(((motion.read_state() or {}).get('dx') or {}).get('on'))
+    return False
 
 
 def _own_start(log=print, stop=None) -> bool:
@@ -594,9 +609,16 @@ def _watch_drive(tx, ty, st, t0, stop=None, log=print, relaunch=None, relaunches
                 why = 'arret d urgence' if (stop is not None and stop.is_set()) else 'autodrive coupe (vehicule vole)'
                 return {'ok': False, 'reason': why, 'seconds': time.perf_counter() - t0, 'dist': d}
             continue
+        dxr = s2.get('dx') or {}
+        if own_cmd and dxr.get('on') and dxr.get('fr') is True and dxr.get('dt') == 0 and time.perf_counter() - t0 > 6.0:
+            # 12/10 (journal 14:31 : 980 m de balade, plus loin qu au depart) : autodrive SANS destination = roue libre
+            _stolen_stop()
+            _AUTODRIVE_ON['left_on'] = False
+            log(f'  [conduite] autodrive sans destination (roue libre) a {d:.0f} m : V arrete et finit autrement')
+            return {'ok': False, 'reason': 'autodrive sans destination', 'seconds': time.perf_counter() - t0, 'dist': d}
         if math.hypot(s2['x'] - last_pos[0], s2['y'] - last_pos[1]) > 2.0:
             last_move_t, last_pos = time.perf_counter(), (s2['x'], s2['y'])
-        elif own_cmd and (s2.get('dx') or {}).get('on') and time.perf_counter() - last_move_t <= 60.0:
+        elif own_cmd and dxr.get('on') and time.perf_counter() - last_move_t <= 60.0:
             pass                       # 12/10 : autodrive ACTIF et immobile (feu, bouchon) : on attend, aucune touche
         elif time.perf_counter() - last_move_t > 20.0:
             traveled = math.hypot(s2['x'] - x0, s2['y'] - y0)
@@ -739,6 +761,8 @@ def record_drive(r: dict, stop=None) -> None:
     """Statistiques de conduite (travel.py) ; un trajet coupe par pause / arret n est ni un succes ni un echec."""
     if stop is not None and stop.is_set():
         return
+    if r.get('reason') == 'autodrive sans destination':
+        return                        # 12/10 : cible sans itineraire de quete, pas une panne de la voiture (disjoncteur)
     try:
         from . import travel
         travel.record('drive', bool(r.get('ok')), r.get('reason'))
