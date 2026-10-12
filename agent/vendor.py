@@ -228,13 +228,38 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
     if not cyber:
         log(f"  [charcudoc] « {stock.get('vendor')} » : aucun cyberware en stock ({len(stock.get('items') or [])} articles)")
         return {'ok': True, 'poses': 0, 'useless': f"aucun cyberware en stock ({stock.get('vendor')})"}
+    # 12/10 : zones de V (succes T-2077 = un implant dans chacune des 10 zones) ; jamais 2 implants pour une zone pleine
+    # (07:36 : deux « Bras de gorille » pour la zone a 1 emplacement, 200 000 eddies dont 100 000 perdus)
+    cw = nav._wait(nav._send({'cmd': 'cw_status'}), timeout=3.0) or {}
+    free = {a['a']: max(0, int(a.get('slots') or 0) - int(a.get('n') or 0)) for a in (cw.get('areas') or []) if a.get('slots') is not None}
+    empty = {a['a'] for a in (cw.get('areas') or []) if a.get('n') == 0 and (a.get('slots') or 0) > 0}
+    avail = cw.get('avail')
+    if cw.get('areas'):
+        log(f"  [charcudoc] zones vides : {sorted(empty) or 'aucune'} ; capacite libre {avail}")
+    if free:
+        cyber = [it for it in cyber if not it.get('area') or free.get(it['area'], 1) > 0]
+    if isinstance(avail, (int, float)):
+        cyber = [it for it in cyber if not isinstance(it.get('cap'), (int, float)) or it['cap'] <= avail]
     cyber.sort(key=_cyber_score, reverse=True)
+    # zones vides d abord, le moins cher (T-2077), puis la meilleure qualite pour les zones a emplacement libre
+    first = sorted([it for it in cyber if it.get('area') in empty], key=lambda it: int(it.get('price') or 1e9))
+    seen_a, ordered = set(), []
+    for it in first:
+        if it['area'] not in seen_a:
+            seen_a.add(it['area']); ordered.append(it)
+    cyber = ordered + [it for it in cyber if it not in ordered]
+    if empty:
+        max_buys = max(max_buys, len(seen_a) + 1)
     posed, spent, tried = 0, 0, 0
     for it in cyber:
         price = int(it.get('price') or 0)
-        if tried >= max_buys or posed >= 2:
+        if tried >= max_buys or posed >= max(2, len(seen_a)):
             break
         if price <= 0 or money - price < CYBER_RESERVE:
+            continue
+        if it.get('area') and free and free.get(it['area'], 1) <= 0:
+            continue                                   # zone remplie par un achat de ce passage
+        if isinstance(avail, (int, float)) and isinstance(it.get('cap'), (int, float)) and it['cap'] > avail:
             continue
         tried += 1
         r = buy(it['i'], 1)
@@ -250,7 +275,12 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
         er = nav._wait(nav._send({'cmd': 'equip', 'x': mine['i'], 'y': 0}), timeout=6.0)
         if er and er.get('ok') and er.get('worn'):
             posed += 1; spent += int(r.get('total') or price)
-            log(f"  [charcudoc] POSE « {it.get('name')} » ({it.get('quality')}) pour {r.get('total')} eddies [{er.get('method')}]")
+            if it.get('area') and it['area'] in free:
+                free[it['area']] -= 1
+            if isinstance(avail, (int, float)) and isinstance(it.get('cap'), (int, float)):
+                avail -= it['cap']
+            log(f"  [charcudoc] POSE « {it.get('name')} » ({it.get('quality')}, zone {it.get('area')}) pour {r.get('total')} eddies [{er.get('method')}]"
+                + (' -- zone vide remplie (succes T-2077)' if it.get('area') in empty else ''))
         elif er is None:
             log(f"  [charcudoc] « {it.get('name')} » : pas de reponse du mod, implant conserve (peut-etre pose)")
             spent += int(r.get('total') or price)
@@ -410,6 +440,20 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
         if _halted():
             return _halted()
         probe = vendor_stock()
+        if not (probe and probe.get('ok')) and not _halted():
+            # 12/10 : V est au MARQUEUR mais le marchand est plus loin (charcudoc a l interieur, en bas d un escalier :
+            # 7 trajets « aucune invite de marchand ») -> le mod trouve le vrai marchand (40 m) et V le rejoint
+            loc = nav._wait(nav._send({'cmd': 'vendor_locate', 'x': 40}), timeout=3.0) or {}
+            if loc.get('ok') and loc.get('x') is not None:
+                st2 = motion.read_state() or {}
+                d2 = math.hypot(loc['x'] - st2.get('x', 1e9), loc['y'] - st2.get('y', 1e9))
+                log(f"  [vente] le marchand « {loc.get('vendor')} » est a {d2:.0f} m du marqueur : V le rejoint")
+                nav.goto(lambda: nav.request_path_to(loc['x'], loc['y'], loc.get('z')), arrive_m=2.0, max_legs=4, timeout=60.0, stop=stop, log=log)
+                if _halted():
+                    return _halted()
+                probe = vendor_stock()
+            else:
+                log(f"  [vente] aucun marchand a 40 m du marqueur ({loc.get('reason') or 'mod muet'})")
         if probe and probe.get('ok'):
             log(f"  [vente] pas d invite, mais « {probe.get('vendor')} » est a portee ({len(probe.get('items') or [])} articles) : transactions par script")
             return {'ok': True, 'seconds': time.perf_counter() - t0, 'script_only': True}

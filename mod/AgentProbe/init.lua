@@ -2340,11 +2340,11 @@ local mappinProbeDone = false                -- sonde des methodes de mappin (un
 local lastChoices = {}                       -- choix de reponse SMS (sms_read)
 local lastVendorStock = {}                   -- ItemID par index de la derniere liste de stock marchand
 -- marchand PRESENT (< 6 m) : une entree par entite, priorite a IsVendor()
-local function findNearbyVendor(player)
+local function findNearbyVendor(player, radius)
     -- le MARCHAND = parmi les PNJ a moins de 8 m, celui qui a le plus gros stock (chez le charcudoc, l infirmiere
     -- au comptoir etait prise pour le vendeur : 1 article, contre 409 pour le ripperdoc)
     local q = Game['TSQ_NPC;']()
-    q.maxDistance = 8.0
+    q.maxDistance = radius or 8.0
     q.filterObjectByDistance = true
     pcall(function() q.testedSet = TargetingSet.Complete end)
     local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
@@ -2755,6 +2755,32 @@ local function handleCommand(player, cmd)
         resp.ok, resp.price, resp.total, resp.qty = true, price, total, qty
         journal(string.format('OK   sell : %d x -> %d eddies', qty, total))
         return resp
+    elseif cmd.cmd == 'vendor_locate' then
+        -- 12/10 : le VRAI marchand dans un rayon x (le marqueur de carte est a l entree ; le charcudoc est dedans / en bas)
+        local v = findNearbyVendor(player, tonumber(cmd.x) or 40.0)
+        if not v then resp.reason = 'aucun marchand'; return resp end
+        local isV = false
+        pcall(function() isV = v:IsVendor() end)
+        local p = v:GetWorldPosition()
+        resp.ok, resp.x, resp.y, resp.z, resp.vendor = isV, p.x, p.y, p.z, nil
+        pcall(function() resp.vendor = GetLocalizedText(tostring(v:GetDisplayName())) end)
+        if not isV then resp.reason = 'pas un marchand' end
+        journal(string.format('%s vendor_locate %s a (%.0f,%.0f,%.0f)', isV and 'OK  ' or 'FAIL', tostring(resp.vendor), p.x, p.y, p.z))
+        return resp
+    elseif cmd.cmd == 'cw_status' then
+        -- 12/10 succes T-2077 : zones de cyberware (equipmentSystem.script:3357) : implants poses / emplacements ; capacite libre
+        local edata = Game.GetScriptableSystemsContainer():Get('EquipmentSystem'):GetPlayerData(player)
+        local areas = {}
+        for _, a in ipairs({ 'SystemReplacementCW', 'FrontalCortexCW', 'EyesCW', 'MusculoskeletalSystemCW', 'NervousSystemCW',
+                             'CardiovascularSystemCW', 'IntegumentarySystemCW', 'ArmsCW', 'LegsCW', 'HandsCW' }) do
+            local rec = { a = a }
+            pcall(function() rec.n = tonumber(edata:GetNumberOfItemsInEquipmentArea(gamedataEquipmentArea[a])) end)
+            pcall(function() rec.slots = tonumber(edata:GetNumberOfSlots(gamedataEquipmentArea[a])) end)
+            areas[#areas + 1] = rec
+        end
+        pcall(function() resp.avail = Game.GetStatsSystem():GetStatValue(player:GetEntityID(), gamedataStatType.HumanityAvailable) end)
+        resp.ok, resp.areas = true, areas
+        return resp
     elseif cmd.cmd == 'vendor_stock' then
         -- stock du marchand present : nom, type, quantite, prix d achat (pour acheter des soins etc.)
         journal('RUN  vendor_stock')
@@ -2780,6 +2806,10 @@ local function handleCommand(player, cmd)
                     pcall(function() rec.type = tostring(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):ItemType():Type()):gsub('gamedataItemType : ', ''):gsub(' %(%d+%)', '') end)
                     pcall(function() rec.quality = tostring(RPGManager.GetItemDataQuality(idata)):gsub('gamedataQuality : ', ''):gsub(' %(%d+%)', '') end)
                     rec.price = buyPrice(vendor, player, id)
+                    if rec.type and rec.type:sub(1, 3) == 'Cyb' then           -- 12/10 : zone et cout en capacite
+                        pcall(function() rec.area = AgentEnumName(EquipmentSystem.GetEquipAreaType(id)) end)
+                        pcall(function() rec.cap = idata:GetStatValueByType(gamedataStatType.Humanity) end)
+                    end
                     out[#out + 1] = rec
                 end
             end
