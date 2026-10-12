@@ -112,14 +112,17 @@ def quickhack_best(log=print) -> str | None:
     if ram0 is not None and _min_cost[0] is not None and ram0 < _min_cost[0] and time.perf_counter() - _min_cost[1] < 30.0:
         return 'ram'
     kbm.act_hold('scanner'); time.sleep(0.45)
-    kbm.act('ui_confirm', 0.1)
-    qh = None
+    # 12/10 : en 3.0 le panneau s ouvre seul en mode scanner sur la cible du reticule ; F ici = appliquer le hack surligne
+    # / cyberware iconique chez ce joueur -> plus de F d ouverture. Repli : une fois la touche d interaction (selectChoice).
+    qh, st_q, nudged = None, None, False
     t0 = time.perf_counter()
-    while time.perf_counter() - t0 < 1.2:
-        st = motion.read_state()
-        qh = (st or {}).get('qh')
+    while time.perf_counter() - t0 < 1.4:
+        st_q = motion.read_state() or st_q
+        qh = (st_q or {}).get('qh')
         if qh and qh.get('open') and qh.get('list'):
             break
+        if not nudged and time.perf_counter() - t0 > 0.6 and not (qh and qh.get('open')):
+            nudged = True; kbm.act('interact', 0.1)
         time.sleep(0.05)
     chosen = None
     readable = [h for h in ((qh or {}).get('list') or []) if _readable(h)]
@@ -140,8 +143,10 @@ def quickhack_best(log=print) -> str | None:
             kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
             return 'aucun'
     if chosen is None:
-        # liste indisponible : hack surligne par defaut (comportement a l aveugle)
-        kbm.act('ui_confirm', 0.1); time.sleep(0.25)
+        # 12/10 : plus de hack a l aveugle (F = cyberware iconique) : on dit pourquoi et on referme
+        la = (st_q or {}).get('lookat') or {}
+        why = 'panneau jamais ouvert' if not qh else ('panneau ouvert sans liste' if not qh.get('list') else f"liste illisible ({len(qh['list'])} entrees)")
+        log(f"  [combat] quickhacks : {why} ; reticule {la.get('cls')} a {float(la.get('d') or 0):.0f} m : referme sans hacker")
         kbm.act_release('scanner'); time.sleep(0.15); kbm.tap('BACKSPACE', 0.08)
         return None
     # amener la selection sur le hack choisi (molette) : sens choisi d apres le rang du hack surligne
@@ -317,6 +322,48 @@ def aim_bearing(target_yaw: float, st: dict, gain: float = 0.5) -> float:
     dx = max(-motion.MAX_STEP, min(motion.MAX_STEP, motion.SIGN * err * motion.K_COUNTS_PER_DEG * gain))
     kbm.look(dx, 0)
     return abs(err)
+
+
+def _ang_tol(d: float) -> float:
+    """Demi-largeur d un torse vue de V (plancher 1,5 deg : 2-3 images de retard, cible en mouvement)."""
+    return max(1.5, math.degrees(math.atan2(0.3, max(1.0, d))))
+
+
+def _same_foe(tgt: dict, st: dict):
+    """Le meme ennemi dans un etat plus recent (le mod n exporte pas d identifiant) : le plus proche a < 3 m."""
+    best, bd = None, 3.0
+    for x in _alive((st or {}).get('enemies')):
+        if x.get('x') is None or tgt.get('x') is None:
+            continue
+        dd = math.hypot(x['x'] - tgt['x'], x['y'] - tgt['y'])
+        if dd < bd:
+            best, bd = x, dd
+    return best
+
+
+def _aim_lock(tgt: dict, st: dict, timeout: float = 0.8):
+    """12/10 : vise la cible du quickhack sur des mesures FRAICHES jusqu a l avoir sous le reticule (le panneau ne s ouvre
+    que sur la cible du reticule). (ok, st, raison)."""
+    kbm.release('W'); kbm.act_release('sprint')
+    t0, seq, cur, err, la = time.perf_counter(), (st or {}).get('seq'), tgt, 99.0, {}
+    _last_sy[0] = None                          # nouvelle cible : ne pas inverser le sens vertical appris
+    while time.perf_counter() - t0 < timeout:
+        s2 = motion.read_state(seq, timeout=0.12)
+        if s2 is None:
+            continue
+        st, seq = s2, s2.get('seq')
+        nxt = _same_foe(cur, st)
+        if nxt is None:
+            return False, st, 'cible perdue'
+        cur = nxt
+        err = abs(motion.wrap(motion.bearing_to(st['x'], st['y'], cur['x'], cur['y']) - st['yaw']))
+        la = st.get('lookat') or {}
+        cls_ok = la.get('cls') == 'gamePuppet' or (la.get('cls') == 'gameDevice' and cur.get('kind') == 'turret')
+        on = cls_ok and not la.get('dead') and abs(float(la.get('d') or 0) - float(cur.get('d') or 0)) < 3.0
+        if on and err < 2.0 * _ang_tol(cur['d']):
+            return True, st, 'ok'
+        aim_at(cur, st)
+    return False, st, f"ecart {err:.1f} deg, reticule {la.get('cls')} a {float(la.get('d') or 0):.0f} m"
 
 
 def aim_at(e: dict, st: dict) -> float:
@@ -743,6 +790,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     t_sprint = -99.0
     wsync_fail = 0                                     # degainages sans effet (zone a mains nues, arme restreinte)
     blind_hacks, blind_hacks_t = 0, -99.0              # hacks « par defaut » de suite (liste du panneau illisible) : pause, pas coupure
+    qh_skip_t, qh_fail = -99.0, 0                      # 12/10 : quickhack reporte (cible pas sous le reticule) : message / echecs
     mode = 'melee'; shots = 0
     blocked_t, blocked_log_t = None, -99.0   # 12/10 : pas de ligne de tir depuis... / dernier message
     adv_t0, adv_d0, adv_block = None, 0.0, -1.0   # 12/10 : pompe hors de portee (avance verifiee)
@@ -976,15 +1024,23 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             if mode == 'ranged':
                 kbm.release('W'); kbm.act_release('sprint')
                 # hacks A DISTANCE entre deux rafales : cible alternee (hack_i) pour ne pas empiler sur le meme
-                if e['d'] > 3.0 and gap < 8 and now - t_hack > 2 * QUICKHACK_CD and (blind_hacks < 3 or now - blind_hacks_t > 20.0):   # vise d abord ; 8 s entre deux hacks
-                    tgt = alive[hack_i % len(alive)]; hack_i += 1
-                    if tgt is not e:
-                        aim_at(tgt, st)
+                if e['d'] > 3.0 and gap < 8 and pressure < 2 and now - t_hack > 2 * QUICKHACK_CD and (blind_hacks < 3 or now - blind_hacks_t > 20.0):   # vise d abord ; 8 s entre deux hacks
+                    cands = [x for x in alive if x.get('los') is not False] or [e]   # 12/10 : cibles VISIBLES
+                    tgt = cands[hack_i % len(cands)]; hack_i += 1
+                    ok_aim, st, why_aim = _aim_lock(tgt, st)
+                    if not ok_aim:
+                        qh_fail += 1
+                        t_hack = time.perf_counter() - 2 * QUICKHACK_CD + (2.0 if qh_fail < 3 else 15.0)   # vrai delai
+                        stats['qh_sans_visee'] = stats.get('qh_sans_visee', 0) + 1
+                        if now - qh_skip_t > 10.0:
+                            qh_skip_t = now; log(f"  [combat] quickhack reporte : reticule pas sur la cible a {tgt['d']:.0f} m ({why_aim})")
+                        seq = None; continue
+                    qh_fail = 0
                     title = quickhack_best(log=log)
                     t_hack = time.perf_counter()                        # le delai court APRES le hack (il dure ~4 s)
                     if title in ('ram', 'aucun'):
                         log('  [combat] quickhack : ' + ('RAM insuffisante' if title == 'ram' else 'aucun hack offensif') + ', on tire'); seq = None; continue
-                    stats['quickhacks'] += 1
+                    stats['quickhacks'] += 1 if title else 0
                     if title and str(title).startswith('userdata'):
                         title = None
                     if title:
@@ -992,9 +1048,10 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                     else:
                         blind_hacks = blind_hacks + 1 if now - blind_hacks_t < 20.0 else 1
                         blind_hacks_t = now
-                    log(f"  [combat] quickhack « {title or 'par defaut'} » (a distance) sur cible a {tgt['d']:.0f} m")
+                    if title:
+                        log(f"  [combat] quickhack « {title} » (a distance) sur cible a {tgt['d']:.0f} m")
                     if blind_hacks >= 3:
-                        log('  [combat] 3 hacks a l aveugle de suite (liste illisible) : pause de 20 s avant de retenter, on tire')
+                        log('  [combat] 3 quickhacks non lances de suite : pause de 20 s avant de retenter, on tire')
                     seq = None; continue
                 if _C2.features.get('sprint', True) and now - t_sprint > (2.5 if hp < 85 else 5.0):
                     side = 'D' if side == 'A' else 'A'
@@ -1060,15 +1117,25 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 time.sleep(0.15); continue
 
             # -- quickhack a distance
-            if e['d'] > 3.0 and gap < 8 and now - t_hack > QUICKHACK_CD and (blind_hacks < 3 or now - blind_hacks_t > 20.0):
-                tgt = alive[hack_i % len(alive)]; hack_i += 1
-                if tgt is not e and tgt['d'] > 3.0:
-                    aim_at(tgt, st); e = tgt
+            if e['d'] > 3.0 and gap < 8 and pressure < 2 and now - t_hack > QUICKHACK_CD and (blind_hacks < 3 or now - blind_hacks_t > 20.0):
+                cands = [x for x in alive if x.get('los') is not False] or [e]   # 12/10 : cibles VISIBLES
+                tgt = cands[hack_i % len(cands)]; hack_i += 1
+                ok_aim, st, why_aim = _aim_lock(tgt, st)
+                if not ok_aim:
+                    qh_fail += 1
+                    t_hack = time.perf_counter() - QUICKHACK_CD + (2.0 if qh_fail < 3 else 15.0)   # vrai delai
+                    stats['qh_sans_visee'] = stats.get('qh_sans_visee', 0) + 1
+                    if now - qh_skip_t > 10.0:
+                        qh_skip_t = now; log(f"  [combat] quickhack reporte : reticule pas sur la cible a {tgt['d']:.0f} m ({why_aim})")
+                    seq = None; continue
+                qh_fail = 0
+                if tgt['d'] > 3.0:
+                    e = tgt
                 title = quickhack_best(log=log)
                 t_hack = time.perf_counter()
                 if title in ('ram', 'aucun'):
                     log('  [combat] quickhack : ' + ('RAM insuffisante' if title == 'ram' else 'aucun hack offensif')); seq = None; continue
-                stats['quickhacks'] += 1
+                stats['quickhacks'] += 1 if title else 0
                 if title and not str(title).startswith('userdata'):
                     blind_hacks = 0
                 else:
@@ -1076,7 +1143,8 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                     blind_hacks_t = now
                 if title and str(title).startswith('userdata'):
                     title = None
-                log(f"  [combat] quickhack « {title or 'par defaut'} » sur cible a {e['d']:.0f} m")
+                if title:
+                    log(f"  [combat] quickhack « {title} » sur cible a {e['d']:.0f} m")
                 seq = None; continue
 
             # -- lancer de couteau sur cible a moyenne distance (Nehan revient tout seul)
