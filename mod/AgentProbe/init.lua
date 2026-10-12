@@ -2597,9 +2597,46 @@ local function handleCommand(player, cmd)
         if not tid then resp.reason = 'index de recette inconnu (refaire recipes)'; return resp end
         journal(string.format('RUN  craft idx=%d qty=%d', cmd.x, cmd.y or 1))
         local cs = Game.GetScriptableSystemsContainer():Get('CraftingSystem')
-        cs:CraftItem(player, TweakDBInterface.GetItemRecord(tid), cmd.y or 1)
-        resp.ok = true
-        journal('OK   craft')
+        -- 12/10 : CraftItem(target, rec, amount, ammoBulletAmount) (craftingSystem.script:626) retire les composants puis donne
+        -- amount * ammoBulletAmount munitions : sans le 4e argument, 0 munition (10 lots perdus le 12/10). Il ne verifie ni
+        -- composants ni plafond : tout se verifie ici, et le gain est MESURE.
+        local rec = TweakDBInterface.GetItemRecord(tid)
+        local ts = Game.GetTransactionSystem()
+        local function cnt()
+            local ok, n = pcall(function() return ts:GetItemQuantity(player, ItemID.CreateQuery(tid)) end)
+            return (ok and type(n) == 'number') and n or -1
+        end
+        local isAmmo = false
+        pcall(function() isAmmo = rec:TagsContains(CName.new('Ammo')) end)
+        if not isAmmo then pcall(function() isAmmo = rec:TagsContains('Ammo') end) end
+        local can = nil
+        pcall(function() can = cs:CanItemBeCrafted(rec) end)
+        if can == false then resp.reason = 'composants insuffisants'; journal('FAIL craft : ' .. resp.reason); return resp end
+        local qty, lot = math.max(1, math.floor(tonumber(cmd.y) or 1)), 0
+        if isAmmo then
+            pcall(function() lot = tonumber(CraftingSystem.GetAmmoBulletAmount(ItemID.GetTDBID(tid) or tid)) or 0 end)
+            if lot <= 0 then pcall(function() lot = tonumber(CraftingSystem.GetAmmoBulletAmount(tid)) or 0 end) end
+            if lot <= 0 then resp.reason = 'taille de lot inconnue'; journal('FAIL craft : ' .. resp.reason); return resp end
+            if cnt() > 0 then
+                local mx = nil
+                pcall(function() mx = tonumber(cs:GetMaxCraftingAmount(ts:GetItemData(player, ItemID.CreateQuery(tid)))) end)   -- :413 plafond + composants
+                if mx ~= nil then
+                    if mx <= 0 then resp.reason = 'plafond de munitions du jeu'; journal('FAIL craft : ' .. resp.reason); return resp end
+                    qty = math.min(qty, mx)
+                end
+            end
+        else
+            qty = 1
+        end
+        local before = cnt()
+        local okC, eC = pcall(function() cs:CraftItem(player, rec, qty, lot) end)
+        local after = cnt()
+        resp.qty, resp.lot, resp.before, resp.after = qty, lot, before, after
+        if before >= 0 and after >= 0 then resp.gain = after - before end
+        resp.ok = okC and (resp.gain == nil or resp.gain > 0)
+        if not okC then resp.reason = 'CraftItem : ' .. tostring(eC)
+        elseif not resp.ok then resp.reason = 'aucun objet recu' end
+        journal(string.format('%s craft x%d lot=%d : %s -> %s', resp.ok and 'OK  ' or 'FAIL', qty, lot, tostring(before), tostring(after)))
         return resp
     elseif cmd.cmd == 'use' then
         -- consommer / utiliser un objet de l inventaire (nourriture, boisson, inhalateur...)

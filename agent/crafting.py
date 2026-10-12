@@ -41,9 +41,13 @@ def recipes() -> list[dict]:
     return (r or {}).get('recipes') or []
 
 
+LAST = {}   # 12/10 : derniere reponse du mod (gain MESURE, raison d un refus)
+
+
 def craft(index: int, qty: int = 1) -> bool:
-    r = nav._wait(nav._send({'cmd': 'craft', 'x': index, 'y': qty}), timeout=6.0)
-    return bool(r and r.get('ok'))
+    r = nav._wait(nav._send({'cmd': 'craft', 'x': index, 'y': qty}), timeout=6.0) or {}
+    LAST.clear(); LAST.update(r)
+    return bool(r.get('ok'))
 
 
 def heal_stock(inventory_items: list[dict]) -> int:
@@ -110,11 +114,14 @@ def manage(inventory_items: list[dict], log=print) -> dict:
         have = sum(int(it.get('qty') or 1) for it in inventory_items if str(it.get('name', '')).lower() == str(r.get('name', '')).lower())
         if have >= AMMO_WANT:
             continue
-        n = max(1, min(3, (AMMO_WANT - have) // max(1, int(r.get('amount') or 1))))
+        lot = max(1, int(r.get('amount') or 1))
+        n = max(1, min(3, -(-(AMMO_WANT - have) // lot)))
         if craft(r['i'], n):
             made += 1
-            log(f"  [craft] fabrique {n} lot(s) de « {r.get('name')} » (munitions {have})")
+            log(f"  [craft] « {r.get('name')} » : {LAST.get('qty', n)} lot(s) de {LAST.get('lot')} -> stock {LAST.get('before')} -> {LAST.get('after')}")
             time.sleep(0.3)
+        else:
+            log(f"  [craft] « {r.get('name')} » non fabrique : {LAST.get('reason') or 'mod muet'} (stock {have})")
     # 2. equipement : tout ce qui est faisable, meilleure qualite d abord, 1 exemplaire si V n en a pas
     gear = [r for r in doable if not (r.get('type') or '').startswith('Con_') and not (r.get('type') or '').startswith('Gad_')
             and str(r.get('name', '')).lower() not in names
