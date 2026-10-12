@@ -432,7 +432,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         return all(time.perf_counter() - rescued.get((round(x / 15), round(y / 15)), -9999.0) < 300.0 for x, y in pts)
     def _was_approached(n):
         k = (n.get('name'), round(n['x'] / 8), round(n['y'] / 8))
-        return time.perf_counter() - approached.get(k, -9999.0) < 300.0
+        if time.perf_counter() - approached.get(k, -9999.0) < 300.0:
+            return True
+        # 12/10 : un PNJ qui MARCHE (Panam, « Suivre Panam ») changeait de cellule et redevenait « nouveau » : 20 abordages
+        # en 4 min -> sans invite de dialogue, son NOM est ecarte 3 min
+        return time.perf_counter() - approached.get(('nom', n.get('name')), -9999.0) < 180.0
     deferred: list = []             # ordres recus en pause / hors premier plan : (texte, commande), executes a la reprise
     idle_poll_t = [-99.0]
     def _status_text(st):
@@ -1489,6 +1493,9 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
 
                 if action == 'aborder':
                     cands = [n for n in planner.named_npcs(st) if n['d'] < 12 and not _was_approached(n)]
+                    _qt = str((st.get('quest') or {}).get('text') or '').lower()
+                    if (st.get('quest') or {}).get('hasMappin'):     # 12/10 : le PNJ CITE par l objectif (pas « Aldecaldo » a cote)
+                        cands = [n for n in cands if str(n.get('name') or '').lower().split()[:1] and str(n.get('name') or '').lower().split()[0] in _qt]
                     if cands:
                         n = cands[0]
                         approached[(n.get('name'), round(n['x'] / 8), round(n['y'] / 8))] = time.perf_counter()
@@ -1515,7 +1522,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                     break
                                 time.sleep(0.1)
                             if not spoke:
-                                _log('  -> pas d invite de dialogue : on passe')
+                                approached[('nom', n.get('name'))] = time.perf_counter()
+                                _log('  -> pas d invite de dialogue : on passe (ecarte 3 min)')
                         else:
                             _log(f"  -> impossible de l atteindre ({r.get('reason')})")
                         time.sleep(0.8); continue

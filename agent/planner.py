@@ -191,6 +191,8 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
         has_quest = bool((st.get('quest') or {}).get('hasMappin'))
         from . import quests as _q
         race = _q.is_race(qtxt)          # 12/10 : V ne fait pas les courses -> ni Claire, ni les PNJ de l objectif de course
+        if any(w in qtxt for w in ('suivre', 'follow', 'accompagner', 'escorter', 'garder un oeil', 'rester pres')):
+            return 'objectif', 'regle : objectif de suivi -> V suit le marqueur, il ne parle pas'   # 12/10 : « Suivre Panam »
         cands = [n for n in named_npcs(st) if n['d'] < 12 and extra.get('approached', lambda k: False)(n) is False
                  and str(n.get('name') or '').lower().split()[:1] != [] and str(n.get('name') or '').lower().split()[0] not in _q.RACE_NPCS
                  and (((str(n.get('name') or '').lower().split()[0] in qtxt) and not race) or not has_quest)]
