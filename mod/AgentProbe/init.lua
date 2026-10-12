@@ -332,6 +332,58 @@ function AgentDriveCtx(inVeh)
     return o
 end
 
+-- 12/10 V FIGE PAR LE JEU (globales, aucune upvalue) : workspot (Locomotion natif 9), tier de scene (HighLevel 1-5), effets
+-- de restriction. Valeurs natives lues dans tools/redmod/metadata.json (l ordre de psmImports.script donnerait 8).
+AGENT_FRZ_TAGS = { 'NoMovement', 'NoCameraControl', 'FastForward', 'NoJump', 'NoWorldInteractions' }
+function AgentFreezeInfo(player, psm, defs)
+    local f = {}
+    if psm then
+        pcall(function() f.hl = tonumber(psm:GetInt(defs.PlayerStateMachine.HighLevel)) end)
+        pcall(function() f.tier = tonumber(psm:GetInt(defs.PlayerStateMachine.SceneTier)) end)
+    end
+    pcall(function()
+        local ws = Game.GetWorkspotSystem()
+        if ws:IsActorInWorkspot(player) then
+            f.ws = true
+            pcall(function() local t = player:GetPlayerCurrentWorkspotTags(); if t and #t > 0 then f.wst = {}; for k = 1, math.min(#t, 4) do f.wst[k] = Game.NameToString(t[k]) end end end)
+        end
+    end)
+    for _, tag in ipairs(AGENT_FRZ_TAGS) do
+        local ok, v = pcall(function() return StatusEffectSystem.ObjectHasStatusEffectWithTag(player, CName.new(tag)) end)
+        if ok and v == true then f.tags = f.tags or {}; f.tags[#f.tags + 1] = tag end
+    end
+    return f
+end
+-- V en workspot hors vehicule (les sieges de vehicule sont des workspots)
+function AgentWorkspotLocked(player)
+    local ok, v = pcall(function()
+        local d = GetAllBlackboardDefs().PlayerStateMachine
+        local psm = Game.GetBlackboardSystem():GetLocalInstanced(player:GetEntityID(), d)
+        return Game.GetWorkspotSystem():IsActorInWorkspot(player) and psm:GetInt(d.Vehicle) == 0
+    end)
+    return ok and v == true
+end
+-- sortie de workspot : 1 rapide, 2 lente, 3 StopInDevice (deviceBase.script:1977)
+function AgentWorkspotExit(player, step)
+    local r = { step = step }
+    local ws = Game.GetWorkspotSystem()
+    pcall(function() r.before = ws:IsActorInWorkspot(player) end)
+    if r.before == false then r.ok = true; r.reason = 'pas en workspot'; return r end
+    local okX, err
+    if step == 1 then
+        okX, err = pcall(function() ws:SendFastExitSignal(player, Vector3.new(0, -1, 0), false, true, false, true) end)
+        if not okX then okX, err = pcall(function() ws:SendFastExitSignal(player) end) end
+    elseif step == 2 then
+        okX, err = pcall(function() ws:SendSlowExitSignal(player) end)
+    else
+        okX, err = pcall(function() ws:StopInDevice(player, Vector4.new(0, 0, 0, 1), Quaternion.new(0, 0, 0, 1)) end)
+        if not okX then okX, err = pcall(function() ws:StopInDevice(player) end) end
+    end
+    r.ok = okX
+    if not okX then r.err = tostring(err) end
+    return r
+end
+
 local function addProbe(name, fn) probes[#probes + 1] = { name = name, fn = fn } end
 
 -- HUD : pertes humaines = hostile vu debout puis mort OU neutralise (assomme / vaincu)
@@ -2125,7 +2177,7 @@ registerForEvent('onUpdate', function(dt)
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(), ram = ramNow,
                  hp = hp, dead = isDead, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody, cg = cgState,
-                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, summon = summon, buffs = buffs, phone = phone, breach = breach, weapon = weapon, wk = wk, wclip = wclip,
+                 frz = AgentFreezeInfo(player, psm, defs), lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, summon = summon, buffs = buffs, phone = phone, breach = breach, weapon = weapon, wk = wk, wclip = wclip,
                  enemies = enemies, foes = foes, res = resCache, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, ftLoading = ftLoading, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)
@@ -2197,6 +2249,7 @@ end
 local function computePath(player, target, avoid)
     local ai = Game.GetAINavigationSystem()
     local pos = player:GetWorldPosition()
+    if avoid and ((pos.x - avoid.x) ^ 2 + (pos.y - avoid.y) ^ 2) < 64 then avoid = nil end   -- 12/10 : zone posee sur V lui-meme
     local a = ai:FindPointInSphereForCharacter(pos, 3.0, player)
     if not (a and a.point and tostring(a.status):find('OK')) then return nil, 'depart hors navmesh', false end
     local b = ai:FindPointInSphereForCharacter(target, 6.0, player)
@@ -2995,6 +3048,10 @@ local function handleCommand(player, cmd)
         local p = lastFastTravel[cmd.x or -1]
         if not p then resp.reason = 'index inconnu (refaire fast_travel_points)'; return resp end
         journal(string.format('RUN  fast_travel idx=%d', cmd.x))
+        if cmd.z ~= 1 and AgentWorkspotLocked(player) then
+            resp.reason = 'V en workspot (scene) : teleportation refusee'     -- 12/10 : la teleportation cassait la scene
+            journal('FAIL fast_travel : ' .. resp.reason); return resp
+        end
         local fts = Game.GetScriptableSystemsContainer():Get('FastTravelSystem')
         local did, errs = {}, {}
         -- source du jeu (fastTravelSystem.script) : PerformFastTravel(player, nodeData) ne verifie que HasFastTravelPoint
@@ -3409,6 +3466,11 @@ local function handleCommand(player, cmd)
             resp.ok and 'OK  ' or (resp.pending and 'WAIT' or 'FAIL'), prevK, want, method, nowK,
             tostring(resp.charges), errA and (' err=' .. errA) or ''))
         return resp
+    elseif cmd.cmd == 'ws_exit' then
+        local r = AgentWorkspotExit(player, math.floor(tonumber(cmd.x) or 1))
+        for k, v in pairs(r) do resp[k] = v end
+        journal(string.format('%s ws_exit %d : avant=%s %s', r.ok and 'OK  ' or 'FAIL', r.step, tostring(r.before), tostring(r.err or r.reason or '')))
+        return resp
     elseif cmd.cmd == 'effects' then
         -- DIAGNOSTIC : effets de statut appliques a V (restrictions de gameplay incluses : « Action impossible »)
         local out, restr = {}, {}
@@ -3432,7 +3494,7 @@ local function handleCommand(player, cmd)
         for _, tag in ipairs({ 'NoCombat', 'NoWeapons', 'NoMovement', 'NoJump', 'NoScanning', 'NoQuickHacks', 'InScene', 'NoDriving',
                                'NoPhone', 'PhoneCall', 'NoCameraControl', 'NoZooming', 'NoDodge', 'NoSprint', 'FistFight', 'VehicleNoSummoning',
                                'NoCrouch', 'NoWorldInteractions', 'NoInteractions', 'Braindance', 'Restricted', 'VehicleNoInteraction', 'NoAiming' }) do
-            local ok, v = pcall(function() return StatusEffectSystem.ObjectHasTag(player, CName.new(tag)) end)
+            local ok, v = pcall(function() return StatusEffectSystem.ObjectHasStatusEffectWithTag(player, CName.new(tag)) end)
             if ok and v == true then restr[#restr + 1] = tag end
         end
         local inScene = nil

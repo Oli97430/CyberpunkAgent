@@ -122,6 +122,9 @@ def fast_travel_to(tx: float, ty: float, log=print, min_gain_m: float = 800.0, s
     `stop` (F11/F12) : plus aucune touche ni commande, retour « arret d urgence » (12/10)."""
     def _stopped():
         return stop is not None and stop.is_set()
+    lk = motion.game_lock(motion.read_state(timeout=1.0) or {})
+    if lk:                                                # 12/10 : la teleportation casse la scene et laisse V fige
+        return {'ok': False, 'reason': f'V fige par le jeu ({lk}) : pas de teleportation'}
     r = _wait(_send({'cmd': 'fast_travel_points'}), timeout=6.0)
     pts = [p for p in ((r or {}).get('points') or []) if p.get('x') is not None]
     if not pts:

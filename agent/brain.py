@@ -211,7 +211,7 @@ _AUTOTEST = {'alert_t': -1e9}     # derniere alerte « V ne bouge pas » (le pro
 def _busy_state(s: dict) -> bool:
     """Etat ou l immobilite de V est normale (dialogue, scene, vehicule, menu, chargement, mort, danse, breach)."""
     hp = s.get('hp')
-    return bool((s.get('dialog') or {}).get('choices') or s.get('scene') or s.get('vehicle') or s.get('menu')
+    return bool((s.get('dialog') or {}).get('choices') or motion.game_lock(s) or s.get('vehicle') or s.get('menu')
                 or s.get('ftLoading') or s.get('dead') or (isinstance(hp, (int, float)) and hp <= 0.5)
                 or (s.get('bd') or {}).get('active') or (s.get('breach') or {}).get('state') == 1)
 
@@ -406,6 +406,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     bd_t = None
     bd_ok, bd_tries = True, 0
     menu_t, menu_esc, scene_t = None, 0, None
+    lock_t, lock_step, lock_told = None, 0, False     # 12/10 : V fige par le jeu (workspot de scene)
     scene_pos, scene_wait = None, 25.0
     shop_back_t = -999.0
     last_close_t = -999.0
@@ -928,6 +929,32 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         menu_t = time.perf_counter(); menu_esc = 0
                     time.sleep(0.4); continue
                 menu_t = None
+                # 0a4b. 12/10 V FIGE PAR LE JEU (workspot de scene) : on laisse la scene se derouler (la scene Takemura
+                # demandait 88 s) ; ni touche ni voyage (la teleportation la cassait : V fige 15 min le 12/10) ; puis
+                # sorties de workspot par le mod, puis pause + Telegram
+                lock = motion.game_lock(st)
+                if lock and not (st.get('dialog') or {}).get('choices') and not st.get('combat'):
+                    now_l = time.perf_counter()
+                    if lock_t is None:
+                        lock_t, lock_step, lock_told = now_l, 0, False
+                        kbm.release_all()
+                        _log(f"V fige par le jeu ({lock}) : locomotion={st.get('locomotion')} frz={st.get('frz')} -> on laisse la scene se derouler (ni touche ni voyage)")
+                    el_l = now_l - lock_t
+                    if lock_step < 3 and el_l > 120.0 + 30.0 * lock_step:
+                        lock_step += 1
+                        rr_l = nav._wait(nav._send({'cmd': 'ws_exit', 'x': lock_step}), timeout=3.0) or {}
+                        time.sleep(2.0)
+                        _log(f"  [fige] sortie de workspot {lock_step}/3 : envoyee={rr_l.get('ok')} {rr_l.get('err') or ''} -> {motion.game_lock(motion.read_state() or {}) or 'LIBRE'}")
+                    elif el_l > 300.0 and not lock_told:
+                        lock_told = True
+                        _log(f'V fige par le jeu depuis {el_l / 60:.0f} min ({lock}) malgre 3 sorties : PAUSE + Telegram')
+                        remote.notify(f'V est fige depuis {el_l / 60:.0f} min ({lock}) : clavier et souris sans effet. Mis en pause : debloque ou recharge, puis F11 / « reprendre ».')
+                        if pause is not None:
+                            pause.set(); lock_t = None
+                    time.sleep(0.5); continue
+                if lock_t is not None:
+                    _log(f'V libere apres {time.perf_counter() - lock_t:.0f} s (etape {lock_step})')
+                    lock_t = None; rot_failures = 0; last_block_pos = None; navp.displaced()
                 # 0a5. SCENE sans choix de dialogue depuis 25 s (assis a un stand, conversation muette) : on en sort
                 if st.get('scene') and not (st.get('dialog') or {}).get('choices') and not (st.get('bd') or {}).get('active'):
                     _hostile_near = _threat_near(st)          # meme regle que les trajets (police, autre niveau, intouchables exclus)
@@ -1659,7 +1686,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     # coince au meme endroit deux fois : on memorise la zone, le mod evitera d y renvoyer
                     s_h = motion.read_state() or st
                     here = (s_h['x'], s_h['y'])
-                    if not r.get('ok') and last_block_pos and math.hypot(here[0] - last_block_pos[0], here[1] - last_block_pos[1]) < 3.0:
+                    _rot = 'rotation initiale' in str(r.get('reason') or '')   # 12/10 : V n a pas bouge -> pas une zone bloquante
+                    if _rot:
+                        pass
+                    elif not r.get('ok') and last_block_pos and math.hypot(here[0] - last_block_pos[0], here[1] - last_block_pos[1]) < 3.0:
                         nav.add_avoid(*here)
                         _log(f'  zone bloquante memorisee ({here[0]:.0f},{here[1]:.0f}) : prochain troncon ailleurs')
                         last_block_pos = None
@@ -1670,12 +1700,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     if 'rotation initiale' in str(r.get('reason') or ''):
                         rot_failures += 1
                         if rot_failures >= 2:
-                            _log('la souris est sans effet depuis 2 trajets : V est sans doute dans une scene (assis, stand) -> on en sort')
                             s_b = motion.read_state() or st
-                            kbm.tap('ESC', 0.09); time.sleep(0.8)
-                            s_e = motion.read_state() or {}
-                            if s_e.get('seq') == s_b.get('seq'):            # menu pause ouvert par Echap -> on le referme
-                                kbm.tap('ESC', 0.09); time.sleep(0.6)
+                            if motion.game_lock(s_b):
+                                rot_failures = 0; continue            # 12/10 : fige par le jeu -> etape 0a4b (aucune touche)
+                            _log('la souris est sans effet depuis 2 trajets : V est sans doute dans une scene (assis, stand) -> on en sort')
+                            kbm.tap('BACKSPACE', 0.09); time.sleep(0.6)
+                            if (motion.read_state() or {}).get('menu'):  # 12/10 : Echap SEULEMENT si un menu est ouvert
+                                kbm.tap('ESC', 0.09); time.sleep(0.6)    # (Echap a l aveugle ouvrait le menu pause : 9 fois sur 9)
                             kbm.hold('S'); time.sleep(1.5); kbm.release('S')
                             kbm.act('jump', 0.1); time.sleep(0.8)
                             rot_failures = 0

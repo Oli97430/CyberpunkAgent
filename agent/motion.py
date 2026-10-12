@@ -90,6 +90,23 @@ import math
 
 YAW_SIGN = 1.0
 ARRIVE_M = 1.5
+LOCO_WORKSPOT = 9   # 12/10 : valeur NATIVE de gamePSMLocomotionStates.Workspot (metadata.json), pas 8
+
+
+def game_lock(st: dict) -> str | None:
+    """12/10 : V fige PAR LE JEU (workspot de scene, tier de scene 4-5, effet NoMovement) -> ni touche ni voyage n y
+    peuvent rien. Jamais en vehicule (les sieges sont des workspots)."""
+    if not st or st.get('vehicle'):
+        return None
+    f = st.get('frz')
+    if isinstance(f, dict):
+        if f.get('ws'):
+            return 'workspot' + (f" {f['wst']}" if f.get('wst') else '')
+        hl = f.get('hl')
+        if isinstance(hl, (int, float)) and 4 <= hl <= 5:
+            return f'scene tier {int(hl)}'
+        return 'NoMovement' if 'NoMovement' in (f.get('tags') or []) else None
+    return 'workspot' if st.get('locomotion') == LOCO_WORKSPOT else None
 STUCK_WINDOW_S = 1.5
 STUCK_MIN_M = 0.4
 
