@@ -183,6 +183,45 @@ function AgentFoeInfo(ent, rec)
     rec.kind, rec.emp, rec.imm, rec.boss, rec.net = fi.kind, fi.emp, fi.imm, fi.boss, fi.net
 end
 
+-- 12/10 ARMES A DISTANCE ADAPTEES (globales : pas d upvalue de plus)
+function AgentEnumName(v) return (tostring(v):gsub('^[%w_]+ : ', ''):gsub(' %(%-?%d+%)', '')) end
+-- cle d un EXEMPLAIRE : hash TweakDB + rng_seed (champ CET non verifie : 0 si absent)
+function AgentItemKey(id)
+    local h, sd = nil, 0
+    pcall(function() if ItemID.IsValid(id) then h = id.id.hash end end)
+    if not h then return nil end
+    pcall(function() sd = id.rng_seed or 0 end)
+    return string.format('%.0f:%.0f', h, sd), h, sd
+end
+-- fiche d une arme a distance (tag RangedWeapon, base_weapon.tweak:15) ; l element d une arme a feu n agit que par ses
+-- effets d etat (damageSystem.script:546-548) : on exporte les taux d application
+function AgentRangedInfo(player, ts, edata, data, id, rec)
+    local isR = false
+    pcall(function() isR = data:HasTag('RangedWeapon') end)
+    if not isR then return false end
+    local S = gamedataStatType
+    local function st(x) local ok, v = pcall(function() return data:GetStatValueByType(x) end); return (ok and type(v) == 'number') and v or 0 end
+    local k, h, sd = AgentItemKey(id)
+    rec.r, rec.key, rec.h, rec.seed = true, k, h, sd
+    pcall(function() rec.evo = AgentEnumName(TweakDBInterface.GetWeaponItemRecord(ItemID.GetTDBID(id)):Evolution():Type()) end)
+    local dm = { Physical = st(S.PhysicalDamage), Electric = st(S.ElectricDamage), Thermal = st(S.ThermalDamage), Chemical = st(S.ChemicalDamage) }
+    local best, bv = 'Physical', dm.Physical
+    for _, e in ipairs({ 'Electric', 'Thermal', 'Chemical' }) do if dm[e] > bv then best, bv = e, dm[e] end end
+    rec.elem = best
+    rec.rng, rec.maxr = st(S.EffectiveRange), st(S.MaximumRange)
+    rec.mag, rec.cyc, rec.chg = st(S.MagazineCapacity), st(S.CycleTime), st(S.ChargeTime)
+    rec.burn, rec.shock, rec.poison = st(S.BurningApplicationRate), st(S.ElectrocutedApplicationRate), st(S.PoisonedApplicationRate)
+    rec.smart, rec.pierce = st(S.ItemRequiresSmartLink) > 0, st(S.TechPierceEnabled) > 0
+    pcall(function() rec.ammo = ts:GetItemQuantity(player, ItemID.CreateQuery(TweakDBInterface.GetWeaponItemRecord(ItemID.GetTDBID(id)):Ammo():GetID())) end)
+    pcall(function() rec.eq_ok = edata:IsEquippable(data) end)
+    pcall(function()
+        for _, p in ipairs(data:GetItemParts() or {}) do
+            if TDBID.ToStringDEBUG(InnerItemData.GetStaticData(p):GetID()):find('TechMod1') then rec.emp = true end
+        end
+    end)
+    return true
+end
+
 local function addProbe(name, fn) probes[#probes + 1] = { name = name, fn = fn } end
 
 -- HUD : pertes humaines = hostile vu debout puis mort OU neutralise (assomme / vaincu)
@@ -1623,12 +1662,14 @@ registerForEvent('onUpdate', function(dt)
             end)
         end
         -- ARME ACTIVE (main droite) : type TweakDB, pour que le combat sache ce que V tient vraiment
-        local weapon = nil
+        local weapon, wk, wclip = nil, nil, nil
         pcall(function()
             local ts = Game.GetTransactionSystem()
             local obj = ts:GetItemInSlot(player, TweakDBID.new('AttachmentSlots.WeaponRight'))
             if obj then
                 local wid = obj:GetItemID()
+                wk = AgentItemKey(wid)                                                     -- 12/10 : exemplaire en main
+                pcall(function() wclip = WeaponObject.GetMagazineAmmoCount(obj) end)     -- weapon.script:390
                 weapon = tostring(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(wid)):ItemType():Type()):gsub('gamedataItemType : ', ''):gsub(' %(%d+%)', '')
             end
         end)
@@ -1935,7 +1976,7 @@ registerForEvent('onUpdate', function(dt)
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(), ram = ramNow,
                  hp = hp, dead = isDead, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody, cg = cgState,
-                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, summon = summon, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
+                 lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, summon = summon, buffs = buffs, phone = phone, breach = breach, weapon = weapon, wk = wk, wclip = wclip,
                  enemies = enemies, foes = foes, res = resCache, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, ftLoading = ftLoading, seqEnd = seq }
     end)
     -- journal une fois par changement de dialogue : structure reelle des hubs (pour la competence)
@@ -2184,6 +2225,7 @@ local function handleCommand(player, cmd)
                     pcall(function() rec.active = (tostring(ItemID.GetTDBID(edata:GetActiveGadget())) == tostring(ItemID.GetTDBID(id))) end)
                 end
                 pcall(function() rec.quest = data:HasTag('Quest') end)
+                pcall(AgentRangedInfo, player, ts, edata, data, id, rec)   -- 12/10 : fiche des armes a distance
                 if not isMoney(id) then out[#out + 1] = rec end     -- l argent n est jamais un objet a vendre/demonter
             end
         end
@@ -2198,6 +2240,7 @@ local function handleCommand(player, cmd)
                     pcall(function() rec.name = GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(sid.id):DisplayName()) end)
                     pcall(function() rec.type = tostring(TweakDBInterface.GetItemRecord(sid.id):ItemType():Type()):gsub('gamedataItemType : ', ''):gsub(' %(%d+%)', '') end)
                     pcall(function() rec.dps = ts:GetItemData(player, sid):GetStatValueByType(gamedataStatType.EffectiveDPS) end)
+                    rec.key = AgentItemKey(sid)
                 end
                 slots[#slots + 1] = rec
             end
@@ -2216,6 +2259,7 @@ local function handleCommand(player, cmd)
                     pcall(function() rec.name = GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(wid.id):DisplayName()) end)
                     pcall(function() rec.type = tostring(TweakDBInterface.GetItemRecord(wid.id):ItemType():Type()):gsub('gamedataItemType : ', ''):gsub(' %(%d+%)', '') end)
                     pcall(function() rec.dps = ts:GetItemData(player, wid):GetStatValueByType(gamedataStatType.EffectiveDPS) end)
+                    rec.ik = AgentItemKey(wid)                -- 12/10 : cle d exemplaire (rec.key = numero de touche)
                 end
                 hk[#hk + 1] = rec
             end
@@ -2245,6 +2289,8 @@ local function handleCommand(player, cmd)
         pcall(function() resp.money = ts:GetItemQuantity(player, MarketSystem.Money()) end)
         pcall(function() resp.weight = Game.GetStatsSystem():GetStatValue(player:GetEntityID(), gamedataStatType.Weight) end)
         pcall(function() resp.carry = Game.GetStatsSystem():GetStatValue(player:GetEntityID(), gamedataStatType.CarryCapacity) end)
+        pcall(function() resp.smartlink = Game.GetStatsSystem():GetStatValue(player:GetEntityID(), gamedataStatType.HasSmartLink) > 0 end)
+        pcall(function() resp.active = AgentItemKey(edata:GetActiveItem(gamedataEquipmentArea.Weapon)) end)   -- eqS:3235
         journal(string.format('OK   inventory : %d objets', #out))
         return resp
     elseif cmd.cmd == 'equip' then
@@ -3068,6 +3114,75 @@ local function handleCommand(player, cmd)
         resp.ok = okE
         if not okE then resp.reason = 'requete refusee : ' .. tostring(errE) end
         journal((okE and 'OK   ' or 'FAIL ') .. 'weapon_slot ' .. tostring(n) .. (okE and '' or (' : ' .. tostring(errE))))
+        return resp
+    elseif cmd.cmd == 'wslots' then
+        -- 12/10 : leger (sans GetItemList) : 3 emplacements d arme, arme active de la zone, arme en main
+        local edata = Game.GetScriptableSystemsContainer():Get('EquipmentSystem'):GetPlayerData(player)
+        local slots = {}
+        for i = 0, 2 do
+            local rec = { slot = i + 1 }
+            pcall(function()
+                local sid = edata:GetItemInEquipSlot(gamedataEquipmentArea.Weapon, i)
+                rec.key = AgentItemKey(sid)
+                if rec.key then rec.name = GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(sid)):DisplayName()) end
+            end)
+            -- roue (ce que la touche i+1 degaine) : copie de la zone Weapon par UpdateWeaponWheel (eqS:3972, appele en fin d EquipItem :821)
+            pcall(function() rec.wkey = AgentItemKey(edata:GetItemInEquipSlot(gamedataEquipmentArea.WeaponWheel, i)) end)
+            slots[#slots + 1] = rec
+        end
+        pcall(function() resp.active = AgentItemKey(edata:GetActiveItem(gamedataEquipmentArea.Weapon)) end)
+        pcall(function() resp.held = AgentItemKey(Game.GetTransactionSystem():GetItemInSlot(player, TweakDBID.new('AttachmentSlots.WeaponRight')):GetItemID()) end)
+        resp.ok, resp.slots = true, slots
+        return resp
+    elseif cmd.cmd == 'equip_ws' then
+        -- 12/10 : range une arme dans un emplacement d arme NON actif (branche C de EquipItem, eqS:780-793 : UnequipItem
+        -- de l ancienne, ecriture, UpdateWeaponWheel ; sans animation). hash = hash TweakDB, z = rng_seed, y = emplacement
+        -- 1..3, x = index de la derniere liste d inventaire (repli). Chemin du menu : GameplayEquipRequest (eqS:6530).
+        local slot = math.floor(tonumber(cmd.y) or 3)
+        local wantH, wantS = tonumber(cmd.hash), tonumber(cmd.z) or 0
+        if slot < 1 or slot > 3 or not wantH then resp.reason = 'parametres : hash, z, y=1..3'; return resp end
+        local ts = Game.GetTransactionSystem()
+        local es = Game.GetScriptableSystemsContainer():Get('EquipmentSystem')
+        local edata = es:GetPlayerData(player)
+        local id = nil
+        local okL, items = ts:GetItemList(player)
+        if type(okL) == 'table' then items = okL end
+        for i = 1, #(items or {}) do
+            local okI, iid = pcall(function() return items[i]:GetID() end)
+            if okI then
+                local _, h, sd = AgentItemKey(iid)
+                if h == wantH and (wantS == 0 or sd == wantS) then id = iid; break end
+            end
+        end
+        -- PAS de repli sur un index de liste : l arme a pu etre vendue / demontee, l index designerait un autre objet (revue)
+        if not id then resp.reason, resp.absent = 'arme absente du sac', true; journal('FAIL equip_ws : absente'); return resp end
+        local before, held = {}, nil
+        for i = 0, 2 do before[i + 1] = ''; pcall(function() before[i + 1] = AgentItemKey(edata:GetItemInEquipSlot(gamedataEquipmentArea.Weapon, i)) or '' end) end
+        pcall(function() held = AgentItemKey(ts:GetItemInSlot(player, TweakDBID.new('AttachmentSlots.WeaponRight')):GetItemID()) end)
+        local key = AgentItemKey(id)
+        resp.before, resp.held, resp.key = before, held, key
+        if before[slot] == key then resp.ok, resp.already = true, true; return resp end
+        if held and held == before[slot] then
+            resp.reason = 'emplacement en main (echange en main non sonde)'; journal('FAIL equip_ws : ' .. resp.reason); return resp
+        end
+        local okQ, errQ = pcall(function()
+            for i = 1, 3 do
+                if i ~= slot and before[i] == key then
+                    local u = UnequipRequest.new()                     -- eqS:6580
+                    u.owner = player; u.areaType = gamedataEquipmentArea.Weapon; u.slotIndex = i - 1; u.force = true
+                    es:QueueRequest(u)
+                end
+            end
+            local r = GameplayEquipRequest.new()
+            r.owner = player; r.itemID = id; r.slotIndex = slot - 1
+            r.addToInventory = false
+            r.blockUpdateWeaponActiveSlots = true                       -- jamais la branche A (eqS:767 : degainer si activeIndex == slot)
+            r.forceEquipWeapon = false                                  -- branche C (eqS:780-793), PAS la branche B
+            es:QueueRequest(r)
+        end)
+        resp.ok = okQ
+        if not okQ then resp.reason = 'requete refusee : ' .. tostring(errQ) end
+        journal((okQ and 'OK   ' or 'FAIL ') .. 'equip_ws ' .. tostring(key) .. ' -> ' .. slot .. ' (avant ' .. table.concat(before, ' | ') .. ', en main ' .. tostring(held) .. ')' .. (okQ and '' or (' err=' .. tostring(errQ))))
         return resp
     elseif cmd.cmd == 'grenade_select' then
         -- 12/10 GRENADE ADAPTEE : met sur le raccourci RB (clic molette = GetActiveGadget) la meilleure grenade de la famille x.

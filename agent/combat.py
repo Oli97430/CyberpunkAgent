@@ -27,6 +27,21 @@ GRENADE_MIN_M, GRENADE_MAX_M, GRENADE_CD = 11.0, 28.0, 20.0
 MELEE_RANGE = 2.4
 MELEE_SLOT = '3'                          # fixe par inventory.manage() : emplacement au meilleur DPS de melee
 RANGED_SLOT = None                        # fixe par inventory.manage() si une arme a distance est equipee
+# 12/10 ARME A DISTANCE ADAPTEE (Olivier : « de meme pour l arme a distance ») : V n avait qu un fusil a pompe (portee
+# efficace 10 m) dans l emplacement 3, utilise de 15 a 42 m. L emplacement 3 recoit la meilleure arme pour les ennemis
+# JUSTE AVANT de degainer (echange propre d un emplacement non actif, commande equip_ws du mod).
+ARSENAL: dict = {}          # cle 'hash:seed' -> fiche d arme a distance (inventory.manage)
+SMARTLINK = None            # stat joueur HasSmartLink
+RANGED_KEY = None           # arme REELLEMENT dans RANGED_SLOT (verifiee par wslots)
+WSWAP_FAILS = 0             # echanges sans effet ; >= 2 -> on n echange plus pendant 15 min (comme inventory.EQUIP_BROKEN)
+_WSWAP_T = [0.0]            # heure du dernier echange sans effet
+FAM_RNG = {'shotgun': 10.0, 'smg': 20.0, 'pistol': 20.0, 'ar': 30.0, 'lmg': 30.0, 'precision': 50.0, 'sniper': 60.0}
+LAST_PICK = {'sig': None, 't': -1e9}
+FAMILY = {'Wea_Handgun': 'pistol', 'Wea_Revolver': 'pistol', 'Wea_SubmachineGun': 'smg', 'Wea_Rifle': 'ar',
+          'Wea_AssaultRifle': 'ar', 'Wea_Shotgun': 'shotgun', 'Wea_ShotgunDual': 'shotgun',
+          'Wea_PrecisionRifle': 'precision', 'Wea_SniperRifle': 'sniper', 'Wea_LightMachineGun': 'lmg'}
+KIND_W = {'mech': 3.0, 'drone': 1.5, 'android': 1.2, 'robot': 1.2, 'turret': 1.5, 'human': 1.0}
+MECHANICAL = ('mech', 'drone', 'android', 'robot', 'turret')   # immunites poison + pas de bonus de tir a la tete
 RANGED_MIN_M, RANGED_MAX_M = 12.0, 45.0   # on passe a l arme a feu au-dela de 12 m (ou cible en hauteur) et on revient
 RANGED_BACK_M = 7.0                       # au corps a corps sous 7 m : au CAC, c est le katana (Olivier, 13/09)
 CYBERWARE_CD = 18.0                       # touche : kbm.K('iconic') (F chez ce joueur)
@@ -461,6 +476,133 @@ def _ensure_weapon(slot, melee: bool) -> None:
         draw_slot(slot, melee); time.sleep(0.2)
 
 
+# ---- arme a distance ADAPTEE (12/10) -------------------------------------------------------------------------------------
+def _kind(e) -> str:
+    k = str(e.get('kind') or 'human').lower()
+    return k if k in KIND_W else 'human'
+
+
+def _rng(w: dict) -> float:
+    """Portee efficace (stat du mod), sinon une valeur par famille (revue : 30 m pour un pompe sans stat lue)."""
+    r = w.get('rng') or 0
+    return float(r) if r > 0 else FAM_RNG.get(FAMILY.get(w.get('type') or '') or '', 30.0)
+
+
+def _falloff(d: float, rng: float) -> float:
+    """APPROXIMATION : les vraies courbes de chute de degats ne sont pas lues."""
+    return 1.0 if (not rng or d <= rng) else max(0.25, rng / d)
+
+
+def weapon_score(w: dict, kind: str, d: float, high: bool, foe: dict | None = None) -> float:
+    """Score d une arme contre UN ennemi. L element d une arme a feu n agit que par ses effets d etat (damageSystem.script:546) ;
+    immunites lues par le mod (foe['imm'] : E=EMP, B=brulure, P=poison) ; foe['emp'] = mecanique / netrunner / exo."""
+    fam = FAMILY.get(w.get('type') or '')
+    if not fam or (w.get('ammo') is not None and w['ammo'] <= 0) or w.get('eq_ok') is False:
+        return 0.0
+    rng = _rng(w)
+    s = (w.get('dps') or 0.0) * _falloff(d, rng)
+    mech = kind in MECHANICAL
+    imm = str((foe or {}).get('imm') or '')
+    if (w.get('elem') == 'Electric' or (w.get('shock') or 0) > 0 or w.get('emp')) and 'E' not in imm:
+        s *= 1.35 if (mech or (foe or {}).get('emp')) else 1.05
+    if w.get('elem') == 'Chemical' or (w.get('poison') or 0) > 0:
+        s *= 0.95 if (mech or 'P' in imm) else 1.10
+    if (w.get('elem') == 'Thermal' or (w.get('burn') or 0) > 0) and not mech and 'B' not in imm:
+        s *= 1.10
+    if mech and fam in ('sniper', 'precision', 'pistol'):
+        s *= 0.85
+    if w.get('smart'):
+        s *= (1.4 if (kind == 'drone' or high) else 1.0) if SMARTLINK else 0.6
+    if fam == 'shotgun' and d > 1.2 * rng:
+        s *= 0.3
+    if fam == 'sniper':
+        s *= 0.5 if d < 15 else 0.6 if kind == 'drone' else 1.15 if d > 35 else 0.8   # visee a 4 deg : un coup rate coute cher
+    if fam == 'precision' and kind == 'human' and d > 30:
+        s *= 1.10
+    if kind == 'drone' and fam in ('smg', 'ar', 'lmg'):
+        s *= 1.15
+    if kind == 'mech' and fam in ('lmg', 'ar'):
+        s *= 1.15
+    return s
+
+
+def _group_score(w, foes, z0) -> float:
+    return sum(KIND_W[_kind(x)] * weapon_score(w, _kind(x), x['d'], (x.get('z', z0) - z0) > 2.5, x) for x in foes)
+
+
+def _slot_key(slot: int):
+    """Cle de l arme REELLEMENT dans l emplacement (roue = touche) ; '' si vide, None si illisible."""
+    ws = nav._wait(nav._send({'cmd': 'wslots'}), timeout=0.8) or {}
+    for sl in ws.get('slots') or []:
+        if int(sl.get('slot') or 0) == int(slot):
+            return sl.get('wkey') or sl.get('key') or ''
+    return None
+
+
+def swap_ranged(key: str, log=print, why: str = '') -> bool:
+    global RANGED_KEY, WSWAP_FAILS
+    if WSWAP_FAILS and time.perf_counter() - _WSWAP_T[0] > 900.0:
+        WSWAP_FAILS = 0                                   # revue : un incident ne coupe pas la fonction pour toute la session
+    w = ARSENAL.get(key)
+    if not w or not RANGED_SLOT or WSWAP_FAILS >= 2 or str(RANGED_SLOT) == str(MELEE_SLOT):
+        return False
+    slot, t0 = int(RANGED_SLOT), time.perf_counter()
+    r = nav._wait(nav._send({'cmd': 'equip_ws', 'x': w.get('i'), 'y': slot, 'z': float(w.get('seed') or 0), 'hash': int(w.get('h') or 0)}), timeout=1.0)
+    if not (r and r.get('ok')):
+        if (r or {}).get('absent'):
+            ARSENAL.pop(key, None)                        # vendue / demontee depuis l inventaire : on l oublie
+        log(f"  [armes] echange refuse : « {w.get('name')} » ({(r or {}).get('reason') or 'mod muet'})")
+        return False
+    if not r.get('already'):
+        time.sleep(0.15)
+        got = _slot_key(slot)
+        if not got:
+            log(f"  [armes] emplacement {slot} illisible apres l echange vers « {w.get('name')} »")
+            return False                                  # pas une preuve d echec : pas de compteur
+        if got != key:
+            WSWAP_FAILS += 1; _WSWAP_T[0] = time.perf_counter()
+            log(f"  [armes] emplacement {slot} : echange SANS EFFET vers « {w.get('name')} » (lu {got}, echec {WSWAP_FAILS}/2)")
+            return False
+    old = (ARSENAL.get(RANGED_KEY) or {}).get('name')
+    RANGED_KEY, WSWAP_FAILS = key, 0
+    log(f"  [armes] emplacement {slot} : « {old} » -> « {w.get('name')} » ({time.perf_counter() - t0:.2f} s){why}")
+    return True
+
+
+def prepare_ranged(alive, st, log=print) -> None:
+    """Avant de degainer RANGED_SLOT (V tient encore la melee) : y range la meilleure arme pour CES ennemis."""
+    if not ARSENAL or not RANGED_SLOT:
+        return
+    foes = [x for x in alive if not x.get('police') and x.get('d') is not None and x['d'] < 70] or list(alive[:1])
+    if not foes:
+        return
+    sig = tuple(sorted((_kind(x), int(x['d'] // 10)) for x in foes[:6]))
+    now = time.perf_counter()
+    if sig == LAST_PICK['sig'] and now - LAST_PICK['t'] < 20.0:
+        return
+    LAST_PICK.update(sig=sig, t=now)
+    global RANGED_KEY
+    real = _slot_key(int(RANGED_SLOT))                     # revue : ce qui est VRAIMENT dans l emplacement
+    if real is not None:
+        RANGED_KEY = real or None
+    z0 = st.get('z', 0.0) if st else 0.0
+    ranked = sorted(((_group_score(w, foes, z0), k) for k, w in ARSENAL.items()), reverse=True)
+    if not ranked or ranked[0][0] <= 0:
+        return
+    s_best, k_best = ranked[0]
+    s_cur = _group_score(ARSENAL[RANGED_KEY], foes, z0) if RANGED_KEY in ARSENAL else 0.0
+    comp = ', '.join(f"{_kind(x)} {x['d']:.0f} m" + (' haut' if (x.get('z', z0) - z0) > 2.5 else '') for x in foes[:6])
+    w = ARSENAL[k_best]
+    log(f"  [armes] choix : [{comp}] -> « {w.get('name')} » ({FAMILY.get(w.get('type'))}/{w.get('evo')}/{w.get('elem')}, R{(w.get('rng') or 0):.0f}) "
+        f"score {s_best:.0f}" + (f" ; 2e « {ARSENAL[ranked[1][1]].get('name')} » {ranked[1][0]:.0f}" if len(ranked) > 1 else '')
+        + f" ; en place « {(ARSENAL.get(RANGED_KEY) or {}).get('name')} » {s_cur:.0f}")
+    for s_k, k_k in ranked:                                          # revue : arme vendue / demontee -> la suivante
+        if k_k == RANGED_KEY or s_k <= 0 or s_k <= 1.2 * s_cur:      # hysteresis : pas d echange pour +5 %
+            break
+        if swap_ranged(k_k, log) or k_k in ARSENAL:                  # echange fait, ou refus autre que « absente »
+            break
+
+
 # ---- engagement (avant que le jeu ne passe en combat) -----------------------------------
 LAST_ENGAGE = {'d0': None, 'd1': None}          # distance a la cible au debut / a la fin du dernier engage (pour le cerveau)
 STEALTH_MAX_M = 12.0                           # accroupi seulement a moins de 12 m : plus loin on court (V n est pas une limace)
@@ -565,6 +707,8 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
             # DECLENCHER le combat : a distance, quelques tirs alignes (style mixte / distance) ; au contact, un coup
             if RANGED_SLOT and _C3.style != 'melee' and 12.0 < e['d'] < RANGED_MAX_M and gap < 6 and struck < 2 and time.perf_counter() - t0 > 1.0:
                 kbm.release('W'); kbm.act_release('sprint')
+                if struck == 0:
+                    prepare_ranged([e], st, log)                   # 12/10 : la bonne arme dans l emplacement avant de degainer
                 _ensure_weapon(RANGED_SLOT, melee=False)
                 kbm.mouse('right', True); time.sleep(0.2); kbm.mouse_tap('left', 0.35); kbm.mouse('right', False)   # rafale : un tir isole a 30 m rate
                 struck += 1; seq = None
@@ -601,6 +745,8 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     blind_hacks, blind_hacks_t = 0, -99.0              # hacks « par defaut » de suite (liste du panneau illisible) : pause, pas coupure
     mode = 'melee'; shots = 0
     blocked_t, blocked_log_t = None, -99.0   # 12/10 : pas de ligne de tir depuis... / dernier message
+    adv_t0, adv_d0, adv_block = None, 0.0, -1.0   # 12/10 : pompe hors de portee (avance verifiee)
+    dry, dry_until, t_reload = 0, -1.0, -99.0     # 12/10 : chargeur vide sans reserve -> corps a corps
     hack_i = 0
     last_hp, last_hp_t = None, time.perf_counter()
     seq = None
@@ -794,14 +940,15 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 rmin, rback = 8.0, 5.0
             else:
                 rmin, rback = RANGED_MIN_M, RANGED_BACK_M  # melee : arme a feu seulement loin / en hauteur
-            want_ranged = RANGED_SLOT is not None and (high or rmin < e['d'] < RANGED_MAX_M)
+            want_ranged = RANGED_SLOT is not None and now >= dry_until and (high or rmin < e['d'] < RANGED_MAX_M)
             if want_ranged and mode != 'ranged':
+                prepare_ranged(alive, st, log)                     # 12/10 : arme adaptee aux ennemis, avant de degainer
                 if draw_slot(RANGED_SLOT, False):
                     mode = 'ranged'; shots = 0; time.sleep(0.3)
                 else:
                     wsync_fail += 1                                    # l arme a feu ne sort pas : on reste melee et on fonce
                 log(f"  [combat] arme a distance (cible a {e['d']:.0f} m{', en hauteur' if high else ''})")
-            elif mode == 'ranged' and e['d'] <= rback and not high:
+            elif mode == 'ranged' and ((e['d'] <= rback and not high) or now < dry_until):
                 draw_slot(MELEE_SLOT, True); mode = 'melee'; time.sleep(0.4)
                 log('  [combat] retour au corps a corps')
             # l arme REELLEMENT tenue (export du mod) : si elle ne correspond pas au mode, on corrige (la touche
@@ -872,12 +1019,42 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                             blocked_t = None                            # nouveau cycle : decalage de l autre cote
                     seq = None; continue
                 blocked_t = None
+                cur_w = ARSENAL.get(st.get('wk')) or {}
+                sg_far = (gap < 4 and holding_ranged and FAMILY.get(cur_w.get('type') or '') == 'shotgun'
+                          and e['d'] > 1.2 * _rng(cur_w) and not high and now >= adv_block
+                          and (e.get('z', st.get('z', 0.0)) - st.get('z', 0.0)) > -2.0)
+                if sg_far and adv_t0 is not None and now - adv_t0 > 3.0:
+                    if e['d'] > adv_d0 - 1.0:                          # pas de progres (rambarde, eau, vide)
+                        adv_block = now + 10.0; sg_far = False
+                        log(f"  [armes] pompe a {e['d']:.0f} m : V ne se rapproche pas -> il tire quand meme")
+                    adv_t0 = None
+                if sg_far:
+                    # 12/10 : fusil a pompe hors de sa portee (10 m) : les plombs ne font rien a 30 m -> on avance
+                    if adv_t0 is None:
+                        adv_t0, adv_d0 = now, e['d']
+                    kbm.hold('W'); time.sleep(0.6); kbm.release('W')
+                    seq = None; continue
+                adv_t0 = None
                 if gap < 4 and holding_ranged:
                     kbm.mouse('right', True); time.sleep(0.15)          # viser
                     kbm.mouse_tap('left', 0.12); shots += 1; stats['tirs'] = stats.get('tirs', 0) + 1
                     kbm.mouse('right', False)
-                    if shots % 8 == 0:
-                        kbm.act('reload', 0.1); time.sleep(1.2)               # recharger
+                    wc = st.get('wclip')                                # munitions AVANT ce tir (12/10)
+                    if isinstance(wc, (int, float)):
+                        if wc == 0 and now - t_reload > 3.5:
+                            dry += 1                                    # rechargement precedent : rien charge
+                            if dry >= 2:
+                                dry, dry_until = 0, now + 45.0
+                                if cur_w:
+                                    cur_w['ammo'] = 0
+                                log(f"  [armes] plus de munitions pour « {cur_w.get('name') or st.get('weapon')} » : corps a corps 45 s")
+                        elif wc > 0:
+                            dry = 0
+                        need_reload = wc <= 1
+                    else:
+                        need_reload = shots % 8 == 0
+                    if need_reload and now - t_reload > 1.5:
+                        kbm.act('reload', 0.1); time.sleep(1.2); t_reload = now   # recharger
                     if now - t_strafe > STRAFE_CD:
                         side = 'D' if side == 'A' else 'A'; strafe(side, 0.3); t_strafe = now
                 time.sleep(0.15); continue

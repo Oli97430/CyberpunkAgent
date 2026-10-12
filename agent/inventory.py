@@ -65,6 +65,21 @@ def disassemble(index: int, qty: int = 1) -> bool:
 
 
 EQUIP_BROKEN = False              # vrai des qu une reaffectation d emplacement par script s avere sans effet
+RESERVED_KEYS: set = set()        # 12/10 : armes de reserve (cle 'hash:seed') : jamais vendues ni demontees
+
+
+def _ikey(it: dict):
+    return f"{int(it['h'])}:{int(it.get('seed') or 0)}" if it.get('h') else None
+
+
+def _fresh_map(inv: dict) -> dict:
+    """Nom -> exemplaire vendable (revue 12/10 : par nom, la vente pouvait prendre la copie de reserve)."""
+    m = {}
+    for i2 in (inv.get('items') or []):
+        if i2.get('equipped') or i2.get('iconic') or _ikey(i2) in RESERVED_KEYS:
+            continue
+        m.setdefault(i2.get('name'), i2)
+    return m
 
 
 def sell_all(log=print) -> dict:
@@ -74,7 +89,7 @@ def sell_all(log=print) -> dict:
     inv = fetch()                      # indices frais
     if not inv or not inv.get('ok'):
         return {'ok': False}
-    fresh = {it.get('name'): it for it in (inv.get('items') or [])}
+    fresh = _fresh_map(inv)
     for it in list(SELLABLE):
         if not str(it.get('name') or '').strip():
             continue                                   # objets sans nom (eclats, elements de quete) : le jeu les refuse
@@ -85,7 +100,12 @@ def sell_all(log=print) -> dict:
         if r and r.get('ok'):
             total += int(r.get('total') or 0); n += 1
             log(f"  [vente] « {cur.get('name')} » -> {r.get('total')} eddies")
-            inv = fetch(); fresh = {i2.get('name'): i2 for i2 in ((inv or {}).get('items') or [])}
+            try:
+                from . import combat as _cbs
+                _cbs.ARSENAL.pop(_ikey(cur), None)      # 12/10 : arme vendue -> plus dans l arsenal
+            except Exception:
+                pass
+            inv = fetch(); fresh = _fresh_map(inv or {})
         else:
             # un objet refuse (absent pour le jeu, protege...) n arrete pas la vente des autres (17/09 : 16 objets, 0 vendu)
             echecs += 1; streak += 1
@@ -140,12 +160,14 @@ def manage(log=print) -> dict:
     # On n equipe que si l emplacement ne contient pas deja cet objet (9 re-equipements par session sinon :
     # les 3 melee et l arme a feu se chassaient l une l autre).
     in_slot = {int(sl.get('slot') or 0): str(sl.get('name') or '') for sl in (inv.get('slots') or [])}
+    inv_slots = inv
     final = dict(in_slot)                      # contenu REEL des emplacements apres reaffectation
     wanted = {}
     for slot, it in enumerate(melee[:2]):
         wanted[slot] = it
-    if ranged:
-        wanted[2] = ranged[0]
+    from . import combat as _cbr
+    if ranged and not (_cbr.WSWAP_FAILS < 2 and _cbr.ARSENAL and in_slot.get(3) in {str(it.get('name')) for it in ranged}):
+        wanted[2] = ranged[0]          # 12/10 : arme a feu deja en 3 -> c est le combat qui l adapte aux ennemis (prepare_ranged)
     for slot, it in sorted(wanted.items()):
         if in_slot.get(slot + 1) == str(it.get('name')):
             continue
@@ -167,6 +189,7 @@ def manage(log=print) -> dict:
                 EQUIP_BROKEN = True
                 log('  [inventaire] reaffectation SANS EFFET (le jeu garde : ' + ' | '.join(f'{k}:{v}' for k, v in sorted(real.items())) + ') : on garde les emplacements reels')
             final = dict(real)
+            inv_slots = inv2                         # 12/10 : contenu reel des emplacements apres reaffectation
     # emplacements a degainer = ceux REELS apres la reaffectation (16/09 : le combat tapait « 2 » pour l arme a feu
     # alors que le fusil venait de passer en 3 et le Mocassin en 2 -> V restait a 26 m avec une matraque, 0 coup)
     m_by_name = {str(it.get('name')): it for it in melee}
@@ -199,6 +222,32 @@ def manage(log=print) -> dict:
         except Exception as e:
             log(f'  [armes] calibrage impossible : {e}')
     top_idx ={it['i'] for it in melee[:2]} | ({ranged[0]['i']} if ranged else set())
+    # 12/10 ARME A DISTANCE ADAPTEE : arsenal (fiches du mod) + reserve protegee de la vente / du demontage :
+    # la meilleure arme de chaque role (pompe, SMG, fusil d assaut, precision, sniper, mitrailleuse, pistolet, smart, elec)
+    try:
+        from . import combat as _cbw
+        rw = [it for it in items if it.get('r') and it.get('h') and it.get('type') in _cbw.FAMILY and (it.get('dps') or 0) > 0]
+        if rw:
+            _cbw.ARSENAL = {f"{int(it['h'])}:{int(it.get('seed') or 0)}": it for it in sorted(rw, key=lambda it: it.get('dps') or 0)}
+            _cbw.SMARTLINK = inv.get('smartlink')
+            rk = next((h.get('ik') for h in (inv_slots.get('hotkeys') or []) if str(h.get('key')) == str(_cbw.RANGED_SLOT)), None) \
+                or next((sl.get('key') for sl in (inv_slots.get('slots') or []) if str(sl.get('slot')) == str(_cbw.RANGED_SLOT)), None)
+            if rk:
+                _cbw.RANGED_KEY = rk
+            roles = {}
+            for it in rw:
+                for role in (_cbw.FAMILY.get(it.get('type')), 'smart' if it.get('smart') else None,
+                             'elec' if (it.get('elem') == 'Electric' or it.get('emp')) else None):
+                    if role and (role not in roles or (it.get('dps') or 0) > (roles[role].get('dps') or 0)):
+                        roles[role] = it
+            top_idx |= {it['i'] for it in roles.values()}
+            RESERVED_KEYS.clear(); RESERVED_KEYS.update(k for k in (_ikey(it) for it in rw if it['i'] in top_idx) if k)
+            log('  [armes] arsenal (smartlink ' + ('oui' if inv.get('smartlink') else 'non') + ') : '
+                + ' | '.join(f"« {it.get('name')} » {_cbw.FAMILY.get(it.get('type'))}/{it.get('evo')}/{it.get('elem')} "
+                             f"R{(it.get('rng') or 0):.0f} dps {(it.get('dps') or 0):.0f} mun {it.get('ammo')}"
+                             for it in sorted(rw, key=lambda it: -(it.get('dps') or 0))[:12]))
+    except Exception as _ew:
+        log(f'  [armes] arsenal illisible : {_ew}')
 
     # 1b. vetements : dans chaque emplacement (tete, visage, torse int/ext, jambes, pieds), le meilleur
     #     par armure puis qualite. Un objet iconique/de quete n est jamais demonte, juste compare.
@@ -235,7 +284,7 @@ def manage(log=print) -> dict:
              and not it.get('quest') and not it.get('equipped') and it['i'] not in top_idx]
     trash = [it for it in items if (it.get('type') or '').startswith('Wea_') and (it.get('type') or '') not in MELEE_TYPES
              and (it.get('quality') or '') == 'Common' and not it.get('iconic') and not it.get('quest')
-             and not it.get('equipped') and 0 < (it.get('dps') or 0) < 60]
+             and not it.get('equipped') and 0 < (it.get('dps') or 0) < 60 and it['i'] not in top_idx]   # 12/10 : reserve protegee
     spare = spare + trash
     w, cap = inv.get('weight') or 0, inv.get('carry') or 0
     if cap and w > 0.9 * cap:
