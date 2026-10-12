@@ -248,6 +248,19 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
         if it['area'] not in seen_a:
             seen_a.add(it['area']); ordered.append(it)
     cyber = ordered + [it for it in cyber if it not in ordered]
+    # 12/10 succes « Tu es deja mort » (50 eliminations sous ralenti, dataTrackingSystem.script:262) : le Kerenzikov (zone
+    # systeme nerveux) est compatible avec le cyberdeck (le Sandevistan le remplacerait) -> en tete s il a une place
+    try:
+        from . import achievements as _ach
+        if 'MaxPain' not in (_ach._STATE.get('unlocked') or set()):
+            kz = [it for it in cyber if 'kerenzikov' in (str(it.get('name') or '') + str(it.get('type') or '')).lower()
+                  and (not free or free.get(it.get('area') or 'NervousSystemCW', 1) > 0)]
+            if kz:
+                k1 = min(kz, key=lambda it: int(it.get('price') or 1e9))
+                cyber = [k1] + [it for it in cyber if it is not k1]
+                log(f"  [succes] Tu es deja mort : « {k1.get('name')} » en stock ({k1.get('price')} eddies) -> en priorite")
+    except Exception:
+        pass
     if empty:
         max_buys = max(max_buys, len(seen_a) + 1)
     posed, spent, tried = 0, 0, 0
