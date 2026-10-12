@@ -378,6 +378,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     path_failures = 0
     navp = navprog.Tracker()        # 12/10 : progres REEL vers la cible + echelle de deblocage (navprog.py)
     focus_skip_t = -1e9             # derniere bascule hors de la quete suivie mise de cote
+    race_skip_t, race_told = -1e9, set()   # 12/10 : quetes de course (V ne sait pas piloter une course)
     escape_fail = (None, -1e9)      # (cible, heure) : sortie introuvable -> voyage rapide d ilot permis
     rot_failures = 0
     swim_logged = False
@@ -1273,6 +1274,27 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     kbm.act('consumable', 0.1); last_heal_t = time.perf_counter()
                     _log(f"soin hors combat (vie {st.get('hp'):.0f} %)")
 
+                # 12/10 (Olivier : « V ne doit pas faire les quetes de course ») : objectif suivi de COURSE -> V fait autre chose
+                # (journal 10:45 / 10:55 : « Aller a la course du centre-ville », « Appeler Claire pour commencer la course »)
+                if alt_target is None and q.get('text') and quests.is_race(q.get('text')) and not st.get('combat') \
+                        and time.perf_counter() - race_skip_t > 60.0:
+                    race_skip_t = time.perf_counter()
+                    if q.get('mx') is not None:
+                        quests.ban_spot(q['mx'], q['my'], 80.0)
+                    if q['text'] not in race_told:
+                        race_told.add(q['text'])
+                        _log(f"quete de course « {q['text']} » : V ne fait pas les courses, il passe a autre chose")
+                    nxt = quests.switch(q.get('hash'), log=_log, avoid=(q['mx'], q['my'], 80.0) if q.get('mx') is not None else None)
+                    if nxt:
+                        stats['changements_quete'] = stats.get('changements_quete', 0) + 1
+                    else:
+                        nxt = explore.pick(log=_log)
+                        if nxt:
+                            stats['explorations'] = stats.get('explorations', 0) + 1
+                    if nxt:
+                        alt_target = _alt(nxt)
+                        plan.last_t = -99.0; plan.action = 'objectif'
+                        time.sleep(1.0); continue
                 # 12/10 : quete suivie jugee inaccessible a pied depuis ici (echelle de deblocage plus bas) : V fait autre
                 # chose tant que la mise de cote court (20, 40 puis 60 min ; memoire de session). Levee si V est a moins
                 # de 30 m du marqueur ou sur directive « objectif ».

@@ -182,8 +182,11 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
         # suivie, n importe quel PNJ nomme non generique (exploration). Plus d « Artiste » ou de « Netrunner » au hasard.
         qtxt = str((st.get('quest') or {}).get('text') or '').lower()
         has_quest = bool((st.get('quest') or {}).get('hasMappin'))
+        from . import quests as _q
+        race = _q.is_race(qtxt)          # 12/10 : V ne fait pas les courses -> ni Claire, ni les PNJ de l objectif de course
         cands = [n for n in named_npcs(st) if n['d'] < 12 and extra.get('approached', lambda k: False)(n) is False
-                 and ((str(n.get('name') or '').lower().split()[0] in qtxt) or not has_quest)]
+                 and str(n.get('name') or '').lower().split()[:1] != [] and str(n.get('name') or '').lower().split()[0] not in _q.RACE_NPCS
+                 and (((str(n.get('name') or '').lower().split()[0] in qtxt) and not race) or not has_quest)]
         if cands:
             return 'aborder', f"regle : PNJ nomme « {cands[0].get('name')} » a {cands[0]['d']:.0f} m"
         return 'objectif', 'regle : rien d autre a faire ici'

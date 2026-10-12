@@ -173,6 +173,42 @@ def marker_result(text, x: float, y: float, useful: bool, why: str = '', z=None,
         log(f'  [quetes] memoire des marqueurs non sauvee : {ex}')
 
 
+# 12/10 (Olivier : « V ne doit pas faire les quetes de course ») : V ne sait pas piloter une course
+RACE_NPCS = ('claire',)          # organisatrice des courses (« La Bete en moi ») : jamais abordee
+_banned: list = []               # (x, y, rayon, jusqu a) : zones ecartees de tout choix de cible (session)
+
+
+def _fold(t) -> str:
+    import unicodedata
+    t = ''.join(c for c in unicodedata.normalize('NFD', str(t or '').lower()) if unicodedata.category(c) != 'Mn')
+    for c in '\u2019\'-.,;:!?()\u00ab\u00bb"':
+        t = t.replace(c, ' ')
+    return ' '.join(t.split())
+
+
+def is_race(text) -> bool:
+    """Objectif d une quete de COURSE (« Aller a la course du centre-ville », « Appeler Claire pour commencer la course »,
+    « Terminer les courses de qualification ») -- pas « faire des courses » (achats)."""
+    f = ' ' + _fold(text) + ' '
+    if any(w in f for w in (' faire des courses ', ' faire les courses ', ' tes courses ', ' vos courses ')):
+        return False
+    return any(w in f for w in (' course ', ' courses ', ' qualification', ' ligne de depart', ' race ', ' races '))
+
+
+def ban_spot(x, y, radius: float = 80.0, seconds: float = 6 * 3600.0) -> None:
+    """Ecarte une zone de tout choix de cible (pick_next) pendant `seconds` (memoire de session)."""
+    if x is None or y is None:
+        return
+    now = time.perf_counter()
+    _banned[:] = [b for b in _banned if b[3] > now and math.hypot(b[0] - x, b[1] - y) > 5.0]
+    _banned.append((float(x), float(y), float(radius), now + seconds))
+
+
+def _is_banned(x, y) -> bool:
+    now = time.perf_counter()
+    return any(b[3] > now and math.hypot(x - b[0], y - b[1]) < b[2] for b in _banned)
+
+
 def pick_next(quests: list[dict], current_hash: int | None = None, player_level: int | None = None, prefer_givers: bool = False,
               avoid: tuple | None = None) -> dict | None:
     """Objectif de son NIVEAU d abord (niveau recommande connu et <= niveau de V + 2), puis le plus proche ;
@@ -183,7 +219,8 @@ def pick_next(quests: list[dict], current_hash: int | None = None, player_level:
              and q['dist'] >= 8.0 and time.perf_counter() - _visited.get(int(q['hash']), -1e9) > 900.0
              and marker_wait(q) <= 0.0
              and not near_danger(q['x'], q['y'])
-             and not any(math.hypot(q['x'] - a[0], q['y'] - a[1]) < a[2] for a in _avoids(avoid))]   # 12/10 : (x, y, rayon) ecartes
+             and not any(math.hypot(q['x'] - a[0], q['y'] - a[1]) < a[2] for a in _avoids(avoid))   # 12/10 : (x, y, rayon) ecartes
+             and not _is_banned(q['x'], q['y']) and not is_race(q.get('text'))]                  # 12/10 : courses
     if not cands:
         return None
     def over(q):                 # 0 = de son niveau (ou inconnu), 1 = trop haute
