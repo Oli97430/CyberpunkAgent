@@ -121,8 +121,12 @@ def quickhack_best(log=print, want=None) -> str | None:
         qh = (st_q or {}).get('qh')
         if qh and qh.get('open') and qh.get('list'):
             break
-        if not nudged and time.perf_counter() - t0 > 0.6 and not (qh and qh.get('open')):
-            nudged = True; kbm.act('interact', 0.1)
+        # 12/10 : OpenQuickHackPanel = touche d interaction du joueur (inputUserMappings.xml:650, overridableUI selectChoice ;
+        # chez Olivier E -- F est son cyberware iconique) : appui des 0,3 s, un 2e a 0,9 s si le panneau reste ferme
+        el_q = time.perf_counter() - t0
+        if (nudged is False and el_q > 0.3) or (nudged == 1 and el_q > 0.9 and not (qh and qh.get('open'))):
+            nudged = 1 if nudged is False else 2
+            kbm.act('interact', 0.1)
         time.sleep(0.05)
     chosen = None
     readable = [h for h in ((qh or {}).get('list') or []) if _readable(h)]
@@ -812,9 +816,15 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
                     seq = None; continue
             # HACKS D OUVERTURE : avant le contact, V pirate a distance jusqu a 3 hostiles differents (RAM permettant)
             if hacks_done < max_hacks and e['d'] > 12.0 and gap < 8 and time.perf_counter() - t0 > 1.0 and time.perf_counter() - t_hack0 > 2.5:
-                vis = [x for x in (alive if len(alive) > 1 else [e])]
+                vis = [x for x in (alive if len(alive) > 1 else [e]) if x.get('los') is not False] or [e]
                 tgt = vis[hacks_done % len(vis)]
-                if tgt is not e:
+                if tgt.get('x') is not None and not rescue:
+                    ok_aim, st, why_aim = _aim_lock(tgt, st)   # 12/10 : le panneau ne s ouvre que sur la cible du reticule
+                    if not ok_aim:
+                        hacks_done += 1; t_hack0 = time.perf_counter(); seq = None
+                        log(f"  [combat] hack d ouverture reporte : reticule pas sur la cible a {tgt['d']:.0f} m ({why_aim})")
+                        continue
+                elif tgt is not e:
                     aim_at(tgt, st)
                 title = quickhack_best(log=log)
                 if title in ('ram', 'aucun'):
