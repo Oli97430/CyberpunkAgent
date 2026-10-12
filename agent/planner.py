@@ -118,6 +118,13 @@ def _situation(st: dict, extra: dict) -> str:
     return '\n'.join(lines)
 
 
+def dormant_turret(e: dict) -> bool:
+    """12/10 : tourelle (de securite...) hors combat = endormie : V la frappait au corps a corps sans reaction, 5 tourelles
+    l une apres l autre (journal 14:52 et 15:07, plusieurs minutes perdues)."""
+    n = str(e.get('name') or '').lower()
+    return e.get('kind') == 'turret' or 'tourelle' in n or 'turret' in n
+
+
 def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
     """Regles d abord pour les cas nets ; le modele n arbitre que le cas ouvert (parler ?)."""
     hostiles = [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('down')
@@ -152,7 +159,7 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
     # cibles deja jugees intouchables (vitre, autre niveau, scene) : ignorees ICI, pas seulement au moment
     # d engager -- sinon on redecide "attaquer" toutes les 3 s pour rien, sans jamais avancer (20/09)
     muted = extra.get('muted') or (lambda e: False)
-    hostiles_engage = [e for e in hostiles_engage if not muted(e)]
+    hostiles_engage = [e for e in hostiles_engage if not muted(e) and not dormant_turret(e)]   # 12/10 : tourelles endormies
     if hostiles_engage:
         hp = st.get('hp'); hp = 100.0 if hp is None else hp
         return 'attaquer', f"regle : hostile a {hostiles_engage[0]['d']:.0f} m ({len(hostiles)} en vue, {_C.aggro}/{_C.courage})"

@@ -1552,7 +1552,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 and (e.get('z') is None or abs(e['z'] - st.get('z', e['z'])) < 3.5)]
                     # hostiles « muets » : cibles qui n entrent jamais en combat (PNJ fuyards, tourelles hors portee...) ->
                     # ignorees 3 min apres un engagement sans combat, pour ne pas perdre 25 s a chaque fois
-                    hostiles = [e for e in hostiles if not _muted(e)]
+                    hostiles = [e for e in hostiles if not _muted(e) and not planner.dormant_turret(e)]   # 12/10 : tourelles endormies
                     if hostiles:
                         _log(f"V engage le combat : {len(hostiles)} hostile(s), le plus proche a {hostiles[0]['d']:.0f} m"
                              + (f" (« {hostiles[0]['name']} »)" if hostiles[0].get('name') else ''))
