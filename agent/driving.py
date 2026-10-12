@@ -37,14 +37,21 @@ def _dist(st, tx, ty):
     return math.hypot(st['x'] - tx, st['y'] - ty)
 
 
-def _refresh(car: dict, vs: list) -> dict:
-    """Le meme vehicule dans un export plus recent (par position, a moins de 6 m), sinon l ancien."""
+def _refresh(car: dict, vs: list, strict: bool = False) -> dict:
+    """Le meme vehicule dans un export plus recent (par identite, sinon par position a moins de 6 m), sinon l ancien.
+    strict (vol) : par identite SEULEMENT -- la voiture d a cote n est pas celle qui a ete jugee (revue)."""
+    if car.get('h'):
+        same = next((v for v in vs if v.get('h') == car['h']), None)     # 12/10 : identite exportee par le mod
+        if same:
+            return dict(car, **same, lost=False)
+        if strict:
+            return dict(car, lost=True)
     best = None
     for v in vs:
         dd = math.hypot((v.get('x') or 0) - car['x'], (v.get('y') or 0) - car['y'])
         if dd < 6.0 and (best is None or dd < best[0]):
             best = (dd, v)
-    return best[1] if best else car
+    return dict(car, **best[1]) if best else car
 
 
 def _police_near(st: dict, max_d: float = 30.0) -> bool:
@@ -59,25 +66,57 @@ def steal_candidate(st: dict, max_d: float = 30.0) -> dict | None:
     from .config import CFG as _C
     if not _C.features.get('steal', True) or st.get('combat') or st.get('vehicle') or _police_near(st):
         return None
-    cands = [v for v in (st.get('vehicles') or []) if not v.get('player') and (v.get('d') or 99) <= max_d and (v.get('speed') or 0) <= 0.5]
+    from . import tastes
+    if tastes.police_veto(st):
+        return None
+    cands = [v for v in (st.get('vehicles') or []) if not v.get('player') and (v.get('d') or 99) <= max_d and (v.get('speed') or 0) <= 0.5
+             and tastes.fallback_ok(v)]           # 12/10 (revue) : ni police, ni quete, ni verrou, ni occupe
     return min(cands, key=lambda v: v['d']) if cands else None
 
 
+_STOLEN_AD = {'ok': None}   # 12/10 : l autodrive (mode Delamain) roule-t-il dans un vehicule vole ? None = pas encore essaye
+_STOLEN = {'car': None}     # vehicule vole pour le trajet en cours (summon_and_board -> drive_to)
+
+
+def _stolen_ad_known() -> bool | None:
+    """Resultat memorise (travel_stats.json, cle steal) : True si un vol a deja roule, False si 3 refus de suite."""
+    if _STOLEN_AD['ok'] is not None:
+        return _STOLEN_AD['ok']
+    try:
+        from . import travel
+        runs = list(travel._load().get('steal') or [])
+    except Exception:
+        return None
+    if any(r.get('ok') for r in runs):
+        return True
+    return None
+
+
 def steal_nearby(stop=None, log=print, max_d: float = 30.0) -> bool:
-    """V vole le vehicule arrete le plus proche : marche jusqu a lui, force l ouverture (F maintenu), monte."""
+    """V vole le vehicule arrete le plus proche : marche jusqu a lui, force l ouverture (F maintenu), monte.
+    12/10 : seulement si l autodrive a deja roule dans un vehicule vole (sinon 0 m parcouru, 42 s perdues -- 4 vols sur 4)."""
+    if _stolen_ad_known() is not True:
+        return False
     st = motion.read_state() or {}
     car = steal_candidate(st, max_d=max_d)
     if not car:
         return False
     log(f"  [conduite] V VOLE « {car.get('name', '?')} » a {car['d']:.0f} m")
-    return _board(car, stop=stop, log=log, steal=True)
+    if _board(dict(car, mode='gare'), stop=stop, log=log, steal=True):
+        _STOLEN['car'] = dict(car, mode='gare')
+        return True
+    return False
 
 
-def _mount_script(log=print, any_vehicle: bool = False, stop=None) -> bool:
-    """Monte par script (commande mount du mod, MountingFacility). Vrai si V est en vehicule dans les 3 s."""
+def _mount_script(log=print, any_vehicle: bool = False, stop=None, aim: dict | None = None) -> bool:
+    """Monte par script (commande mount du mod, MountingFacility). Vrai si V est en vehicule dans les 3 s.
+    aim : le vehicule PRECIS a prendre (12/10 : le mount visait le vehicule appele -- cas Galena)."""
     if stop is not None and stop.is_set():
         return False
-    r = nav._wait(nav._send({'cmd': 'mount', 'x': 1 if any_vehicle else 0}), timeout=3.0)
+    if aim is not None and aim.get('x') is not None:
+        r = nav._wait(nav._send({'cmd': 'mount', 'x': 2, 'y': float(aim['x']), 'z': float(aim['y'])}), timeout=3.0)
+    else:
+        r = nav._wait(nav._send({'cmd': 'mount', 'x': 1 if any_vehicle else 0}), timeout=3.0)
     if not (r and r.get('ok')):
         log(f"  [conduite] montee par script refusee : {(r or {}).get('reason', 'mod muet')}")
         return False
@@ -93,14 +132,14 @@ def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
     """Rejoint le vehicule (maillage puis ligne droite) et monte : par script d abord (MountingFacility), puis par
     poses (F ; F maintenu pour un vol) si le script echoue."""
     sm = (motion.read_state() or {}).get('summon') or {}
-    if sm.get('x') is not None and math.hypot(sm['x'] - car['x'], sm['y'] - car['y']) < 25.0:
+    if not steal and sm.get('x') is not None and math.hypot(sm['x'] - car['x'], sm['y'] - car['y']) < 25.0:
         car = dict(car, x=sm['x'], y=sm['y'], z=sm.get('z', car.get('z')), d=float(sm.get('d') or car.get('d') or 0))   # position VIVE du vehicule appele
     log(f"  [conduite] vehicule « {car.get('name', '?')} » a {car['d']:.0f} m")
     t_stop = time.perf_counter()
     while time.perf_counter() - t_stop < 8.0 and (car.get('speed') or 0) > 0.5:      # il finit sa manoeuvre : on ne court pas apres
         time.sleep(0.4)
         s_c = motion.read_state() or {}
-        car = _refresh(car, s_c.get('vehicles') or [])
+        car = _refresh(car, s_c.get('vehicles') or [], strict=steal)
     for attempt in range(3):
         if car['d'] <= 2.5:                               # deja a portee (les poses gerent 1-2 m)
             break
@@ -119,6 +158,15 @@ def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
             log(f"  [conduite] marche vers le vehicule : {r.get('reason')} (on tente les poses quand meme)")
         # 12/10 : le vehicule appele a-t-il bouge pendant la marche ? (09:20 : V l avait rate de 35 m) -> position VIVE
         s_v = motion.read_state() or {}
+        if steal:                                         # 12/10 : vehicule choisi : position vive par son identite
+            car = _refresh(car, s_v.get('vehicles') or [], strict=True)
+            if car.get('lost') and car.get('mode') == 'carjack':
+                log(f"  [vol] « {car.get('name')} » n est plus en vue : V renonce"); return False
+            if s_v.get('x') is not None:
+                car['d'] = math.hypot(car['x'] - s_v['x'], car['y'] - s_v['y'])
+            if car.get('mode') == 'carjack' and float(car.get('speed') or 0) > 1.0:
+                log(f"  [vol] « {car.get('name')} » repart : V renonce"); return False
+            break
         sm_v = s_v.get('summon') or {}
         if sm_v.get('x') is None or s_v.get('x') is None or math.hypot(sm_v['x'] - car['x'], sm_v['y'] - car['y']) <= 3.0:
             break
@@ -133,7 +181,11 @@ def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
     if stop is not None and stop.is_set():
         return False
     s_pre = motion.read_state() or {}
-    if s_pre.get('x') is not None and math.hypot(s_pre['x'] - car['x'], s_pre['y'] - car['y']) <= 8.0 and _mount_script(log=log, any_vehicle=steal, stop=stop):
+    aim = car if (steal and car.get('mode')) else None    # 12/10 : vol par gout -> CE vehicule
+    if aim is not None and car.get('mode') == 'carjack':
+        pass                                            # carjacking : par l invite du jeu seulement (le conducteur est sorti)
+    elif s_pre.get('x') is not None and math.hypot(s_pre['x'] - car['x'], s_pre['y'] - car['y']) <= 8.0 and \
+            car.get('lock') != 1 and _mount_script(log=log, any_vehicle=steal, stop=stop, aim=aim):
         return True
     # Embarquement par POSES : face au centre du vehicule, regard en bas (la selle d une moto est
     # ~0,8 m sous les yeux a 1,5 m), E a chaque pose. Le blackboard `interact` et `lookat` ne sont
@@ -166,11 +218,28 @@ def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
         look_smooth(0, 1800 + int(pitch * 20)); time.sleep(0.25)   # ~90 deg vers l horizon + inclinaison voulue
         inter = (motion.read_state() or {}).get('interact') or {}
         choice = str((inter.get('choices') or [''])[0])
-        if any(w in choice.lower() for w in ('saisir', 'porter', 'contr', 'pirater')):
+        cj = car.get('mode') == 'carjack' and 'contr' in choice.lower()
+        if steal and 1 in (inter.get('off') or []) and (cj or any(w in choice.lower() for w in ('forc', 'ouvr', 'entrer', 'monter', 'enfourch'))):
+            log(f"  [vol] « {choice} » grise (test d attribut rate) : V renonce"); return False
+        if car.get('mode') == 'carjack':
+            # 12/10 (revue) : cible relue a chaque pose (feu vert, autre voiture), police / etoiles, 15 s au plus ; F
+            # seulement sur « Prendre le controle »
+            s_cj = motion.read_state() or {}
+            car = _refresh(car, s_cj.get('vehicles') or [], strict=True)
+            if car.get('lost') or float(car.get('speed') or 0) > 1.0 or time.perf_counter() - t1 > 15.0:
+                log(f"  [vol] « {car.get('name')} » repart ou n est plus a portee : V renonce"); return False
+            from . import tastes as _tp
+            if _police_near(s_cj) or _tp.police_veto(s_cj):
+                log('  [vol] police ou etoiles : V renonce au carjacking'); return False
+            if not cj:
+                continue
+        if not cj and any(w in choice.lower() for w in ('saisir', 'porter', 'contr', 'pirater')):
             continue                                      # pas E sur « saisir » / « prendre le controle »
         if stop is not None and stop.is_set():
             return False
-        kbm.act('interact', 1.4 if steal else 0.4)         # voler = « Forcer » / « Ouvrir » : F maintenu
+        if cj:
+            log(f"  [vol] V prend le controle de « {car.get('name')} » (conducteur au volant, {d:.0f} m)")
+        kbm.act('interact', 1.4 if (steal or inter.get('hold')) else 0.4)   # voler = « Forcer » / « Ouvrir » : F maintenu
         t_e = time.perf_counter()
         while time.perf_counter() - t_e < (3.0 if steal else 1.6):
             time.sleep(0.2)
@@ -181,7 +250,9 @@ def _board(car: dict, stop=None, log=print, steal: bool = False) -> bool:
     if stop is not None and stop.is_set():
         return False
     look_smooth(0, -2400); time.sleep(0.1); look_smooth(0, 1900)   # regard a peu pres a l horizon
-    if _mount_script(log=log, any_vehicle=steal, stop=stop):                    # dernier recours : encore le script
+    if car.get('mode') == 'carjack' or car.get('lock') == 1:
+        log('  [vol] pas d invite utilisable : V renonce'); return False   # 12/10 : pas de montee par script dans ces cas
+    if _mount_script(log=log, any_vehicle=steal, stop=stop, aim=car if (steal and car.get('mode')) else None):   # dernier recours
         return True
     log('  [conduite] aucune invite pour monter'); return False
 
@@ -203,7 +274,17 @@ def _summon_evidence(s: dict, sm_pre: dict, mine_pre: list) -> str | None:
     return None
 
 
-def summon_and_board(stop=None, log=print) -> bool:
+def _record_steal(ok: bool, reason, stop=None) -> None:
+    if stop is not None and stop.is_set():
+        return
+    try:
+        from . import travel
+        travel.record('steal', ok, reason)
+    except Exception:
+        pass
+
+
+def summon_and_board(stop=None, log=print, want_taste: bool = True) -> bool:
     """Appelle le vehicule et monte dedans. True si V est en vehicule a la fin."""
     st = motion.read_state()
     if not st:
@@ -213,11 +294,30 @@ def summon_and_board(stop=None, log=print) -> bool:
     if st.get('combat'):
         # en combat le mod ne scanne pas les vehicules (export vide) et V a mieux a faire
         log('  [conduite] en combat : pas d appel de vehicule'); return False
-    import random
-    if random.random() < 0.25 and steal_candidate(st, max_d=15.0):
-        log('  [conduite] une voiture arretee est juste la : V a envie de la voler')
-        if steal_nearby(stop=stop, log=log, max_d=15.0):
-            return True
+    _STOLEN['car'] = None
+    if want_taste:                                       # rythme : tastes.pace_ok (10 min ; refus repetes -> 1 / h)
+        # 12/10 (Olivier : « jamais vu V prendre le controle d un vehicule qui lui plairait ») : gouts de V
+        from . import tastes
+        from .config import CFG as _C
+        pk = None
+        if _C.features.get('steal', True):
+            pk = tastes.pick(st, carjack_on=_C.features.get('carjack', True), log=log, police_near=_police_near(st))
+        if pk:
+            how = 'arretee au feu, conducteur au volant' if pk['mode'] == 'carjack' else 'garee'
+            log(f"  [gouts] V repere « {pk.get('name')} » ({pk.get('mk')}, {pk.get('rid')}, score {pk['score']}, {how}, {float(pk.get('d') or 0):.0f} m) : elle lui plait")
+            ok_b = _board(pk, stop=stop, log=log, steal=True)
+            if not ok_b and not (stop is not None and stop.is_set()) and (motion.read_state() or {}).get('vehicle'):
+                ok_b = True; log('  [vol] V est finalement au volant')
+            if ok_b:
+                s_b = motion.read_state() or {}
+                rid = (s_b.get('dx') or {}).get('rid')
+                if rid and pk.get('rid') and rid != pk.get('rid'):
+                    log(f"  [vol] mauvais vehicule : V est dans « {rid} » (vise {pk.get('rid')})")
+                _STOLEN['car'] = pk if (not rid or not pk.get('rid') or rid == pk.get('rid') or not (s_b.get('dx') or {}).get('pv')) else None
+                return True
+            if stop is not None and stop.is_set():
+                return False
+            _record_steal(False, 'embarquement echoue', stop)
     if not kbm.ACTIONS.get('callvehicle'):
         log('  [conduite] pas de touche « appeler le vehicule »')
         return steal_nearby(stop=stop, log=log)
@@ -345,12 +445,66 @@ def summon_and_board(stop=None, log=print) -> bool:
 _AUTODRIVE_ON = {'left_on': False}   # 12/10 : autodrive enclenche par V puis laisse actif sur F11/F12
 
 
-def autodrive_to(tx: float, ty: float, stop=None, log=print) -> dict:
-    """En vehicule : enclenche l autodrive (G) et surveille l approche de (tx, ty)."""
+def _stolen_stop() -> None:
+    """Coupe l autodrive mode Delamain par le mod (jamais G : dans ce mode le joueur n a ni frein ni volant -- revue)."""
+    nav._wait(nav._send({'cmd': 'autodrive', 'x': 0}), timeout=1.5)
+
+
+def _stolen_start(log=print, stop=None) -> str:
+    """12/10 : autodrive dans un vehicule qui n est pas a V : commande du mod (mode Delamain), verifiee 8 s sur un VRAI
+    mouvement (revue : dx.on seul = demande acceptee, voiture parfois immobile). 'ok' | 'stop' | 'combat' | 'lane' | 'refuse'."""
+    for attempt in range(2):
+        s0 = motion.read_state() or {}
+        if s0.get('combat') or (s0.get('dx') or {}).get('wl'):
+            return 'combat'
+        if stop is not None and stop.is_set():
+            return 'stop'
+        r = nav._wait(nav._send({'cmd': 'autodrive', 'x': 1}), timeout=2.0) or {}
+        lane = r.get('lane')
+        log(f"  [vol] autodrive mode Delamain : voie {lane}, destination {r.get('dest')}, envoye {r.get('sent')}" + (f" ({r.get('reason')})" if r.get('reason') else ''))
+        if lane in (1, 2):                          # hors voie : le jeu refuse avant meme le mode Delamain (:318-330)
+            if attempt == 0:
+                log('  [vol] hors voie de circulation : V avance un peu')
+                kbm.hold('W'); time.sleep(1.5); kbm.release('W'); time.sleep(0.5)
+                continue
+            return 'lane'
+        p0 = (s0.get('x'), s0.get('y'))
+        t = time.perf_counter()
+        while time.perf_counter() - t < 8.0:
+            if stop is not None and stop.is_set():
+                return 'stop'
+            s = motion.read_state() or {}
+            dx = s.get('dx') or {}
+            moved = None not in p0 and s.get('x') is not None and math.hypot(s['x'] - p0[0], s['y'] - p0[1]) > 3.0
+            if float(dx.get('spd') or 0) > 2.0 or moved:
+                return 'ok'
+            if s.get('combat') or dx.get('wl'):
+                return 'combat'
+            time.sleep(0.4)
+        return 'refuse'
+    return 'lane'
+
+
+def autodrive_to(tx: float, ty: float, stop=None, log=print, stolen: dict | None = None) -> dict:
+    """En vehicule : enclenche l autodrive (G) et surveille l approche de (tx, ty).
+    stolen : vehicule qui n est pas a V (12/10) -> commande autodrive du mod, refus constate en 8 s."""
     t0 = time.perf_counter()
     st = motion.read_state()
     if not st or not st.get('vehicle'):
         return {'ok': False, 'reason': 'pas en vehicule'}
+    dx0 = st.get('dx') or {}
+    if stolen is None and dx0.get('pv') is False and dx0.get('av') is False:
+        stolen = {'name': dx0.get('rid') or 'vehicule'}   # revue : V est dans un vehicule qui n est pas a lui (reprise apres F11)
+    if stolen is not None:
+        if stop is not None and stop.is_set():
+            return {'ok': False, 'reason': 'arret d urgence', 'seconds': 0.0}
+        res = _stolen_start(log=log, stop=stop)
+        if res != 'ok':
+            _stolen_stop()
+            why = {'stop': 'arret d urgence', 'combat': 'combat (vehicule vole)', 'lane': 'hors voie (vehicule vole)'}.get(res, 'autodrive refuse (vehicule vole)')
+            return {'ok': False, 'reason': why, 'seconds': time.perf_counter() - t0}
+        log('  [vol] la voiture volee roule')
+        return _watch_drive(tx, ty, st, t0, stop=stop, log=log, relaunch=lambda: _stolen_start(log=log, stop=stop) == 'ok', relaunches=3, on_flag=True)
     if not kbm.ACTIONS.get('autodrive'):
         return {'ok': False, 'reason': 'pas de touche autodrive'}
     if stop is not None and stop.is_set():
@@ -362,16 +516,23 @@ def autodrive_to(tx: float, ty: float, stop=None, log=print) -> dict:
         autodrive_toggle()
         log('  [conduite] autodrive enclenche (G maintenu 1,5 s)')
     _AUTODRIVE_ON['left_on'] = True
+    return _watch_drive(tx, ty, st, t0, stop=stop, log=log, relaunch=autodrive_toggle, relaunches=1)
+
+
+def _watch_drive(tx, ty, st, t0, stop=None, log=print, relaunch=None, relaunches: int = 1, on_flag: bool = False) -> dict:
+    """Surveille l approche de (tx, ty) pendant l autodrive ; relance (G, ou commande du mod pour un vehicule vole)."""
     d0 = _dist(st, tx, ty)
     x0, y0 = st['x'], st['y']
     last_move_t, last_pos = time.perf_counter(), (st['x'], st['y'])
-    relaunched = False
+    relaunched = 0
     last_log = time.perf_counter()
     # G est une BASCULE : un 2e appui coupe l autodrive. On ne relance qu une fois, apres 20 s
     # d immobilite (feu rouge, embouteillage...). Un arret prolonge ensuite = destination atteinte
     # par la route (le marqueur est hors route) ou blocage : on descend et on finit a pied.
     while time.perf_counter() - t0 < MAX_DRIVE_S:
         if stop is not None and stop.is_set():
+            if on_flag:
+                _stolen_stop()                            # revue : mode Delamain = ni frein ni volant pour le joueur
             return {'ok': False, 'reason': 'arret d urgence', 'seconds': time.perf_counter() - t0}   # 12/10 : le joueur a la main (autodrive laisse actif)
         s2 = motion.read_state()
         if not s2:
@@ -394,6 +555,21 @@ def autodrive_to(tx: float, ty: float, stop=None, log=print) -> dict:
             # pietonne) -> le jeu « croise » au hasard. On s arrete la et on finit a pied.
             log(f'  [conduite] autodrive s eloigne ({d0:.0f} -> {d:.0f} m) : pas d itineraire, on descend')
             return {'ok': False, 'reason': 'autodrive sans itineraire', 'seconds': time.perf_counter() - t0, 'dist': d}
+        if on_flag and (s2.get('combat') or (s2.get('dx') or {}).get('wl')):
+            _stolen_stop()                                # revue : pas de relance en combat / avec des etoiles
+            log(f'  [vol] combat ou police pendant le trajet a {d:.0f} m : V arrete la voiture volee')
+            return {'ok': False, 'reason': 'combat (vehicule vole)', 'seconds': time.perf_counter() - t0, 'dist': d}
+        if on_flag and (s2.get('dx') or {}).get('on') is False and time.perf_counter() - last_move_t > 4.0 and d < 250.0:
+            log(f'  [conduite] autodrive termine a {d:.0f} m de l objectif : fin du trajet routier')
+            return {'ok': True, 'seconds': time.perf_counter() - t0, 'dist': d}
+        if on_flag and (s2.get('dx') or {}).get('on') is False and time.perf_counter() - last_move_t > 4.0 and relaunched < relaunches:
+            relaunched += 1; last_move_t = time.perf_counter()     # 12/10 : vehicule vole, le jeu coupe l autodrive au moindre choc
+            log(f'  [vol] autodrive coupe par le jeu a {d:.0f} m : relance {relaunched}/{relaunches}')
+            if relaunch is not None and not relaunch():
+                _stolen_stop()
+                why = 'arret d urgence' if (stop is not None and stop.is_set()) else 'autodrive coupe (vehicule vole)'
+                return {'ok': False, 'reason': why, 'seconds': time.perf_counter() - t0, 'dist': d}
+            continue
         if math.hypot(s2['x'] - last_pos[0], s2['y'] - last_pos[1]) > 2.0:
             last_move_t, last_pos = time.perf_counter(), (s2['x'], s2['y'])
         elif time.perf_counter() - last_move_t > 20.0:
@@ -403,10 +579,11 @@ def autodrive_to(tx: float, ty: float, stop=None, log=print) -> dict:
             if d < 250.0:
                 log(f'  [conduite] autodrive arrete a {d:.0f} m de l objectif ({traveled:.0f} m parcourus) : fin du trajet routier')
                 return {'ok': True, 'seconds': time.perf_counter() - t0, 'dist': d}
-            if not relaunched:
-                relaunched = True; last_move_t = time.perf_counter()
-                log(f'  [conduite] immobile depuis 20 s a {d:.0f} m ({traveled:.0f} m parcourus) : relance autodrive')
-                autodrive_toggle()
+            if relaunched < relaunches:
+                relaunched += 1; last_move_t = time.perf_counter()
+                log(f'  [conduite] immobile depuis 20 s a {d:.0f} m ({traveled:.0f} m parcourus) : relance autodrive ({relaunched}/{relaunches})')
+                if relaunch is not None:
+                    relaunch()
                 continue
             ok = False
             log(f"  [conduite] autodrive arrete a {d:.0f} m de l objectif ({traveled:.0f} m parcourus) : {'fin du trajet routier' if ok else 'bloque'}")
@@ -417,6 +594,9 @@ def autodrive_to(tx: float, ty: float, stop=None, log=print) -> dict:
 
 
 def _current_speed(st: dict) -> float:
+    dx = st.get('dx') or {}
+    if st.get('vehicle') and dx.get('spd') is not None:
+        return float(dx['spd'])                      # 12/10 : vitesse du vehicule MONTE (un vehicule vole n est pas dans summon)
     sm = st.get('summon') or {}
     if sm.get('speed') is not None:
         return float(sm['speed'])
@@ -435,11 +615,23 @@ def exit_vehicle(log=print, stop=None) -> bool:
     if _h():
         return False
     sp = _current_speed(st)
+    dxs = st.get('dx') or {}
+    stolen_now = _STOLEN['car'] is not None or (dxs.get('pv') is False and dxs.get('av') is False)
+    if stolen_now and not _h():
+        # 12/10 (revue) : vehicule vole -> autodrive Delamain coupe par le mod AVANT de descendre, quelle que soit la vitesse
+        _stolen_stop()
+        t_o = time.perf_counter()
+        while time.perf_counter() - t_o < 2.0 and ((motion.read_state() or {}).get('dx') or {}).get('on'):
+            time.sleep(0.2)
+        st = motion.read_state() or st
+        sp = _current_speed(st)
     if sp > 2.0:
         # encore en mouvement (croisiere autodrive pas coupee) : on freine, sinon V sautait de la
         # voiture en marche (19/09) en descendant directement
         log(f'  [conduite] freinage avant de descendre ({sp:.0f} m/s)')
-        if kbm.ACTIONS.get('autodrive') and not _h():
+        if stolen_now:
+            pass
+        elif kbm.ACTIONS.get('autodrive') and not _h():
             autodrive_toggle()   # bascule : coupe la croisiere automatique
             _AUTODRIVE_ON['left_on'] = False
         t_b = time.perf_counter()
@@ -461,10 +653,51 @@ def exit_vehicle(log=print, stop=None) -> bool:
 
 
 def drive_to(tx: float, ty: float, stop=None, log=print) -> dict:
-    if not summon_and_board(stop=stop, log=log):
+    try:
+        return _drive_to(tx, ty, stop=stop, log=log)
+    finally:
+        _STOLEN['car'] = None                           # revue : jamais d etat de vol qui fuit d un trajet a l autre
+
+
+def _drive_to(tx: float, ty: float, stop=None, log=print) -> dict:
+    boarded = summon_and_board(stop=stop, log=log)
+    stolen = _STOLEN['car'] if boarded else None
+    if stolen is not None and not (stop is not None and stop.is_set()):
+        # 12/10 : V est dans le vehicule qui lui plait -> trajet avec, si l autodrive veut bien rouler
+        r = autodrive_to(tx, ty, stop=stop, log=log, stolen=stolen)
+        r['boarded'], r['stolen'] = True, stolen.get('name')
+        why_r = str(r.get('reason') or '')
+        refused = 'autodrive refuse' in why_r or 'hors voie' in why_r
+        if 'autodrive refuse' in why_r:
+            _STOLEN_AD['ok'] = False
+        if refused:
+            log(f"  [vol] {why_r} pour « {stolen.get('name')} » : V la laisse et appelle sa voiture (gouts gardes pour plus tard)")
+        elif r.get('ok'):
+            _STOLEN_AD['ok'] = True                     # revue : seulement un trajet REUSSI prouve que ca roule
+        exit_vehicle(log=log, stop=stop)
+        if not (stop is not None and stop.is_set()):
+            s_e = motion.read_state() or {}
+            log(f"  [vol] V abandonne « {stolen.get('name')} » a {_dist(s_e, tx, ty):.0f} m de l objectif" if s_e.get('x') is not None else '  [vol] fin du trajet')
+        _record_steal(bool(r.get('ok')), r.get('reason'), stop)
+        _STOLEN['car'] = None
+        s_x = motion.read_state() or {}
+        if not refused or (stop is not None and stop.is_set()) or s_x.get('vehicle') or s_x.get('combat'):
+            return r                                     # revue : pas de repli depuis le vehicule vole ni en combat
+        boarded = summon_and_board(stop=stop, log=log, want_taste=False)   # la suite normale : sa voiture
+        if boarded and _STOLEN['car'] is not None:
+            _STOLEN['car'] = None
+    if not boarded:
         r = {'ok': False, 'reason': 'arret d urgence' if (stop is not None and stop.is_set()) else 'embarquement echoue'}
     elif stop is not None and stop.is_set():             # monte pendant F11 : pas d autodrive, le joueur a la main
         r = {'ok': False, 'reason': 'arret d urgence', 'boarded': True}
+    elif _STOLEN['car'] is not None:                     # vol de secours (sa voiture n est pas venue)
+        stolen = _STOLEN['car']
+        r = autodrive_to(tx, ty, stop=stop, log=log, stolen=stolen)
+        r['boarded'], r['stolen'] = True, stolen.get('name')
+        exit_vehicle(log=log, stop=stop)
+        _record_steal(bool(r.get('ok')), r.get('reason'), stop)
+        _STOLEN['car'] = None
+        return r
     else:
         r = autodrive_to(tx, ty, stop=stop, log=log)
         r['boarded'] = True

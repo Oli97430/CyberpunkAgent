@@ -188,9 +188,9 @@ function AgentEnumName(v) return (tostring(v):gsub('^[%w_]+ : ', ''):gsub(' %(%-
 -- cle d un EXEMPLAIRE : hash TweakDB + rng_seed (champ CET non verifie : 0 si absent)
 function AgentItemKey(id)
     local h, sd = nil, 0
-    pcall(function() if ItemID.IsValid(id) then h = id.id.hash end end)
+    pcall(function() if ItemID.IsValid(id) then h = tonumber(id.id.hash) end end)
     if not h then return nil end
-    pcall(function() sd = id.rng_seed or 0 end)
+    pcall(function() sd = tonumber(id.rng_seed) or 0 end)
     return string.format('%.0f:%.0f', h, sd), h, sd
 end
 -- fiche d une arme a distance (tag RangedWeapon, base_weapon.tweak:15) ; l element d une arme a feu n agit que par ses
@@ -220,6 +220,116 @@ function AgentRangedInfo(player, ts, edata, data, id, rec)
         end
     end)
     return true
+end
+
+-- 12/10 GOUTS DE V EN VEHICULES (globales : pas d upvalue de plus). Identite = record TweakDB (cache par record).
+AGENT_VEH_TIER = { Rayfield = 40, Herrera = 38, Porsche = 36, Yaiba = 34, Arch = 34, Quadra = 28, Mizutani = 22,
+                   Villefort = 15, Chevillon = 14, Brennan = 12, Archer = 10, Militech = 8, Thorton = 6, Mahir = 4,
+                   Makigai = 2, Kaukaz = 0, Delamain = 0, Zetatech = 0 }
+AGENT_VEH_CLS = { Premium = 10, Sport = 8, Standard = 0, Poor = -15 }
+AgentVehInfoCache = AgentVehInfoCache or {}
+AgentVehInfoN = AgentVehInfoN or 0
+AgentVehOccCache = AgentVehOccCache or {}
+function AgentVehInfo(ent)
+    local okI, recID = pcall(function() return ent:GetRecordID() end)                -- vehicles.script:66
+    if not okI or recID == nil then return nil end
+    local sid = tostring(recID); pcall(function() sid = TDBID.ToStringDEBUG(recID) end)
+    local vi = AgentVehInfoCache[sid]
+    if vi ~= nil then return vi end
+    vi = { rid = (sid:gsub('^Vehicle%.', '')) }
+    local r = nil
+    pcall(function() r = TweakDBInterface.GetVehicleRecord(recID) end)                -- tweakDB.script:902
+    if r then
+        pcall(function() vi.mk = r:Manufacturer():EnumName() end)
+        pcall(function() vi.vt = r:Type():EnumName() end)                           -- 'Car' / 'Bike'
+        pcall(function() local u = r:VehicleUIData()
+            vi.hp = math.floor(u:Horsepower() + 0.5); vi.kg = math.floor(u:Mass() + 0.5) end)
+        local function tag(t)
+            local ok, v = pcall(function() return r:TagsContains(t) end)
+            if not ok then ok, v = pcall(function() return r:TagsContains(CName.new(t)) end) end
+            return ok and v == true
+        end
+        if tag('Sport') then vi.sp = true end
+        if tag('TriggerPrevention') then vi.cop = true end                           -- vehicles.script:398 : vol = crime
+        pcall(function() for _, t in ipairs(r:VisualTags()) do
+            local s = Game.NameToString(t)
+            if s == 'NCPD' then vi.cop = true end
+            if vi.cls == nil and AGENT_VEH_CLS[s] ~= nil then vi.cls = s end
+        end end)
+        pcall(function() if tostring(r:Affiliation():Type()):find('NCPD') then vi.cop = true end end)
+    end
+    pcall(function() local h = TweakDB:GetFlat(sid .. '.hijackDifficulty'); if h ~= nil then vi.hj = tostring(h) end end)
+    local p = AGENT_VEH_TIER[vi.mk or ''] or 5
+    if vi.sp then p = p + 15 end
+    if vi.hp and vi.kg and vi.kg > 0 then p = p + math.min(30, 60 * vi.hp / vi.kg) end
+    p = p + (AGENT_VEH_CLS[vi.cls or ''] or 0)
+    if (vi.kg or 0) > 3000 or vi.rid:find('^v_utility4_') then p = p - 20 end
+    vi.pr = math.max(0, math.min(100, math.floor(p + 0.5)))
+    AgentVehInfoCache[sid] = vi
+    if AgentVehInfoN < 300 then
+        AgentVehInfoN = AgentVehInfoN + 1
+        journal(string.format('VINFO %s mk=%s vt=%s hp=%s kg=%s sp=%s cls=%s hj=%s cop=%s pr=%d', sid, tostring(vi.mk),
+            tostring(vi.vt), tostring(vi.hp), tostring(vi.kg), tostring(vi.sp), tostring(vi.cls), tostring(vi.hj), tostring(vi.cop), vi.pr))
+    end
+    return vi
+end
+-- occupation : occ 0 vide, 1 conducteur actif, 2 conducteur mort / inconscient, 3 passagers OU conducteur non detecte
+-- (V s abstient) ; lock = etat de la portiere conducteur (1 verrouillee, 2 desactivee, 3 verrou de quete, 4 reservee)
+function AgentVehOcc(ent, player, key)
+    local now = os.clock()
+    local c = key and AgentVehOccCache[key]
+    if c and now - c.t < 1.0 then return c.o end
+    local o, eid = {}, ent:GetEntityID()
+    local gi = nil; pcall(function() gi = player:GetGame() end)
+    local drv = nil
+    pcall(function() drv = VehicleComponent.GetDriverMounted(gi, eid) end)          -- vehicleComponent.script:496
+    if drv then
+        o.occ = 1
+        pcall(function() if not ScriptedPuppet.IsActive(drv) then o.occ = 2 end end)     -- scriptedPuppet.script:1939
+        pcall(function() if VehicleComponent.IsVehicleOccupiedByHostile(eid, player) then o.hos = true end end)
+        pcall(function() o.civ = (drv:IsCharacterCivilian() == true) end)            -- scriptedPuppet.script:1775
+        pcall(function()                                                               -- vehicleComponent.script:1085
+            local okN, nP = VehicleComponent.GetNumberOfActivePassengers(gi, eid)
+            if type(nP) ~= 'number' then nP = tonumber(okN) end
+            if nP and nP > 1 then o.pax = true end
+        end)
+    else
+        pcall(function() o.occ = ent:HasPassengers() and 3 or 0 end)                 -- vehicles.script:50
+    end
+    pcall(function()
+        local door = nil
+        pcall(function() door = EVehicleDoor.seat_front_left end)
+        if door == nil then door = vehicleEVehicleDoor.seat_front_left end
+        local n = tonumber(EnumInt(ent:GetVehiclePS():GetDoorInteractionState(door)))   -- uint64 -> nombre (JSON)
+        if n and n ~= 0 then o.lock = n end
+    end)
+    pcall(function() if ent:IsPrevention() then o.cop = true end end)                -- vehicles.script:35
+    pcall(function() if ent:IsVehicleParked() then o.park = true end end)
+    pcall(function() if ent:IsInTrafficLane() then o.lane = true end end)
+    pcall(function() if ent:IsAbandoned() then o.aban = true end end)
+    pcall(function() if ent:IsStolen() then o.stol = true end end)
+    pcall(function() if ent:IsQuest() then o.qst = true end end)
+    if key then
+        AgentVehOccCache[key] = { t = now, o = o }
+        if math.random() < 0.02 then for k, v in pairs(AgentVehOccCache) do if now - v.t > 30 then AgentVehOccCache[k] = nil end end end
+    end
+    return o
+end
+-- contexte de conduite : etoiles, autodrive, vehicule monte (la vitesse d un vehicule vole n est pas dans summon)
+function AgentDriveCtx(inVeh)
+    local o, bbs, defs, pl = {}, Game.GetBlackboardSystem(), GetAllBlackboardDefs(), Game.GetPlayer()
+    pcall(function() local w = bbs:Get(defs.UI_WantedBar):GetInt(defs.UI_WantedBar.CurrentWantedLevel)
+        if w and w > 0 then o.wl = w end end)
+    if inVeh then
+        pcall(function() local b, d = bbs:Get(defs.UI_AutodriveData), defs.UI_AutodriveData
+            o.av = b:GetBool(d.AutoDriveAvailable); o.on = b:GetBool(d.AutoDriveEnabled)
+            o.rem = math.floor(b:GetFloat(d.DestinationRemainingLength)) end)
+        pcall(function() local v = pl:GetMountedVehicle()                                             -- player.script:1581
+            o.rid = (TDBID.ToStringDEBUG(v:GetRecordID()):gsub('^Vehicle%.', ''))
+            o.pv = v:IsPlayerVehicle()
+            o.spd = math.floor(math.abs(v:GetCurrentSpeed()) * 10 + 0.5) / 10 end)
+    end
+    return o
 end
 
 local function addProbe(name, fn) probes[#probes + 1] = { name = name, fn = fn } end
@@ -1344,8 +1454,17 @@ registerForEvent('onUpdate', function(dt)
             local hub = FromVariant(ui:GetVariant(defs.UIInteractions.InteractionChoiceHub))
             if hub and hub.choices and #hub.choices > 0 then
                 local list = {}
-                for j = 1, #hub.choices do list[#list + 1] = GetLocalizedText(tostring(hub.choices[j].localizedName)) end
-                inter = { title = tostring(hub.title), choices = list }
+                local off = nil                                       -- 12/10 : choix grises (choice.script:20)
+                for j = 1, #hub.choices do
+                    local c = hub.choices[j]
+                    list[#list + 1] = GetLocalizedText(tostring(c.localizedName))
+                    pcall(function()
+                        if ChoiceTypeWrapper.IsType(c.type, gameinteractionsChoiceType.CheckFailed)
+                           or ChoiceTypeWrapper.IsType(c.type, gameinteractionsChoiceType.Inactive) then off = off or {}; off[#off + 1] = j end
+                    end)
+                end
+                inter = { title = tostring(hub.title), choices = list, off = off }
+                pcall(function() inter.hold = hub.choices[1].isHoldAction end)
                 pcall(function() inter.active = hub.active end)
                 pcall(function() inter.id = tostring(hub.id) end)
             end
@@ -1739,7 +1858,7 @@ registerForEvent('onUpdate', function(dt)
                 pcall(function() qv.testedSet = TargetingSet.Complete end)
                 local okV, partsV = Game.GetTargetingSystem():GetTargetParts(player, qv)
                 if okV and partsV and #partsV > 0 then
-                    local list, seenV = {}, {}
+                    local list, seenV, entOf, bestV = {}, {}, {}, nil      -- 12/10 : gouts de V
                     for i = 1, #partsV do
                         local comp = TS_TargetPartInfo.GetComponent(partsV[i])
                         local ent = comp and comp:GetEntity() or nil
@@ -1759,6 +1878,14 @@ registerForEvent('onUpdate', function(dt)
                                     if not rec.player and summonHash ~= nil then pcall(function() rec.player = (ent:GetEntityID().hash == summonHash) end) end
                                     pcall(function() rec.speed = math.floor(math.abs(ent:GetCurrentSpeed()) * 10 + 0.5) / 10 end)
                                     if not rec.player and rec.d <= 30.0 and (rec.speed or 0) > 1.0 then traffic = traffic + 1 end
+                                    rec.h = (tostring(key):gsub('ULL$', ''))       -- 12/10 : identite (vol d un vehicule precis)
+                                    entOf[rec] = ent
+                                    if not rec.player and rec.d <= 40.0 and (rec.speed or 0) <= 0.5 then   -- coup de coeur : gare, <= 40 m
+                                        local vi = AgentVehInfo(ent)
+                                        if vi and not vi.cop and vi.pr >= 40 and (bestV == nil or vi.pr > bestV._pr or (vi.pr == bestV._pr and rec.d < bestV.d)) then
+                                            bestV = rec; rec._pr = vi.pr
+                                        end
+                                    end
                                     if rec.player or rec.d <= 25.0 then list[#list + 1] = rec end   -- les voitures des inconnus : 25 m ; la sienne : 150 m
                                 end
                             end
@@ -1770,6 +1897,22 @@ registerForEvent('onUpdate', function(dt)
                         return a.d < b.d
                     end)
                     while #list > 4 do table.remove(list) end
+                    if bestV then                                    -- 12/10 : le coup de coeur (jusqu a 60 m) en 5e
+                        local found = false
+                        for _, rv in ipairs(list) do if rv == bestV then found = true end end
+                        if not found then list[#list + 1] = bestV end
+                    end
+                    for _, rv in ipairs(list) do
+                        rv._pr = nil
+                        local e = entOf[rv]
+                        if e and not rv.player then
+                            local vi = AgentVehInfo(e)
+                            if vi then rv.rid, rv.mk, rv.vt, rv.pr, rv.cop = vi.rid, vi.mk, vi.vt, vi.pr, vi.cop end
+                            local o = AgentVehOcc(e, player, rv.h)
+                            rv.occ, rv.lock, rv.lane, rv.aban, rv.qst, rv.hos, rv.civ, rv.pax = o.occ, o.lock, o.lane, o.aban, o.qst, o.hos, o.civ, o.pax
+                            if o.cop then rv.cop = true end
+                        end
+                    end
                     if #list > 0 then vehicles = list end
                     slowVehicles = vehicles
                     slowTraffic = traffic
@@ -1836,11 +1979,17 @@ registerForEvent('onUpdate', function(dt)
                                     local aff = tostring(TweakDBInterface.GetCharacterRecord(ent:GetRecordID()):Affiliation():Type())
                                     rec.aff = aff:gsub('gamedataAffiliation : ', ''):gsub(' %(%d+%)', '')
                                 end)
+                                local cop = false
+                                pcall(function() cop = ent:IsPolice() end)
+                                if cop or (rec.aff and (rec.aff:find('NCPD') or rec.aff:find('MaxTac'))) then
+                                    AgentCopScan = math.min(AgentCopScan or 1e9, rec.d)       -- 12/10 : police avant troncature
+                                end
                                 list[#list + 1] = rec
                             end
                         end
                     end
                     table.sort(list, function(a, b) return a.d < b.d end)
+                    AgentCopD, AgentCopScan = AgentCopScan, nil
                     -- les 5 plus proches (PNJ de quete a cote de V) restent TOUJOURS ; les combattants plus loin completent jusqu a 8
                     if #list > 8 then
                         local keep = {}
@@ -1992,10 +2141,13 @@ registerForEvent('onUpdate', function(dt)
         journal('STATE erreur: ' .. lastStateErr)
     end
     if ok and data then
+        pcall(function() data.dx = AgentDriveCtx(data.vehicle); if AgentCopD then data.dx.copd = math.floor(AgentCopD) end end)   -- 12/10
         local okE, s = pcall(json.encode, data)
         if not okE then
             if tostring(s) ~= lastStateErr then lastStateErr = tostring(s); journal('STATE encode: ' .. lastStateErr) end
-            s = nil
+            data.crimes, data.vehicles, data.npcs = nil, nil, nil      -- 12/10 : un champ fautif ne fige plus tout l export
+            okE, s = pcall(json.encode, data)
+            if not okE then s = nil end
         end
         if s and #s >= STATE_WIDTH then
             -- degradation ordonnee : on retire le moins utile jusqu a tenir dans la largeur fixe
@@ -2025,8 +2177,11 @@ end)
 -- intermediaire (<= 60 m) vers la cible et on marque partial=true ; Python redemande.
 -- =====================================================================================
 local function writePath(resp)
+    -- 12/10 (revue) : un champ non encodable (uint64...) ne doit plus laisser path.json vide et lever une erreur
+    local okE, txt = pcall(json.encode, resp)
+    if not okE then txt = json.encode({ seq = resp.seq, seqEnd = resp.seqEnd, ok = false, reason = 'encode : ' .. tostring(txt) }) end
     local f = io.open('path.json', 'w')
-    if f then f:write(json.encode(resp)); f:flush(); f:close() end
+    if f then f:write(txt); f:flush(); f:close() end
 end
 
 
@@ -3294,13 +3449,38 @@ local function handleCommand(player, cmd)
         if not okR then resp.reason = tostring(errR) end
         journal((okR and 'OK   ' or 'FAIL ') .. 'effect_remove ' .. name .. (okR and '' or (' : ' .. tostring(errR))))
         return resp
+    elseif cmd.cmd == 'autodrive' then
+        -- 12/10 : l autodrive ordinaire refuse un vehicule qui n est pas a V (autoDriveSystem.script:170) ; le mode Delamain
+        -- saute ce test (:331). x=2 sonde, x=1 demarrage, x=0 arret.
+        journal('RUN  autodrive ' .. tostring(cmd.x))
+        local ads = Game.GetScriptableSystemsContainer():Get('AutoDriveSystem')
+        if not ads then resp.reason = 'AutoDriveSystem introuvable'; journal('FAIL autodrive : ' .. resp.reason); return resp end
+        pcall(function() resp.avail = ads:GetAutodriveAvailable() end)
+        pcall(function() resp.lane = tonumber(EnumInt(ads:CheckCurrentLaneValidity())) end)      -- 0 voie valide, 1 voie non valide, 2 hors route
+        pcall(function() resp.dest = tonumber(EnumInt(ads:GetAutodriveDestinationType())) end)   -- 0 aucune, 1 marqueur du joueur, 2 quete
+        pcall(function() resp.on = ads:GetAutodriveEnabled() end)
+        pcall(function() resp.pv = player:GetMountedVehicle():IsPlayerVehicle() end)
+        if cmd.x == 1 then
+            local okR, eR = pcall(function() local q = EnableAutoDriveRequest.new(); q.isDelamain = true; ads:QueueRequest(q) end)
+            if not okR then okR, eR = pcall(function() resp.direct = ads:SetAutodriveEnabled(true, true) end) end   -- natif :134
+            resp.sent = okR; if not okR then resp.reason = tostring(eR) end
+        elseif cmd.x == 0 then
+            pcall(function() ads:QueueRequest(DisableAutoDriveRequest.new()) end)
+        end
+        resp.ok = true
+        journal(string.format('OK   autodrive x=%s avail=%s lane=%s dest=%s on=%s pv=%s sent=%s', tostring(cmd.x), tostring(resp.avail),
+            tostring(resp.lane), tostring(resp.dest), tostring(resp.on), tostring(resp.pv), tostring(resp.sent)))
+        return resp
     elseif cmd.cmd == 'mount' then
         -- MONTER dans un vehicule PAR SCRIPT (MountingFacility) : le vehicule appele (VehicleSummonData) s il est a < 12 m,
         -- sinon le vehicule de V le plus proche a < 8 m. Siege conducteur. Evite l invite « Enfourcher » capricieuse.
         journal('RUN  mount')
         local pos = player:GetWorldPosition()
         local target, how = nil, ''
-        pcall(function()
+        -- 12/10 : x = 2 -> le vehicule PRECIS en (y, z) (vol choisi par gout) : jamais le vehicule appele (cas Galena)
+        local aimX, aimY = nil, nil
+        if cmd.x == 2 then aimX, aimY = tonumber(cmd.y), tonumber(cmd.z) end
+        if not aimX then pcall(function()
             local sd = GetAllBlackboardDefs().VehicleSummonData
             local eid = Game.GetBlackboardSystem():Get(sd):GetEntityID(sd.SummonedVehicleEntityID)
             if eid and EntityID.IsDefined(eid) then
@@ -3310,11 +3490,11 @@ local function handleCommand(player, cmd)
                     if math.sqrt((p.x - pos.x) ^ 2 + (p.y - pos.y) ^ 2) <= 12.0 then target, how = ent, 'appele' end
                 end
             end
-        end)
+        end) end
         if not target then
             pcall(function()
                 local q = Game['TSQ_ALL;']()
-                q.maxDistance = 8.0
+                q.maxDistance = aimX and 10.0 or 8.0
                 q.filterObjectByDistance = true
                 pcall(function() q.testedSet = TargetingSet.Complete end)
                 local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
@@ -3331,12 +3511,15 @@ local function handleCommand(player, cmd)
                                 local mine = false
                                 pcall(function() mine = ent:IsPlayerVehicle() end)
                                 if not mine then pcall(function() mine = (playerVehRecs[TDBID.ToStringDEBUG(ent:GetRecordID())] == true) end) end
-                                if d < bestD and (mine or (cmd.x == 1)) then best, bestD = ent, d end   -- x = 1 : n importe quel vehicule (vol)
+                                if aimX then                                -- 12/10 : le vehicule vise (a 4 m pres de sa position exportee)
+                                    local da = math.sqrt((p.x - aimX) ^ 2 + (p.y - aimY) ^ 2)
+                                    if da <= 4.0 and da < bestD then best, bestD = ent, da end
+                                elseif d < bestD and (mine or (cmd.x == 1)) then best, bestD = ent, d end   -- x = 1 : n importe quel vehicule (vol)
                             end
                         end
                     end
                 end
-                if best then target, how = best, 'proche' end
+                if best then target, how = best, aimX and 'vise' or 'proche' end
             end)
         end
         if not target then resp.reason = 'aucun vehicule a portee'; journal('FAIL mount : ' .. resp.reason); return resp end
@@ -3359,7 +3542,11 @@ local function handleCommand(player, cmd)
             req.mountData = data
             Game.GetMountingFacility():Mount(req)
         end)
-        if okM then
+        local tMine = (how == 'appele')                         -- 12/10 : pas de Toggle sur un vehicule qui n est pas a V
+        pcall(function() tMine = tMine or target:IsPlayerVehicle() end)
+        if not tMine then pcall(function() tMine = (playerVehRecs[TDBID.ToStringDEBUG(target:GetRecordID())] == true) end) end
+        resp.mine = tMine
+        if okM and tMine then
             -- Mount() assoit V dans le siege mais ne declare pas le vehicule comme « actif » pour le joueur :
             -- SANS CET APPEL, l autodrive n a pas de vehicule possede a router (7 echecs sur 7 le 19/09 : la
             -- voiture roulait parfois, mais jamais vers la destination -- exactement le symptome d un vehicule
