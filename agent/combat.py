@@ -171,7 +171,13 @@ def charges(st: dict, kind: str) -> bool:
     essaie, comme avant). 13:29-13:30 : 3 soins appuyes a vide a 40-44 % de vie, puis mort.
     24/09, journal 06:26 : le jeu a exporte heal=0 alors que V avait 3 soins -- un 0 ne bloque donc que si ce
     compteur a deja ete vu > 0 (sa semantique est alors prouvee) ; sinon V essaie, comme avant."""
-    v = ((st or {}).get('res') or {}).get(kind)
+    res = (st or {}).get('res') or {}
+    if kind == 'gren' and res.get('gk') == 'launcher':
+        kind = 'proj'                                   # molette = lance-projectiles : ses charges a lui
+    n = res.get(kind + 'N')                             # 12/10 : VRAIES charges (GetGrenadeCharges...), pas des points de pool
+    if isinstance(n, (int, float)):
+        return n >= 1
+    v = res.get(kind)                                   # ancien mod : comportement d avant
     if not isinstance(v, (int, float)):
         return True
     if v > 0:
@@ -204,6 +210,86 @@ def _alive(enemies, allow_police: bool = True):
     """Hostiles vivants. allow_police=False exclut la police (engagement proactif interdit).
     En combat (fight), la police reste une cible : c est de la legitime defense."""
     return [e for e in (enemies or []) if not e.get('dead') and not e.get('down') and (allow_police or not e.get('police'))]
+
+
+# ---- grenade ADAPTEE a l ennemi (12/10, Olivier : « V doit adapter les projectiles qu il lance a l ennemi ») -------------
+GREN_CODE = {'frag': 1, 'emp': 2, 'fire': 3, 'bio': 4, 'flash': 5, 'smoke': 6, 'cut': 7, 'recon': 8}   # = table fams du mod
+GREN_HAVE: set | None = None        # familles possedees (inventory.manage / gren_refresh) ; vide = on garde l equipee
+GREN_SWITCH_CD, GREN_FAIL_CD, GREN_GROUP_M = 3.0, 30.0, 5.0     # rayon frag ~4 m, IEM ~3,5 m
+_gren_fail: dict = {}
+_gren_last = [-99.0]
+
+
+def _gren_parse(have) -> set:
+    return {p.split(':')[0] for p in str(have or '').split(',') if p}
+
+
+def gren_refresh(log=print) -> None:
+    global GREN_HAVE
+    r = nav._wait(nav._send({'cmd': 'grenade_select', 'x': 0}), timeout=1.5)
+    if r and r.get('ok'):
+        GREN_HAVE = _gren_parse(r.get('have'))
+        log(f"  [combat] grenades possedees : {sorted(GREN_HAVE)} (molette : {r.get('prevk')})")
+
+
+def _emp_ok(e: dict) -> bool:
+    """Bonus IEM reel (emp.tweak:373-405 : androide / drone / mech, netrunner, exo) ou tourelle ; pas d immunite EMP."""
+    return bool(e.get('emp') or e.get('kind') == 'turret') and 'E' not in (e.get('imm') or '')
+
+
+def choose_grenade(far: list, alive: list, flee: bool = False) -> tuple:
+    """-> (cible, famille voulue ou None = garder l equipee, raison)."""
+    have = GREN_HAVE or set()
+
+    def grp(t):
+        return [x for x in alive if (x['x'] - t['x']) ** 2 + (x['y'] - t['y']) ** 2 <= GREN_GROUP_M ** 2]
+    tgt = max(far, key=lambda t: (len(grp(t)), t['d']))              # amas le plus dense, puis le plus loin (ancien far[-1])
+    g = grp(tgt)
+    te = max(far, key=lambda t: sum(1 for x in grp(t) if _emp_ok(x)))
+    ge = grp(te)
+    ne = sum(1 for x in ge if _emp_ok(x))
+    if 'emp' in have and ne and ne * 2 >= len(ge):                    # majorite sensible a l IEM autour de la cible
+        return te, 'emp', f"{te.get('kind') or '?'}{' netrunner' if te.get('net') else ''} x{len(ge)}"
+    if flee:
+        if 'flash' in have and not any('F' in (x.get('imm') or '') or x.get('kind') == 'android' for x in g):
+            return tgt, 'flash', 'fuite : aveugler'
+        if 'smoke' in have:
+            return tgt, 'smoke', 'fuite : ecran'
+    humans = [x for x in g if x.get('kind', 'human') == 'human' and not _emp_ok(x)]
+    if len(humans) >= 2:
+        imm = ''.join(x.get('imm') or '' for x in humans)
+        if 'fire' in have and imm.count('B') * 2 < len(humans):
+            return tgt, 'fire', f'groupe de {len(humans)} humains'
+        if 'bio' in have and imm.count('P') * 2 < len(humans):
+            return tgt, 'bio', f'groupe de {len(humans)} humains'
+    if 'frag' in have:
+        return tgt, 'frag', 'defaut'
+    return tgt, None, 'garder l equipee'
+
+
+def select_grenade(kind, st: dict, log=print) -> bool:
+    """Met `kind` sur la molette (raccourci RB). Vrai si c est (ou va etre) la grenade active."""
+    global GREN_HAVE
+    res = (st or {}).get('res') or {}
+    if not kind:
+        return False
+    if res.get('gk') == kind:
+        return True
+    if res.get('gk') == 'launcher' or kind not in (GREN_HAVE or set()):
+        return False
+    now = time.perf_counter()
+    if (st.get('cg') or 0) not in (0, -1) or now - _gren_last[0] < GREN_SWITCH_CD or now - _gren_fail.get(kind, -99.0) < GREN_FAIL_CD:
+        return False
+    _gren_last[0] = now
+    r = nav._wait(nav._send({'cmd': 'grenade_select', 'x': GREN_CODE[kind]}), timeout=1.0) or {}
+    ok = bool(r.get('ok') or r.get('pending'))
+    if not ok:
+        _gren_fail[kind] = now
+        if r.get('have') is not None:
+            GREN_HAVE = _gren_parse(r.get('have'))
+    log(f"  [combat] molette : {r.get('prevk')} -> {kind} {'OK' if ok else 'ECHEC'} "
+        f"({r.get('method') or r.get('reason') or 'mod muet'}, {r.get('charges')} charge(s), {time.perf_counter() - now:.2f} s)")
+    return ok
 
 
 # ---- visee --------------------------------------------------------------------------
@@ -640,13 +726,20 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 if now >= flee_until:
                     flee_until = now + 8.0; last_flee_end = flee_until; stats['fuites'] = stats.get('fuites', 0) + 1
                     log(f'  [combat] FUITE ({n_alive} hostiles, vie {hp:.0f} %) : on decroche')
+                    # 12/10 : grenade de fuite lancee EN FACE du groupe, avant de tourner le dos (elle partait devant V)
+                    if now - t_gren > 6.0 and charges(st, 'gren'):
+                        cand = [x for x in alive if x['d'] > 8.0 and x.get('los') is not False]
+                        if cand:
+                            tgt_f, fam_f, why_f = choose_grenade(cand, alive, flee=True)
+                            select_grenade(fam_f, st, log)
+                            if abs(aim_at(tgt_f, st)) < 25:
+                                kbm.mouse_tap('middle', 0.12); t_gren = now; stats['grenades'] += 1
+                                log(f"  [combat] grenade de fuite ({fam_f or 'equipee'} : {why_f})"); time.sleep(0.25)
                 away = motion.wrap(motion.bearing_to(cx, cy, st['x'], st['y']))
                 aim_bearing(away, st, gain=0.7)
                 kbm.hold('W'); kbm.act_hold('sprint')
-                if now - t_heal > HEAL_CD and hp < 70 and charges(st, 'heal'):
+                if now - t_heal > HEAL_CD and hp < 70 and now - t_gren > 0.8 and charges(st, 'heal'):
                     kbm.act('consumable', 0.1); t_heal = now; stats['soins'] += 1
-                if now - t_gren > 6.0 and e['d'] > 6.0 and charges(st, 'gren'):
-                    kbm.mouse_tap('middle', 0.12); t_gren = now; stats['grenades'] += 1   # grenade vers l arriere (on regarde devant : elle part devant... on ne vise pas)
                 if now - t_dodge > 2.0:
                     dodge('W'); t_dodge = now; stats['esquives'] += 1
                 continue
@@ -668,13 +761,24 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             kbm.act_release('sprint')
 
             # -- grenade sur un ennemi ELOIGNE (pas forcement le plus proche), si groupe
-            far = [x for x in alive if GRENADE_MIN_M <= x['d'] <= GRENADE_MAX_M and x.get('los') is not False]   # 12/10 : pas dans un mur
-            if far and len(alive) >= 2 and now - t_gren > GRENADE_CD and charges(st, 'gren'):
-                tgt = far[-1]
+            # -- grenade ADAPTEE (12/10) : cible = amas le plus dense ; famille selon la nature des ennemis
+            far = [x for x in alive if GRENADE_MIN_M <= x['d'] <= GRENADE_MAX_M and x.get('los') is not False]   # pas dans un mur
+            if far and (len(alive) >= 2 or any(_emp_ok(x) for x in far)) and now - t_gren > GRENADE_CD \
+                    and now - t_heal > 0.8 and charges(st, 'gren'):
+                tgt, fam, why = choose_grenade(far, alive)
+                if fam and select_grenade(fam, st, log):
+                    st2 = motion.read_state(seq, timeout=0.4)          # res.gk / grenN relus apres le changement
+                    if st2:
+                        st = st2; seq = st2['seq']
+                    if not charges(st, 'gren'):
+                        t_gren = now; continue                          # la nouvelle famille coute plus que la reserve
+                gk = (st.get('res') or {}).get('gk') or '?'
                 gap = aim_at(tgt, st)
                 if gap < 10:
                     kbm.mouse_tap('middle', 0.12); t_gren = now; stats['grenades'] += 1
-                    log(f"  [combat] grenade sur cible a {tgt['d']:.0f} m ({len(alive)} hostiles)")
+                    stats['gren_' + gk] = stats.get('gren_' + gk, 0) + 1
+                    log(f"  [combat] grenade {gk} (voulue {fam or '-'} : {why}) sur {tgt.get('kind') or '?'} "
+                        f"a {tgt['d']:.0f} m ({len(alive)} hostiles)")
                     time.sleep(0.4)
                 continue
 

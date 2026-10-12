@@ -106,6 +106,13 @@ def manage(log=print) -> dict:
         log('  [inventaire] mod muet ou erreur : ' + str(inv and inv.get('reason')))
         return {'ok': False}
     items = inv.get('items') or []
+    try:                                                # 12/10 grenade adaptee : familles possedees
+        from . import combat as _cb
+        _gh = {it['gk'] for it in items if it.get('type') == 'Gad_Grenade' and it.get('gk')}
+        if _gh:
+            _cb.GREN_HAVE = _gh
+    except Exception:
+        pass
     MONEY = int(inv.get('money') or 0)
     WEIGHT = float(sum((it.get('weight') or 0) * int(it.get('qty') or 1) for it in items))
     CARRY = float(inv.get('carry') or CARRY or 260.0)

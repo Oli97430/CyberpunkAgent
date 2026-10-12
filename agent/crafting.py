@@ -19,13 +19,21 @@ from . import nav
 WANT = {                    # type d objet -> stock souhaite
     'Con_Inhaler': 5,       # soins (MaxDoc)
     'Con_Injector': 3,      # Bounce Back
-    'Gad_Grenade': 5,
 }
+# 12/10 : en 2.x une grenade lancee n est pas consommee (reserve commune) et le jeu ne garde qu un exemplaire par famille
+# (player.script:2651, LeaveTheBestQualityConsumable) : fabriquer 5 grenades identiques gaspillait des composants.
+# Un exemplaire par FAMILLE (pour adapter la grenade a l ennemi), puis la meilleure qualite.
+GREN_FAMILIES = ('frag', 'emp', 'fire', 'bio', 'flash')
 AMMO_WANT = 80              # par type de munition faisable (armes de reserve)
 HEAL_TYPES = ('Con_Inhaler', 'Con_Injector')
 MAX_CRAFT_PER_PASS = 10
 MAX_GEAR_PER_PASS = 3       # armes / vetements / cyberware par passe
 QR = {'Legendary': 5, 'Epic': 4, 'Rare': 3, 'Uncommon': 2, 'Common': 1}
+
+
+def _q(q) -> float:                                          # 'RarePlus' etc. valaient 0 dans QR
+    q = str(q or '')
+    return QR.get(q.replace('PlusPlus', '').replace('Plus', ''), 0) + (0.5 if 'Plus' in q else 0.0)
 
 
 def recipes() -> list[dict]:
@@ -77,6 +85,23 @@ def manage(inventory_items: list[dict], log=print) -> dict:
         if craft(r['i'], n):
             made += n
             log(f"  [craft] fabrique {n} x « {r.get('name')} » ({typ}, stock {have} -> {have + n})")
+            time.sleep(0.4)
+    # 1c. grenades (12/10) : famille MANQUANTE d abord, puis remplacement par une qualite superieure
+    best_have = {}
+    for it in inventory_items:
+        if it.get('type') == 'Gad_Grenade' and it.get('gk'):
+            best_have[it['gk']] = max(best_have.get(it['gk'], -1), _q(it.get('quality')))
+    for fam in GREN_FAMILIES:
+        if made >= MAX_CRAFT_PER_PASS:
+            break
+        cands = sorted([r for r in doable if r.get('type') == 'Gad_Grenade' and r.get('gk') == fam],
+                       key=lambda r: -_q(r.get('quality')))
+        if not cands or _q(cands[0].get('quality')) <= best_have.get(fam, -1):
+            continue
+        if craft(cands[0]['i'], 1):
+            made += 1
+            log(f"  [craft] grenade {fam} : « {cands[0].get('name')} » ({cands[0].get('quality')}) -- "
+                f"{'nouvelle famille' if fam not in best_have else 'meilleure qualite'}")
             time.sleep(0.4)
     # 1b. munitions : par recette de munition faisable, jusqu a AMMO_WANT (par nom)
     for r in [r for r in doable if (r.get('type') or '').startswith('Con_Ammo')]:

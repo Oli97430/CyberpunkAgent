@@ -81,7 +81,7 @@ local craftDiagDone = false
 
 local lootClassesLogged = false             -- classes d objets lootables vues, journalisees une fois
 local lookatLogged = false
-local losLogged = false                       -- 12/10 : 1re mesure de ligne de vue journalisee (validation en jeu)
+AgentLosLogged = false                        -- 12/10 : 1re mesure de ligne de vue journalisee (GLOBAL : limite LuaJIT de 60 upvalues)
 local crimeAcc, lastCrimes = 0.0, nil
 local lastDialogSig = ''
 local attachedFor = 0.0         -- temps cumule avec un joueur attache
@@ -97,6 +97,90 @@ end
 local function journal(line)
     local f = io.open('probe_progress.txt', 'a')
     if f then f:write(line .. '\n'); f:flush(); f:close() end
+end
+
+-- 12/10 GRENADE ADAPTEE (Olivier : « V doit adapter les projectiles qu il lance a l ennemi ») -- fonctions et tables
+-- GLOBALES : aucune upvalue de plus dans onUpdate / handleCommand (limite LuaJIT de 60).
+-- Famille d un objet par les TAGS de son record (methode du jeu : fragGrenade.script GetGrenadeType)
+AGENT_GREN_TAGS = { {'EMPGrenade','emp'}, {'IncendiaryGrenade','fire'}, {'BiohazardGrenade','bio'}, {'FlashGrenade','flash'},
+                    {'SmokeGrenade','smoke'}, {'CuttingGrenade','cut'}, {'ReconGrenade','recon'}, {'PiercingGrenade','pierce'},
+                    {'SonicGrenade','sonic'}, {'FragGrenade','frag'} }
+AgentGrenKindCache = AgentGrenKindCache or {}
+function AgentGrenKind(tdbid)
+    local ck = tostring(tdbid)
+    local k = AgentGrenKindCache[ck]
+    if k ~= nil then return k or nil end
+    k = false
+    pcall(function()
+        local r = TweakDBInterface.GetItemRecord(tdbid)
+        local t = tostring(r:ItemType():Type())
+        if t:find('Cyb_Launcher') then k = 'launcher'
+        elseif t:find('Cyb_Ability') then k = 'ability'
+        elseif t:find('Gad_Grenade') then
+            k = 'frag'                                   -- defaut du jeu ; Ozob's Nose n a pas le tag FragGrenade
+            for _, p in ipairs(AGENT_GREN_TAGS) do
+                local ok, v = pcall(function() return r:TagsContains(p[1]) end)               -- tweakDBRecords.script:5155
+                if not ok then ok, v = pcall(function() return r:TagsContains(CName.new(p[1])) end) end
+                if ok and v == true then k = p[2]; break end
+            end
+        end
+    end)
+    AgentGrenKindCache[ck] = k
+    local sid = ck; pcall(function() sid = TDBID.ToStringDEBUG(tdbid) end)
+    journal('GKIND ' .. sid .. ' -> ' .. tostring(k))                                       -- une fois par record : validation
+    return k or nil
+end
+
+-- Type et faiblesses d un ennemi (cache 10 s par entite) : kind human/android/drone/mech/robot/turret, emp (bonus IEM du
+-- jeu : emp.tweak:373-405 = NPCIsMechanical OU netrunner OU exo), imm (immunites E/B/P/F), boss, net
+AgentFoeCache, AgentFoeLogged, AgentFoePurgeT = AgentFoeCache or {}, AgentFoeLogged or 0, 0
+function AgentFoeInfo(ent, rec)
+    local key = tostring(ent:GetEntityID().hash)
+    local now = os.clock()
+    local fi = AgentFoeCache[key]
+    if not fi or now - fi.t > 10.0 then
+        local first = (fi == nil)
+        fi = { t = now }
+        local ss, eid = Game.GetStatsSystem(), ent:GetEntityID()
+        local function st(n)
+            local ok, v = pcall(function() return ss:GetStatValue(eid, gamedataStatType[n]) end)   -- statsSystem.script:34
+            return (ok and type(v) == 'number') and v or 0
+        end
+        local npct, rar = '?', '?'
+        pcall(function() if ent:IsTurret() then fi.kind = 'turret' end end)                       -- gameObject.script:1776
+        if not fi.kind then
+            pcall(function() npct = tostring(ent:GetNPCType()) end)                                 -- scriptedPuppet.script:1419
+            if npct:find('Android') then fi.kind = 'android'
+            elseif npct:find('Drone') then fi.kind = 'drone'
+            elseif npct:find('Mech') then fi.kind = 'mech'
+            elseif npct:find('Cerberus') or npct:find('Chimera') or npct:find('Spiderbot') then fi.kind = 'robot'
+            elseif npct:find('Human') then fi.kind = 'human' end
+            pcall(function() if fi.kind == 'human' and ent:IsMechanical() then fi.kind = 'robot' end end)   -- :1456
+        end
+        pcall(function() rar = tostring(ent:GetNPCRarity()) end)                                    -- puppet.script:95
+        if rar:find('Boss') or rar:find('MaxTac') then fi.boss = true end
+        local imm = ''
+        if st('EMPImmunity') > 0 then imm = imm .. 'E' end
+        if st('BurningImmunity') > 0 then imm = imm .. 'B' end
+        if st('PoisonImmunity') > 0 then imm = imm .. 'P' end
+        if st('BlindImmunity') > 0 then imm = imm .. 'F' end
+        if imm ~= '' then fi.imm = imm end
+        local net, exo = st('IsNetrunnerArchetype') > 0, st('IsExo') > 0
+        if net then fi.net = true end
+        if fi.kind == 'android' or fi.kind == 'drone' or fi.kind == 'mech' or net or exo then fi.emp = true end
+        AgentFoeCache[key] = fi
+        if first and AgentFoeLogged < 300 then
+            AgentFoeLogged = AgentFoeLogged + 1
+            journal(string.format('FOE %s d=%.0f %s kind=%s rar=%s imm=%s emp=%s net=%s exo=%s res(th/el/ch)=%.0f/%.0f/%.0f',
+                tostring(rec.name), rec.d or 0, npct, tostring(fi.kind), rar, imm, tostring(fi.emp), tostring(net), tostring(exo),
+                st('ThermalResistance'), st('ElectricResistance'), st('ChemicalResistance')))
+        end
+    end
+    if now - AgentFoePurgeT > 60 then
+        AgentFoePurgeT = now
+        for k, v in pairs(AgentFoeCache) do if now - v.t > 120 then AgentFoeCache[k] = nil end end
+    end
+    rec.kind, rec.emp, rec.imm, rec.boss, rec.net = fi.kind, fi.emp, fi.imm, fi.boss, fi.net
 end
 
 local function addProbe(name, fn) probes[#probes + 1] = { name = name, fn = fn } end
@@ -711,6 +795,15 @@ end)
 -- (crash natif, confirme par probe_progress.txt le 2026-09-10 15:05). Ne pas
 -- reintroduire sans passer par un shim redscript.
 
+addProbe('GRENADE: EHotkey.RB / GetActiveGadget / GetGrenadeCharges', function()   -- 12/10 grenade adaptee
+    local p = Game.GetPlayer()
+    local ed = Game.GetScriptableSystemsContainer():Get('EquipmentSystem'):GetPlayerData(p)
+    local rb = tostring(EHotkey.RB) .. '=' .. tostring(EnumInt(EHotkey.RB))
+    local g, g2 = ed:GetActiveGadget(), ed:GetItemIDFromHotkey(EHotkey.RB)
+    local same = tostring(ItemID.GetTDBID(g)) == tostring(ItemID.GetTDBID(g2))
+    return rb, TDBID.ToStringDEBUG(ItemID.GetTDBID(g)) .. ' kind=' .. tostring(AgentGrenKind(ItemID.GetTDBID(g))) .. ' same=' .. tostring(same),
+           'charges=' .. tostring(p:GetGrenadeCharges()) .. ' pool=' .. tostring(Game.GetStatPoolsSystem():GetStatPoolValue(p:GetEntityID(), gamedataStatPoolType.GrenadesCharges, false))
+end)
 local function runNextProbe()
     probeIdx = probeIdx + 1
     local pr = probes[probeIdx]
@@ -1177,6 +1270,8 @@ registerForEvent('onUpdate', function(dt)
         pcall(function() carrying = psm and (psm:GetInt(defs.PlayerStateMachine.BodyCarrying) > 0) or false end)
         pcall(function() locomotion = psm and psm:GetInt(defs.PlayerStateMachine.Locomotion) or -1 end)
         pcall(function() upperBody = psm and psm:GetInt(defs.PlayerStateMachine.UpperBody) or -1 end)
+        local cgState = -1
+        pcall(function() cgState = psm and psm:GetInt(defs.PlayerStateMachine.CombatGadget) or -1 end)   -- 0 = Default (psmImports.script:687)
         local lootPanel = false
         local lootCount = 0
         pcall(function()
@@ -1290,9 +1385,10 @@ registerForEvent('onUpdate', function(dt)
                     for i = 1, #parts do
                         local comp = TS_TargetPartInfo.GetComponent(parts[i])
                         local ent = comp and comp:GetEntity() or nil
+                        local key = nil                 -- 12/10 : etait local au bloc ci-dessous -> rec.id / hudNote recevaient nil
                         if ent then
                             local okH, h = pcall(function() return ent:GetEntityID().hash end)
-                            local key = okH and tostring(h) or tostring(ent)
+                            key = okH and tostring(h) or tostring(ent)
                             if seenEnt[key] then ent = nil else seenEnt[key] = true end
                         end
                         if ent then
@@ -1307,6 +1403,7 @@ registerForEvent('onUpdate', function(dt)
                             pcall(function() if not rec.police and ent:IsPolice() then rec.police = true end end)
                             -- 12/10 : nom affiche (journal : « hostile » au QG de Delamain engage 5 fois sans reaction, non identifie)
                             if rec.d < 40.0 then pcall(function() rec.name = GetLocalizedText(tostring(ent:GetDisplayName())) end) end
+                            if rec.d < 40.0 then pcall(AgentFoeInfo, ent, rec) end   -- 12/10 grenade adaptee : kind/emp/imm/boss/net
                             -- 12/10 (Olivier : « V tire trop souvent sur un mur ») : LIGNE DE VUE oeil -> poitrine, geometrie STATIQUE
                             -- seulement (meme appel que spatialQueriesSystem.script:56), arretee 0,6 m avant la cible
                             if rec.d < 60.0 then
@@ -1320,8 +1417,8 @@ registerForEvent('onUpdate', function(dt)
                                         Vector4.new(fx, fy, fz, 1.0), Vector4.new(fx + dx * k, fy + dy * k, fz + dz * k, 1.0), CName.new('Static'), true, false)
                                     rec.los = not (hit == true)
                                 end)
-                                if not losLogged then
-                                    losLogged = true
+                                if not AgentLosLogged then
+                                    AgentLosLogged = true
                                     journal(okL and ('OK   LOS : ligne de vue mesuree (' .. tostring(rec.los) .. ' a ' .. string.format('%.0f', rec.d) .. ' m)')
                                         or ('FAIL LOS : ' .. tostring(errL)))
                                 end
@@ -1818,6 +1915,14 @@ registerForEvent('onUpdate', function(dt)
             for k, pool in pairs({ heal = 'HealingItemsCharges', gren = 'GrenadesCharges', proj = 'ProjectileLauncherCharges' }) do
                 pcall(function() r[k] = math.floor(sps:GetStatPoolValue(id, gamedataStatPoolType[pool], false) + 0.01) end)
             end
+            -- 12/10 : VRAIES charges (pool / cout de la grenade ACTIVE, player.script:7334) + famille sur la molette
+            pcall(function() r.grenN = player:GetGrenadeCharges() end)
+            pcall(function() r.healN = player:GetHealingItemCharges() end)
+            pcall(function() r.projN = player:GetProjectileLauncherCharges() end)
+            pcall(function()
+                local g = Game.GetScriptableSystemsContainer():Get('EquipmentSystem'):GetPlayerData(player):GetActiveGadget()   -- :3300
+                r.gk = ItemID.IsValid(g) and (AgentGrenKind(ItemID.GetTDBID(g)) or '?') or 'none'
+            end)
             resCache = next(r) and r or nil
             -- journal a chaque changement (validation en jeu : le 24/09, heal=0 alors que V avait 3 soins)
             pcall(function()
@@ -1829,7 +1934,7 @@ registerForEvent('onUpdate', function(dt)
         pcall(function() ramNow = math.floor(Game.GetStatPoolsSystem():GetStatPoolValue(id, gamedataStatPoolType.Memory, false) * 10 + 0.5) / 10 end)
         seq = seq + 1
         return { seq = seq, x = pos.x, y = pos.y, z = pos.z, yaw = player:GetWorldYaw(), ram = ramNow,
-                 hp = hp, dead = isDead, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody,
+                 hp = hp, dead = isDead, level = playerLevel, swim = swim, oxygen = oxygen, combat = inCombat, vehicle = inVehicle, carrying = carrying, locomotion = locomotion, upperBody = upperBody, cg = cgState,
                  lootPanel = lootPanel, lootCount = lootCount, loot = loot, lookat = lookat, crimes = lastCrimes, vehicles = vehicles, traffic = traffic, summon = summon, buffs = buffs, phone = phone, breach = breach, weapon = weapon,
                  enemies = enemies, foes = foes, res = resCache, bodies = bodies, npcs = npcs, qh = qh, dialog = dlg, interact = inter, quest = quest, bd = bd, menu = menuOpen, scene = inScene, ftLoading = ftLoading, seqEnd = seq }
     end)
@@ -2074,6 +2179,10 @@ local function handleCommand(player, cmd)
                     if not rec.price or rec.price <= 0 then pcall(function() local p = RPGManager.CalculateSellPrice(player, id); if type(p) == 'number' and p > 0 then rec.price = p / 0.15 end end) end
                 end
                 pcall(function() rec.equipped = edata:IsEquipped(id) end)
+                if rec.type == 'Gad_Grenade' or rec.type == 'Cyb_Launcher' then   -- 12/10 grenade adaptee
+                    rec.gk = AgentGrenKind(ItemID.GetTDBID(id))
+                    pcall(function() rec.active = (tostring(ItemID.GetTDBID(edata:GetActiveGadget())) == tostring(ItemID.GetTDBID(id))) end)
+                end
                 pcall(function() rec.quest = data:HasTag('Quest') end)
                 if not isMoney(id) then out[#out + 1] = rec end     -- l argent n est jamais un objet a vendre/demonter
             end
@@ -2208,6 +2317,7 @@ local function handleCommand(player, cmd)
                 pcall(function() rec.type = tostring(TweakDBInterface.GetItemRecord(r.targetItem):ItemType():Type()):gsub('gamedataItemType : ', ''):gsub(' %(%d+%)', '') end)
                 pcall(function() rec.can = cs:CanItemBeCrafted(TweakDBInterface.GetItemRecord(r.targetItem)) end)
                 pcall(function() rec.quality = tostring(TweakDBInterface.GetItemRecord(r.targetItem):Quality():Type()):gsub('gamedataQuality : ', ''):gsub(' %(%d+%)', '') end)
+                if rec.type == 'Gad_Grenade' then rec.gk = AgentGrenKind(r.targetItem) end   -- 12/10
                 lastRecipes[i] = r.targetItem
                 out[#out + 1] = rec
             end
@@ -2958,6 +3068,76 @@ local function handleCommand(player, cmd)
         resp.ok = okE
         if not okE then resp.reason = 'requete refusee : ' .. tostring(errE) end
         journal((okE and 'OK   ' or 'FAIL ') .. 'weapon_slot ' .. tostring(n) .. (okE and '' or (' : ' .. tostring(errE))))
+        return resp
+    elseif cmd.cmd == 'grenade_select' then
+        -- 12/10 GRENADE ADAPTEE : met sur le raccourci RB (clic molette = GetActiveGadget) la meilleure grenade de la famille x.
+        -- x : 1 frag, 2 emp, 3 fire, 4 bio, 5 flash, 6 smoke, 7 cut, 8 recon ; 0 = lister seulement
+        local fams = { 'frag', 'emp', 'fire', 'bio', 'flash', 'smoke', 'cut', 'recon' }
+        local want = fams[math.floor(tonumber(cmd.x) or 0)]
+        journal('RUN  grenade_select ' .. tostring(want or 'liste'))
+        local ts = Game.GetTransactionSystem()
+        local es = Game.GetScriptableSystemsContainer():Get('EquipmentSystem')
+        local edata = es:GetPlayerData(player)
+        local function active()
+            local s1, k1 = 'none', 'none'
+            pcall(function()
+                local g = edata:GetActiveGadget()                                                -- equipmentSystem.script:3300
+                if ItemID.IsValid(g) then s1 = tostring(ItemID.GetTDBID(g)); k1 = AgentGrenKind(ItemID.GetTDBID(g)) or '?' end
+            end)
+            return s1, k1
+        end
+        local prevS, prevK = active()
+        resp.prevk = prevK
+        local cg = 0
+        pcall(function()
+            local d = GetAllBlackboardDefs().PlayerStateMachine
+            cg = Game.GetBlackboardSystem():GetLocalInstanced(player:GetEntityID(), d):GetInt(d.CombatGadget)   -- blackboardDefinitions.script:95
+        end)
+        resp.cg = cg
+        local okL, items = ts:GetItemList(player)
+        if type(okL) == 'table' then items = okL end
+        local have, best, bestQ = {}, nil, -1
+        for i = 1, #(items or {}) do
+            pcall(function()
+                local iid = items[i]:GetID()
+                local tid = ItemID.GetTDBID(iid)
+                local k = AgentGrenKind(tid)
+                if k and k ~= 'launcher' and k ~= 'ability' then
+                    local q = TweakDBInterface.GetItemRecord(tid):Quality():Value()                -- tweakDBRecords.script:7248
+                    have[#have + 1] = k .. ':' .. q
+                    if k == want and q > bestQ and ts:GetItemQuantity(player, iid) > 0 then best, bestQ = iid, q end   -- transactionSystem.script:41
+                end
+            end)
+        end
+        resp.have = table.concat(have, ',')
+        if not want then resp.ok = true; journal('OK   grenade_select liste [' .. resp.have .. '] active=' .. prevK); return resp end
+        if not best then resp.reason = 'aucune grenade ' .. want; journal('FAIL grenade_select ' .. want .. ' absente [' .. resp.have .. ']'); return resp end
+        local bestS = tostring(ItemID.GetTDBID(best))
+        if prevS == bestS then resp.ok, resp.method = true, 'deja active'; return resp end
+        if prevK == 'launcher' then resp.reason = 'lance-projectiles sur la molette'; journal('FAIL grenade_select : RB = lance-projectiles, inchange'); return resp end
+        if cg ~= 0 then resp.reason = 'lancer en cours (cg=' .. tostring(cg) .. ')'; journal('FAIL grenade_select : ' .. resp.reason); return resp end
+        local RB = nil
+        pcall(function() RB = EHotkey.RB end)
+        if RB == nil then pcall(function() RB = Enum.new('EHotkey', 'RB') end) end              -- repli [NON VERIFIE]
+        local method, errA = 'AssignItemToHotkey', nil
+        if RB ~= nil then
+            local okA, e = pcall(function() edata:AssignItemToHotkey(best, RB) end)            -- :2176, synchrone
+            if not okA then errA = tostring(e) end
+        else errA = 'EHotkey.RB introuvable' end
+        if active() ~= bestS and RB ~= nil then
+            method = 'HotkeyAssignmentRequest/Cycle'                                          -- :87 ; Cycle = pas de tutoriel ; traite au tick suivant
+            local okQ, eQ = pcall(function()
+                es:QueueRequest(HotkeyAssignmentRequest.Construct(best, RB, player, EHotkeyRequestType.Cycle))
+            end)
+            resp.pending = okQ
+            if not okQ then errA = tostring(errA) .. ' / ' .. tostring(eQ) end
+        end
+        local nowS, nowK = active()
+        resp.ok, resp.method, resp.nowk = (nowS == bestS), method, nowK
+        pcall(function() resp.charges = player:GetGrenadeCharges() end)                       -- player.script:7334
+        journal(string.format('%s grenade_select %s -> %s (%s) RB=%s charges=%s%s',
+            resp.ok and 'OK  ' or (resp.pending and 'WAIT' or 'FAIL'), prevK, want, method, nowK,
+            tostring(resp.charges), errA and (' err=' .. errA) or ''))
         return resp
     elseif cmd.cmd == 'effects' then
         -- DIAGNOSTIC : effets de statut appliques a V (restrictions de gameplay incluses : « Action impossible »)
