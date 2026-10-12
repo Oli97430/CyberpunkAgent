@@ -224,6 +224,8 @@ def approach_machine(tx: float, ty: float, dist: float, log, stop) -> bool:
     if not r.get('ok') and math.hypot(s_c['x'] - tx, s_c['y'] - ty) > 2.5:
         # bloque a plus de 2,5 m : contourner (pas de cote) puis re-essayer une fois
         for side in ('A', 'D'):
+            if stop is not None and stop.is_set():
+                return False
             kbm.hold(side); time.sleep(0.6); kbm.release(side)
             walk_to(tx, ty, timeout=5.0, stop=stop)
             s_c = read_state() or s_c
@@ -231,6 +233,8 @@ def approach_machine(tx: float, ty: float, dist: float, log, stop) -> bool:
                 break
     turn_to(bearing_to(s_c['x'], s_c['y'], tx, ty), timeout=2.0, stop=stop)
     for dyaw, dpitch in ((0, 150), (0, -300), (0, 100), (-25, 0), (50, 0), (-25, -250), (0, 100), (0, 150)):   # bas, HAUT (panneaux muraux), puis balayage
+        if stop is not None and stop.is_set():          # 12/10 : F11/F12 -> plus aucune touche ni mouvement de souris
+            return False
         if dyaw:
             turn_by(dyaw, timeout=1.2, stop=stop)
         if dpitch:
@@ -241,6 +245,8 @@ def approach_machine(tx: float, ty: float, dist: float, log, stop) -> bool:
         ip = s_p.get('interact') or {}
         chp = str((ip.get('choices') or [''])[0]).lower()
         if chp and not any(w in chp for w in ('saisir', 'porter', 'prendre le contr', 'enfourcher')):
+            if stop is not None and stop.is_set():
+                return False
             log(f"  machine trouvee : « {ip['choices'][0]} » -> E")
             kbm.act('interact', 0.15); time.sleep(1.0)
             s_q = read_state() or {}

@@ -173,7 +173,8 @@ def marker_result(text, x: float, y: float, useful: bool, why: str = '', z=None,
         log(f'  [quetes] memoire des marqueurs non sauvee : {ex}')
 
 
-def pick_next(quests: list[dict], current_hash: int | None = None, player_level: int | None = None, prefer_givers: bool = False) -> dict | None:
+def pick_next(quests: list[dict], current_hash: int | None = None, player_level: int | None = None, prefer_givers: bool = False,
+              avoid: tuple | None = None) -> dict | None:
     """Objectif de son NIVEAU d abord (niveau recommande connu et <= niveau de V + 2), puis le plus proche ;
     avec marqueur, pas bloque, pas celui en cours, pas dans une zone dangereuse."""
     cands = [q for q in quests
@@ -181,7 +182,8 @@ def pick_next(quests: list[dict], current_hash: int | None = None, player_level:
              and time.perf_counter() - _blocked.get(int(q['hash']), -1e9) > BLOCKED_S and q['hash'] != current_hash
              and q['dist'] >= 8.0 and time.perf_counter() - _visited.get(int(q['hash']), -1e9) > 900.0
              and marker_wait(q) <= 0.0
-             and not near_danger(q['x'], q['y'])]
+             and not near_danger(q['x'], q['y'])
+             and not any(math.hypot(q['x'] - a[0], q['y'] - a[1]) < a[2] for a in _avoids(avoid))]   # 12/10 : (x, y, rayon) ecartes
     if not cands:
         return None
     def over(q):                 # 0 = de son niveau (ou inconnu), 1 = trop haute
@@ -195,7 +197,16 @@ def pick_next(quests: list[dict], current_hash: int | None = None, player_level:
     return min(cands, key=lambda q: (over(q), giver(q), known(q), q['dist'] >= 400, q['dist']))
 
 
-def switch(current_hash: int | None, log=print, prefer_givers: bool = False) -> dict | None:
+def _avoids(avoid) -> list:
+    """avoid : (x, y, rayon), ou une liste de ces triplets (None ignores)."""
+    if not avoid:
+        return []
+    if isinstance(avoid, tuple) and len(avoid) == 3 and not isinstance(avoid[0], (tuple, list)):
+        return [avoid]
+    return [a for a in avoid if a and a[0] is not None and a[1] is not None]
+
+
+def switch(current_hash: int | None, log=print, prefer_givers: bool = False, avoid=None) -> dict | None:
     mark_blocked(current_hash)
     quests = list_active()
     if not quests:
@@ -204,7 +215,7 @@ def switch(current_hash: int | None, log=print, prefer_givers: bool = False) -> 
     log(f"  [quetes] {len(quests)} objectif(s) actifs, {sum(1 for q in quests if q.get('hasMappin'))} avec marqueur")
     from . import motion as _m
     _st = _m.read_state() or {}
-    nxt = pick_next(quests, current_hash, player_level=_st.get('level'), prefer_givers=prefer_givers)
+    nxt = pick_next(quests, current_hash, player_level=_st.get('level'), prefer_givers=prefer_givers, avoid=avoid)
     if nxt and prefer_givers and 'QuestGiver' in str(nxt.get('text') or ''):
         log('  [quetes] aucune quete suivie : V va voir un donneur de quete de son niveau pour en decrocher une')
     if not nxt:

@@ -115,62 +115,109 @@ def _close_menu(kbm, log, what: str) -> None:
         kbm.tap('ESC', 0.08); time.sleep(0.9)
 
 
-def fast_travel_to(tx: float, ty: float, log=print, min_gain_m: float = 800.0) -> dict:
+def fast_travel_to(tx: float, ty: float, log=print, min_gain_m: float = 800.0, stop=None) -> dict:
     """Voyage rapide vers le point connu le plus proche de (tx,ty) si cela rapproche V d au moins min_gain_m.
-    Le jeu exige normalement d etre a une borne : on essaie, le resultat fait foi (position avant/apres)."""
+    Le jeu exige normalement d etre a une borne : on essaie, le resultat fait foi (position avant/apres).
+    min_gain_m < 0 = SORTIE / ILOT : le point le plus proche de la cible parmi ceux a plus de 30 m de V.
+    `stop` (F11/F12) : plus aucune touche ni commande, retour « arret d urgence » (12/10)."""
+    def _stopped():
+        return stop is not None and stop.is_set()
     r = _wait(_send({'cmd': 'fast_travel_points'}), timeout=6.0)
     pts = [p for p in ((r or {}).get('points') or []) if p.get('x') is not None]
     if not pts:
         return {'ok': False, 'reason': (r or {}).get('reason', 'aucun point')}
-    st = motion.read_state() or {}
+    st = motion.read_state(timeout=1.0) or {}
+    if st.get('x') is None:
+        return {'ok': False, 'reason': 'etat illisible'}
     d_now = math.hypot(st.get('x', 0) - tx, st.get('y', 0) - ty)
-    best = min(pts, key=lambda p: math.hypot(p['x'] - tx, p['y'] - ty))
+    cands = pts
+    if min_gain_m < 0 and st.get('x') is not None:
+        cands = [p for p in pts if math.hypot(p['x'] - st['x'], p['y'] - st['y']) > 30.0]
+        if not cands:
+            return {'ok': False, 'reason': 'aucun point de voyage a plus de 30 m'}
+    best = min(cands, key=lambda p: math.hypot(p['x'] - tx, p['y'] - ty))
     d_after = math.hypot(best['x'] - tx, best['y'] - ty)
     if d_now - d_after < min_gain_m:
         return {'ok': False, 'reason': f'pas de point utile (gain {d_now - d_after:.0f} m)'}
+    if math.hypot(st['x'] - best['x'], st['y'] - best['y']) < 30.0:
+        return {'ok': False, 'reason': f"deja pres du point « {best.get('name')} »"}
+    p0 = (st['x'], st['y'])
+
+    d_p0 = math.hypot(p0[0] - best['x'], p0[1] - best['y'])
+
+    def _arrived(s_):
+        # 12/10 : au point (< 15 m), ou a moins de 60 m apres s en etre VRAIMENT rapproche (25 m) : une marche ratee
+        # vers la borne (V bute a 55 m d elle) n est pas un voyage
+        if not s_:
+            return False
+        d_s = math.hypot(s_['x'] - best['x'], s_['y'] - best['y'])
+        return d_s < 15.0 or (d_s < 60.0 and d_s < d_p0 - 25.0)
+    if _stopped():
+        return {'ok': False, 'reason': 'arret d urgence'}
     log(f"  [voyage] « {best.get('name')} » ({best.get('district')}) a {d_after:.0f} m de l objectif (gain {d_now - d_after:.0f} m)")
     # 1. tentative directe par script ; 2. sinon, marcher jusqu a la BORNE la plus proche et l utiliser (invite), puis re-essayer
     r2 = _wait(_send({'cmd': 'fast_travel', 'x': best['i']}), timeout=8.0)
     time.sleep(4.0)
     s_chk = motion.read_state()
-    if not (s_chk and math.hypot(s_chk['x'] - best['x'], s_chk['y'] - best['y']) < 60.0):
+    if _stopped() and not _arrived(s_chk):
+        return {'ok': False, 'reason': 'arret d urgence'}
+    if not _arrived(s_chk):
         near = min(pts, key=lambda p: p.get('d', 1e9))
         if near.get('d', 1e9) < 400.0:
             log(f"  [voyage] borne la plus proche « {near.get('name')} » a {near['d']:.0f} m : V y va")
             from . import input_kbm as kbm
-            rg = goto(lambda: request_path_to(near['x'], near['y'], near.get('z')), arrive_m=2.0, max_legs=8, timeout=150.0, log=log)
-            if not rg.get('ok'):
+            rg = goto(lambda: request_path_to(near['x'], near['y'], near.get('z')), arrive_m=2.0, max_legs=8, timeout=150.0, log=log, stop=stop)
+            if not rg.get('ok') and not _stopped():
                 old = motion.ARRIVE_M; motion.ARRIVE_M = 2.0
                 try:
-                    motion.walk_to(near['x'], near['y'], timeout=25.0)
+                    motion.walk_to(near['x'], near['y'], timeout=25.0, stop=stop)
                 finally:
                     motion.ARRIVE_M = old
+            if _stopped():
+                return {'ok': False, 'reason': 'arret d urgence'}
             s3 = motion.read_state() or {}
+            if not (s3 and math.hypot(s3['x'] - near['x'], s3['y'] - near['y']) < 8.0):
+                # 12/10 (revue) : borne pas atteinte a pied -> aucun 2e voyage possible : echec net (V a seulement marche),
+                # sauf teleportation tardive du 1er essai (V au point vise, qui n est pas la borne)
+                if s3 and near is not best and math.hypot(s3['x'] - best['x'], s3['y'] - best['y']) < 15.0:
+                    return {'ok': True, 'point': best.get('name'), 'methodes': (r2 or {}).get('methodes')}
+                return {'ok': False, 'reason': 'borne inaccessible a pied', 'marche': True}
             if s3 and math.hypot(s3['x'] - near['x'], s3['y'] - near['y']) < 8.0:
                 # la BORNE exige d etre a ~1 m et de la regarder : approche fine + balayage + E (invite active)
                 d3 = math.hypot(s3['x'] - near['x'], s3['y'] - near['y'])
-                used = motion.approach_machine(near['x'], near['y'], d3, log, None)
+                used = motion.approach_machine(near['x'], near['y'], d3, log, stop)
                 time.sleep(2.0 if used else 0.5)                      # la borne ouvre la carte des voyages rapides
                 map_open = _menu_open()
+                if _stopped():
+                    if used and map_open:
+                        _close_menu(kbm, log, 'carte des voyages ouverte par V')   # la carte que V vient d ouvrir
+                    return {'ok': False, 'reason': 'arret d urgence'}
                 log(f"  [voyage] borne {'activee' if used else 'non activee'}, carte {'ouverte' if map_open else 'fermee'}")
                 r2 = _wait(_send({'cmd': 'fast_travel', 'x': best['i']}), timeout=8.0)
                 time.sleep(3.0)
                 s4 = motion.read_state()
-                if not (s4 and math.hypot(s4['x'] - best['x'], s4['y'] - best['y']) < 60.0):
+                if not _arrived(s4):
+                    if _stopped():                                      # le joueur a la main : seule la carte ouverte par V
+                        if used and map_open:
+                            _close_menu(kbm, log, 'carte des voyages ouverte par V')
+                        return {'ok': False, 'reason': 'arret d urgence'}
                     _close_menu(kbm, log, 'carte des voyages')          # jamais d Echap a l aveugle (ouvrirait le menu pause)
                     log(f"  [voyage] borne {'activee' if used else 'non activee'}, voyage par script refuse : {(r2 or {}).get('reason') or (r2 or {}).get('erreurs')}")
                     # dernier recours, aux memes conditions que le jeu (V est a la borne) : teleportation borne -> borne
                     s5 = motion.read_state() or {}
-                    if s5 and math.hypot(s5['x'] - near['x'], s5['y'] - near['y']) < 6.0:
+                    if s5 and math.hypot(s5['x'] - near['x'], s5['y'] - near['y']) < 6.0 and not _stopped():
                         log(f"  [voyage] teleportation de la borne « {near.get('name')} » vers « {best.get('name')} »")
                         _wait(_send({'cmd': 'teleport', 'x': best['x'], 'y': best['y'], 'z': best.get('z')}), timeout=6.0)
                         time.sleep(5.0)
     time.sleep(6.0)                                      # ecran de chargement
+    if _stopped():                                       # le joueur a la main : pas d Echap dans SES menus
+        if _arrived(motion.read_state()):
+            return {'ok': True, 'point': best.get('name'), 'methodes': (r2 or {}).get('methodes')}
+        return {'ok': False, 'reason': 'arret d urgence'}
     from . import input_kbm as _kbm
     _close_menu(_kbm, log, 'apres le voyage')            # un menu reste ouvert ? on le ferme tout de suite (pas 40 s plus tard)
     for _ in range(40):
-        s2 = motion.read_state()
-        if s2 and math.hypot(s2['x'] - best['x'], s2['y'] - best['y']) < 60.0:
+        if _arrived(motion.read_state()):
             return {'ok': True, 'point': best.get('name'), 'methodes': (r2 or {}).get('methodes')}
         time.sleep(0.5)
     return {'ok': False, 'reason': f"voyage sans effet ({(r2 or {}).get('reason') or (r2 or {}).get('methodes')})"}

@@ -99,7 +99,7 @@ def mod_is_stale() -> str | None:
     return None
 
 
-def play(minutes: float, wait_forever: bool = False) -> bool:
+def play(minutes: float, wait_forever: bool = False, ks=None) -> bool:
     """Renvoie True si F12 (arret demande par le joueur) a mis fin a la session."""
     from agent import brain, dialog, input_kbm as kbm
     vr = CFG.vr_mode()
@@ -109,6 +109,7 @@ def play(minutes: float, wait_forever: bool = False) -> bool:
         msg = f'MODE VR ACTIF ({vr}) : V ne joue qu a plat. Lance VR-OFF.bat (dossier du jeu), puis relance V.'
         print('\n  !!! ' + msg, flush=True)
         try:
+            brain._log(msg)                       # aussi dans brain_log.txt (la console de l exe se ferme)
             from agent import remote
             remote.notify(msg)
         except Exception:
@@ -119,9 +120,13 @@ def play(minutes: float, wait_forever: bool = False) -> bool:
     if stale:
         print(f'\n  !!! {stale}\n'); time.sleep(4)
     t0 = time.time()
-    print('prechauffage du modele de decision (10-30 s la premiere fois)...', flush=True)
-    dialog.llm_choice('test', ['a', 'b'], timeout=120)
-    print(f'  modele pret en {time.time() - t0:.0f} s', flush=True)
+    if ks is not None and ks.paused.is_set():
+        # 12/10 : V en pause (--loop) : pas de modele recharge en VRAM pendant que le joueur joue
+        print('V est en pause : modele de decision non prechauffe', flush=True)
+    else:
+        print('prechauffage du modele de decision (10-30 s la premiere fois)...', flush=True)
+        dialog.llm_choice('test', ['a', 'b'], timeout=120)
+        print(f'  modele pret en {time.time() - t0:.0f} s', flush=True)
     print(f'Bascule vers Cyberpunk : V joue seul pendant {minutes:.0f} min des que le jeu est au premier plan (F11 = pause/reprise, F12 = arret)', flush=True)
     t1 = time.time()
     while not kbm.game_focused():
@@ -131,7 +136,11 @@ def play(minutes: float, wait_forever: bool = False) -> bool:
             print(f'  en attente du jeu au premier plan ({int(time.time() - t1) // 60} min)...', flush=True)
         time.sleep(0.25)
     print('  jeu au premier plan : depart dans 2 s', flush=True); time.sleep(2)
-    ks = kbm.KillSwitch()
+    # 12/10 : en --loop, UN SEUL KillSwitch pour toutes les sessions : une session finie en pause (F11, V coince,
+    # auto-test) laisse la suivante en pause, et F11 entre deux sessions agit (avant : un fil de plus par session)
+    ks = ks or kbm.KillSwitch()
+    if ks.paused.is_set():
+        print('  V est EN PAUSE : F11 (ou « reprendre » sur Telegram) pour lui rendre la main', flush=True)
     brain.run(duration_s=minutes * 60.0, stop=ks.triggered, pause=ks.paused)
     print(f'\njournal : {brain.LOG_FILE}')
     return ks.triggered.is_set()
@@ -228,11 +237,12 @@ def main() -> None:
         run_test(a.test); return
     if a.loop:
         from agent import input_kbm as kbm
+        ks = kbm.KillSwitch()
         n = 0
         while True:
             n += 1
             print(f'\n===== session {n} =====', flush=True)
-            if play(a.minutes, wait_forever=True):            # F12 pendant la session : on n enchaine pas
+            if play(a.minutes, wait_forever=True, ks=ks):     # F12 pendant la session : on n enchaine pas
                 print('F12 : arret demande, fin de la boucle.'); break
             time.sleep(5.0)
     else:

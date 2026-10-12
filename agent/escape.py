@@ -44,6 +44,10 @@ def _try_prompt(log) -> bool:
 
 def escape(target_xy: tuple | None, stop=None, log=print) -> dict:
     _pressed.clear()   # sourdine des invites : propre a CET episode de blocage, pas a la session entiere
+    halted = {'ok': False, 'moyen': 'arret d urgence'}  # 12/10 : F11/F12 -> plus aucune touche ni commande
+
+    def _halt():
+        return stop is not None and stop.is_set()
     t0 = time.perf_counter()
     st0 = motion.read_state()
     if not st0:
@@ -64,11 +68,19 @@ def escape(target_xy: tuple | None, stop=None, log=print) -> dict:
             motion.walk_to(d['x'], d['y'], timeout=12.0, stop=stop)
         finally:
             motion.ARRIVE_M = old
+        if _halt():
+            return halted
         s = motion.read_state() or st0
         motion.turn_to(motion.bearing_to(s['x'], s['y'], d['x'], d['y']), timeout=2.0, stop=stop)
         time.sleep(0.3)
+        if _halt():
+            return halted
         if not _try_prompt(log):
+            if _halt():
+                return halted
             kbm.act('interact', 0.1); time.sleep(0.6); kbm.act('interact', 1.2); time.sleep(0.8)
+        if _halt():
+            return halted
         ro = nav._wait(nav._send({'cmd': 'door_open', 'x': d['i']}), timeout=5.0)
         if ro and ro.get('ok'):
             log(f"  [sortie] porte « {d.get('name', '?')} » : script [{','.join(ro.get('methodes') or [])}] open={ro.get('open')}")
@@ -82,6 +94,8 @@ def escape(target_xy: tuple | None, stop=None, log=print) -> dict:
             break
         motion.turn_by(30.0, timeout=1.5, stop=stop)
         time.sleep(0.15)
+        if _halt():
+            return halted
         if _try_prompt(log):
             time.sleep(1.0)
             if target_xy and _path_possible(target_xy[0], target_xy[1], tz):
@@ -97,6 +111,8 @@ def escape(target_xy: tuple | None, stop=None, log=print) -> dict:
             break
         heading = motion.wrap((s.get('yaw') or 0) + 45.0 * k)
         motion.turn_to(heading, timeout=1.5, stop=stop)
+        if _halt():
+            return halted
         sx, sy = s['x'], s['y']
         kbm.hold('W'); kbm.act_hold('sprint'); time.sleep(0.3); kbm.act('jump', 0.1); time.sleep(2.2)
         kbm.act_release('sprint'); kbm.release('W')
@@ -106,9 +122,13 @@ def escape(target_xy: tuple | None, stop=None, log=print) -> dict:
             best, best_gain = heading, gain
         if target_xy and gain > 3.0 and _path_possible(target_xy[0], target_xy[1], tz):
             return {'ok': True, 'moyen': f'sonde {k} ({gain:.0f} m)', 'seconds': time.perf_counter() - t0}
+    if _halt():
+        return halted
     if best is not None and best_gain > 3.0:
         log(f'  [sortie] meilleure direction {best:.0f} deg ({best_gain:.0f} m) : on pousse 6 s')
         motion.turn_to(best, timeout=1.5, stop=stop)
+        if _halt():
+            return halted
         kbm.hold('W'); kbm.act_hold('sprint'); time.sleep(6.0); kbm.act_release('sprint'); kbm.release('W')
         if target_xy and _path_possible(target_xy[0], target_xy[1], tz):
             return {'ok': True, 'moyen': 'poussee', 'seconds': time.perf_counter() - t0}

@@ -337,14 +337,19 @@ def buy_recipes(items: list[dict], log=print, max_buys: int = 2) -> dict:
 def sell_trip(vendor: dict, stop=None, log=print) -> dict:
     """Va au marchand, ouvre la boutique (F maintenu), vend la camelote (G), valide (F), sort."""
     t0 = time.perf_counter()
+
+    def _halted():                                      # 12/10 : F11/F12 -> plus aucune touche, « arret d urgence »
+        return {'ok': False, 'reason': 'arret d urgence', 'seconds': time.perf_counter() - t0} if (stop is not None and stop.is_set()) else None
     log(f"  [vente] direction marchand « {vendor.get('variant')} » a {vendor['dist']:.0f} m")
     ft_first = False
     if vendor['dist'] > 300.0 and CFG.features.get('fasttravel', True):
         # 23/09 : la voiture vers un marchand n est arrivee qu une fois sur 71 essais -> voyage rapide d abord, puis la
         # voiture seulement si elle marche (travel.py) et si aucun marqueur de quete suivie ne l attire ailleurs
         ft_first = True
-        ft = nav.fast_travel_to(vendor['x'], vendor['y'], log=log, min_gain_m=150.0)
+        ft = nav.fast_travel_to(vendor['x'], vendor['y'], log=log, min_gain_m=150.0, stop=stop)
         log(f"  [vente] voyage rapide : {('arrive a ' + str(ft.get('point'))) if ft.get('ok') else ft.get('reason')}")
+        if ft.get('reason') == 'arret d urgence':
+            return {'ok': False, 'reason': 'arret d urgence', 'seconds': time.perf_counter() - t0}
     s_v = motion.read_state() or {}
     d_v = math.hypot(vendor['x'] - s_v['x'], vendor['y'] - s_v['y']) if s_v.get('x') is not None else vendor['dist']
     if d_v > 500.0 and kbm.ACTIONS.get('autodrive') and CFG.features.get('driving', True):
@@ -369,16 +374,20 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
                 motion.ARRIVE_M = old
         if not r.get('ok') and d0 >= 40.0 and not ft_first:
             # quartier sans maillage (Kabuki : 12 h d echecs) : voyage rapide vers le point le plus proche du marchand
-            ft = nav.fast_travel_to(vendor['x'], vendor['y'], log=log, min_gain_m=150.0)
+            ft = nav.fast_travel_to(vendor['x'], vendor['y'], log=log, min_gain_m=150.0, stop=stop)
             log(f"  [vente] voyage rapide : {('arrive a ' + str(ft.get('point'))) if ft.get('ok') else ft.get('reason')}")
             if ft.get('ok'):
                 r = nav.goto(lambda: nav.request_path_to(vendor['x'], vendor['y'], vendor.get('z')), arrive_m=2.5, max_legs=8, timeout=180.0, stop=stop, log=log)
         if not r.get('ok'):
-            return {'ok': False, 'reason': f"marchand non atteint ({r.get('reason')})", 'seconds': time.perf_counter() - t0}
+            return _halted() or {'ok': False, 'reason': f"marchand non atteint ({r.get('reason')})", 'seconds': time.perf_counter() - t0}
+    if _halted():
+        return _halted()
     # trouver l invite du marchand : petit balayage du regard
     opened = False
     t1 = time.perf_counter()
     while time.perf_counter() - t1 < 6.0:
+        if _halted():
+            return _halted()
         st = motion.read_state()
         inter = (st or {}).get('interact')
         if inter and inter.get('choices'):
@@ -398,6 +407,8 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
                 motion.walk_to(vendor['x'], vendor['y'], timeout=15.0, stop=stop)
             finally:
                 motion.ARRIVE_M = old_a
+        if _halted():
+            return _halted()
         probe = vendor_stock()
         if probe and probe.get('ok'):
             log(f"  [vente] pas d invite, mais « {probe.get('vendor')} » est a portee ({len(probe.get('items') or [])} articles) : transactions par script")
@@ -406,6 +417,8 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
     # l ecran du marchand s ouvre : on le referme aussitot (Echap), la vente est realisee par la
     # commande Lua `sell` (transaction au prix du jeu avec le marchand present)
     time.sleep(1.5)
+    if _halted():                                       # l ecran du marchand reste au joueur qui a la main
+        return _halted()
     kbm.tap('ESC', 0.1); time.sleep(0.8)
     log('  [vente] marchand atteint')
     return {'ok': True, 'seconds': time.perf_counter() - t0}

@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, planner, quests, radio, remote, sms, terminals, travel, vendor
+from . import appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, travel, vendor
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -39,11 +39,60 @@ _STOP_WORDS = ('stop', 'arret', 'arrete-toi', 'arrete toi')
 _RESUME_WORDS = ('reprendre', 'resume', 'continue')
 
 
+def _fold(t: str) -> str:
+    """minuscules, sans accents ni ponctuation finale (« Change de quête ! » -> « change de quete »)."""
+    import unicodedata
+    t = ''.join(c for c in unicodedata.normalize('NFD', t.lower()) if unicodedata.category(c) != 'Mn')
+    return ' '.join(t.replace('\u2019', ' ').replace("'", ' ').replace('-', ' ').strip(' .!?').split())
+
+
+# 12/10 (journal 04:55 : « Change de quête » -> DIRECTIVE non reconnue) : formulations courantes, avant le modele local
+_PHRASES = (
+    (('change de quete', 'changer de quete', 'change quete', 'changer quete', 'change de mission', 'changer de mission',
+      'autre quete', 'autre mission', 'change d objectif', 'changer d objectif', 'autre objectif', '=laisse tomber',
+      'laisse tomber ta quete', 'laisse tomber la quete', 'change ta quete', 'abandonne ta quete', 'oublie ta quete',
+      'lache ta quete', 'quitte ta quete', 'passe a autre chose', 'fais autre chose', 'quete suivante'), 'changer_quete'),
+    (('reprends ta quete', 'reprend ta quete', 'continue ta quete', 'suis ta quete', 'retourne a ta quete',
+      'retour a la quete', 'suis la quete'), 'objectif'),
+    (('va explorer', 'explore la ville', 'balade toi', 'promene toi'), 'explore'),
+    (('va vendre', 'va au marchand', 'fais tes courses', 'vends ton'), 'marchand'),
+    (('soigne toi', 'heal'), 'soigne'),
+    (('ou es tu', 'ou t es', 'tu fais quoi', 'que fais tu', 'statut'), 'status'),
+)
+
+
 def _understand(dtv: str) -> tuple[str, str]:
     """Directive -> (texte, commande) : mot-cle exact, sinon le modele local traduit la phrase libre vers la
     commande la plus proche (20/09, « trop basique »)."""
     low = dtv.lower().strip()
+    f = _fold(dtv)
+    if low.startswith(('courage ', 'style ', 'aggro ')):
+        return f, f                                     # valeurs enumerees : « téméraire » = « temeraire »
     if low not in _DIRECTIVE_KEYWORDS and not low.startswith(_DIRECTIVE_PREFIXES):
+        if f in _DIRECTIVE_KEYWORDS:
+            return f, f
+        for p in _DIRECTIVE_PREFIXES:
+            if f.startswith(p) and p not in ('va a ',):
+                # commande a parametre (« Modèle qwen3-vl:8b ») : seul le mot-cle est plie, pas le parametre
+                raw = dtv.strip().split()
+                c = p + ' '.join(raw[len(p.split()):]).lower()
+                return (_fold(c) if p in ('courage ', 'style ', 'aggro ') else c), (_fold(c) if p in ('courage ', 'style ', 'aggro ') else c)
+        neg = any((' ' + w + ' ') in (' ' + f + ' ') for w in ('ne', 'n', 'pas', 'sans', 'jamais', 'plus de', 'arrete de', 'arretes de'))
+        hits = set()
+        for words, cmd in _PHRASES:
+            for w in words:
+                if w.startswith('='):
+                    if f == w[1:]:
+                        hits.add(cmd)
+                elif (' ' + w + ' ') in (' ' + f + ' '):
+                    hits.add(cmd)
+        if len(hits) == 1 and not neg:                  # sens unique, sans negation : pas besoin du modele
+            cmd = hits.pop()
+            _log(f'DIRECTIVE « {dtv} » comprise comme : {cmd}')
+            return cmd, cmd
+        if f.startswith('va a ') and not hits:
+            c = 'va a ' + ' '.join(dtv.strip().split()[2:]).lower()   # lieu tel qu ecrit (accents : « Mégabuilding »)
+            return c, c
         cl = remote.classify(dtv)
         if cl:
             _log(f'DIRECTIVE « {dtv} » comprise comme : {cl}')
@@ -154,6 +203,45 @@ def _sleep(seconds: float, stop=None) -> bool:
             return False
         time.sleep(min(0.1, max(0.0, t_end - time.perf_counter())))
     return True
+
+
+_AUTOTEST = {'alert_t': -1e9}     # derniere alerte « V ne bouge pas » (le processus survit aux sessions --loop)
+
+
+def _busy_state(s: dict) -> bool:
+    """Etat ou l immobilite de V est normale (dialogue, scene, vehicule, menu, chargement, mort, danse, breach)."""
+    hp = s.get('hp')
+    return bool((s.get('dialog') or {}).get('choices') or s.get('scene') or s.get('vehicle') or s.get('menu')
+                or s.get('ftLoading') or s.get('dead') or (isinstance(hp, (int, float)) and hp <= 0.5)
+                or (s.get('bd') or {}).get('active') or (s.get('breach') or {}).get('state') == 1)
+
+
+def _tid(alt_target, q) -> tuple:
+    """Identite de la cible de navigation (12/10) : marqueur choisi par V ou objectif suivi -- pas sa cellule (un
+    marqueur de PNJ bouge)."""
+    if alt_target is not None:
+        return ('alt', alt_target.get('hash'), str(alt_target.get('text') or ''))
+    return ('q', (q or {}).get('hash'), str((q or {}).get('text') or ''))
+
+
+def _alt(n: dict, text=None, hash_=None) -> dict:
+    """12/10 : cible alternative, z TOUJOURS recopie (la zone d arrivee et la requete de chemin visent son etage)."""
+    return {'x': n['x'], 'y': n['y'], 'z': n.get('z'), 'text': n.get('text') if text is None else text,
+            'hash': n.get('hash') if hash_ is None else hash_, 't0': time.perf_counter()}
+
+
+def _path_alt(t: dict):
+    """Chemin vers une cible alternative, a son etage si connu ; sinon (ou sans chemin) a l etage de V, comme avant."""
+    if isinstance(t.get('z'), (int, float)):
+        r = nav.request_path_to(t['x'], t['y'], t['z'])
+        if r and r.get('ok'):
+            return r
+    return nav.request_path_to(t['x'], t['y'])
+
+
+def _dz(st: dict, tz) -> float | None:
+    z = st.get('z') if st else None
+    return abs(z - tz) if isinstance(z, (int, float)) and isinstance(tz, (int, float)) else None
 
 
 def _reload_last_save(log, stop=None) -> bool:
@@ -275,14 +363,22 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         stop = _Halt()
     paused_logged = False
     pause_since = 0.0               # debut de la pause en cours (heure murale, comme remote.LAST_T)
+    paused_at_start = pause is not None and pause.is_set()   # 12/10 : pause heritee de la session precedente (--loop)
+    pause_pos = None                # position de V au debut de la pause (le joueur a pu le deplacer)
     t0 = time.perf_counter()
     stats = {'dialogues': 0, 'interactions': 0, 'trajets': 0, 'attentes': 0}
+
+    def _halted(rr=None) -> bool:
+        """12/10 : F11 (pause) / F12 (arret) pendant une competence, ou competence rendue sur « arret d urgence »."""
+        return (rr or {}).get('reason') == 'arret d urgence' or (stop is not None and stop.is_set())
     last_quest_text = None
     idle_since = None
     same_hub, last_hub_sig = 0, None
     no_mappin_since = None
     path_failures = 0
-    focus_insist_n = 0              # « on insiste » consecutifs sur la quete assignee inaccessible
+    navp = navprog.Tracker()        # 12/10 : progres REEL vers la cible + echelle de deblocage (navprog.py)
+    focus_skip_t = -1e9             # derniere bascule hors de la quete suivie mise de cote
+    escape_fail = (None, -1e9)      # (cible, heure) : sortie introuvable -> voyage rapide d ilot permis
     rot_failures = 0
     swim_logged = False
     straight_tried = False
@@ -312,7 +408,6 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     scene_pos, scene_wait = None, 25.0
     shop_back_t = -999.0
     last_close_t = -999.0
-    last_ft_t = -999.0
     last_overlevel_t = -999.0
     mute_hostiles = MUTE_HOSTILES
     last_ripper_t = -999.0
@@ -432,25 +527,52 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
             remote.notify('Attention : ' + w)
     hud.update(t0=time.time(), mode='INITIALISATION', paused=False, ended=False, stats={}, **_hud_cfg())
     hud.start()
-    # auto-test : V bouge-t-il ? (touche avant 0,6 s) -> detecte tout de suite un blocage d entree
+    # auto-test : V bouge-t-il ? -> detecte tout de suite un blocage d entree
+    # 12/10 (revue) : 3 essais DIFFERENTS (avant, arriere, demi-tour + avant) sur des etats NEUFS. Pause seulement si
+    # rien ne bouge, que la souris est sans effet elle aussi, et que rien n explique l immobilite (chargement, menu,
+    # scene, mort...) : face a un mur, V tourne -> pas de pause ; pendant un chargement l etat ne bouge pas -> non concluant.
     s0 = motion.read_state()
-    if s0 and kbm.game_focused():
-        moved = 0.0
-        for _try in range(3):                      # 12/10 : 3 essais (menu qui se ferme, animation qui finit...)
-            s0 = motion.read_state() or s0
-            kbm.hold('W'); time.sleep(0.6); kbm.release('W'); time.sleep(0.3)
-            s1 = motion.read_state() or s0
-            moved = math.hypot(s1['x'] - s0['x'], s1['y'] - s0['y'])
-            if moved > 0.3:
+    if s0 and kbm.game_focused() and not (pause is not None and pause.is_set()):
+        moved, fresh, busy, turned = 0.0, False, False, False
+        for _try in range(3):
+            if stop is not None and stop.is_set():
                 break
+            a = motion.read_state()
+            if not a:
+                break
+            if _try == 2:                              # 3e essai : demi-tour (un mur devant V ?) puis avant
+                y0 = a.get('yaw')
+                motion.turn_by(180.0, timeout=1.5, stop=stop)
+                a2 = motion.read_state(last_seq=a.get('seq'), timeout=1.0)
+                if a2 is not None and isinstance(y0, (int, float)) and abs(motion.wrap(a2['yaw'] - y0)) > 20.0:
+                    turned = True
+                a = a2 or a
+            key = 'S' if _try == 1 else 'W'          # scancodes physiques, comme motion.walk_to
+            kbm.hold(key); time.sleep(0.6); kbm.release(key); time.sleep(0.3)
+            b = motion.read_state(last_seq=a.get('seq'), timeout=1.0)
+            if b is not None:
+                fresh = True
+                busy = busy or _busy_state(a) or _busy_state(b)
+                moved = max(moved, math.hypot(b['x'] - a['x'], b['y'] - a['y']))
+                if moved > 0.3:
+                    break
             if _try < 2:
                 time.sleep(2.0)
-        _log(f"auto-test deplacement : {moved:.2f} m en 0,6 s -> {'OK' if moved > 0.3 else 'V NE BOUGE PAS (menu ? animation ? touche ?)'}")
-        _busy = (s0.get('dialog') or {}).get('choices') or s0.get('scene') or s0.get('vehicle') or s0.get('menu')
-        if moved <= 0.3 and not _busy and pause is not None:
+        if not fresh:
+            _log('auto-test deplacement : etat du jeu fige (chargement ? menu ?) -> non concluant, pas de pause')
+        else:
+            _log(f"auto-test deplacement : {moved:.2f} m -> {'OK' if moved > 0.3 else 'V NE BOUGE PAS'}"
+                 + ('' if moved > 0.3 else (' (normal : dialogue, scene, vehicule, menu, chargement ou mort)' if busy
+                                              else ' mais la souris tourne V (obstacle devant lui ?)' if turned else '')))
+        if fresh and moved > 0.3:
+            _AUTOTEST['alert_t'] = -1e9
+        if fresh and moved <= 0.3 and not busy and not turned and pause is not None \
+                and not (stop is not None and stop.is_set()):
             # 30/09 16:21 : la session a tourne 12 min a vide (V immobile) avant un F12
-            _log('auto-test : V ne bouge toujours pas apres 3 essais -> PAUSE ; debloque le jeu puis F11 ou « reprendre »')
-            remote.notify('V ne bouge pas au demarrage (3 essais) : mis en pause. Debloque le jeu, puis F11 ou « reprendre ».')
+            _log('auto-test : ni clavier ni souris n ont d effet apres 3 essais -> PAUSE ; debloque le jeu puis F11 ou « reprendre »')
+            if time.time() - _AUTOTEST['alert_t'] > 1800.0:     # un seul message par 30 min (--loop), la pause, elle, toujours
+                _AUTOTEST['alert_t'] = time.time()
+                remote.notify('V ne bouge pas au demarrage (clavier et souris sans effet) : mis en pause. Debloque le jeu, puis F11 ou « reprendre ».')
             pause.set()
 
     crashes = 0
@@ -462,14 +584,26 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 if pause is not None and pause.is_set():
                     kbm.release_all()
                     if not paused_logged:
-                        paused_logged = True; pause_since = time.time()
+                        paused_logged = True; pause_since = 0.0 if paused_at_start else time.time()
+                        paused_at_start = False
+                        _sp = motion.read_state() or {}
+                        pause_pos = (_sp['x'], _sp['y'], _sp.get('z')) if _sp.get('x') is not None else None
                         _log('PAUSE : le joueur a la main ; F11 (ou « reprendre » sur Telegram) pour reprendre')
                         hud.update(paused=True)
                     if _idle_directive('pause'):
                         break
                     time.sleep(0.3); continue
+                paused_at_start = False                          # la pause heritee a ete levee (F11 avant le 1er tour)
                 if paused_logged:
                     paused_logged = False; _log('REPRISE : V rejoue'); plan.last_t = -99.0
+                    _sr = motion.read_state() or {}
+                    if pause_pos and _sr.get('x') is not None and (
+                            math.hypot(_sr['x'] - pause_pos[0], _sr['y'] - pause_pos[1]) > navprog.MOVED_M
+                            or (isinstance(pause_pos[2], (int, float)) and isinstance(_sr.get('z'), (int, float))
+                                and abs(_sr['z'] - pause_pos[2]) > navprog.NOVEL_DZ)):
+                        # 12/10 : le joueur a deplace V pendant la pause (ascenseur compris) : on repart d ici
+                        navp.displaced(); path_failures = 0; straight_tried = False
+                        escape_tries, escape_pos = 0, None; escape_fail = (None, -1e9); last_block_pos = None
                     hud.update(paused=False)
                 # V aime ecouter la radio de temps a autre (hors combat, dialogue, vehicule) : c est lui qui choisit la station
                 try:
@@ -545,6 +679,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             remote.notify('Aucun hostile en vue pour l instant.')
                     elif low in ('objectif', 'quete'):
                         alt_target = None
+                        navp.fresh_start(); focus_skip_t = -1e9      # 12/10 : echelle neuve, mises de cote levees
                         _log('DIRECTIVE : retour a la quete suivie')
                         remote.notify('V reprend sa quete.')
                     elif low in ('marchand', 'vendre', 'boutique'):
@@ -558,13 +693,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     elif low in ('explore', 'explorer', 'balade'):
                         nxd = explore.pick(log=_log)
                         if nxd:
-                            alt_target = {'x': nxd['x'], 'y': nxd['y'], 'text': nxd.get('text'), 'hash': nxd.get('hash'), 't0': time.perf_counter()}
+                            alt_target = _alt(nxd)
                             stats['explorations'] = stats.get('explorations', 0) + 1
                         remote.notify('V part explorer' + (' : ' + nxd['text'] if nxd else ' (aucun point connu)'))
                     elif low in ('changer_quete', 'autre_quete'):
                         nxd = quests.switch(alt_target.get('hash') if alt_target else (st.get('quest') or {}).get('hash'), log=_log)
                         if nxd:
-                            alt_target = {'x': nxd['x'], 'y': nxd['y'], 'text': nxd.get('text'), 'hash': nxd.get('hash'), 't0': time.perf_counter()}
+                            alt_target = _alt(nxd)
                             stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                         remote.notify('nouvelle cible : ' + (nxd['text'] if nxd else 'aucune trouvee'))
                     elif low.startswith('va_a ') or low.startswith('va a '):
@@ -576,7 +711,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         if cands:
                             c = min(cands, key=lambda c: c.get('dist', c.get('d', 1e9)))
                             label = c.get('name') or c.get('variant') or lieu
-                            alt_target = {'x': c['x'], 'y': c['y'], 'text': f'directive : {label}', 'hash': -800_000_000 - round(c['x'] + c['y']), 't0': time.perf_counter()}
+                            alt_target = _alt(c, f'directive : {label}', -800_000_000 - round(c['x'] + c['y']))
                             _log(f'DIRECTIVE : V part vers « {label} »')
                             remote.notify(f'V part vers {label}.')
                         else:
@@ -720,6 +855,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         quests.mark_death(st['x'], st['y'])
                         _log('V EST MORT : lieu memorise (objectifs a < 80 m evites) ; rechargement de la derniere sauvegarde')
                         if _reload_last_save(_log, stop=stop):
+                            navp.displaced()                             # 12/10 : rechargement = deplacement
                             stats['morts'] = stats.get('morts', 0) + 1
                             remote.notify(f"V est mort (mort n {stats['morts']} de la session) : rechargement de la derniere sauvegarde.")
                             if time.perf_counter() - last_death_t > 300.0:
@@ -735,13 +871,18 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 nxt = quests.switch(alt_target.get('hash') if alt_target else q_d.get('hash'), log=_log)
                                 if nxt:
                                     _log(f"3 morts de suite au meme combat : V laisse tomber et fait autre chose (« {nxt.get('text')} »)")
-                                    alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                                    alt_target = _alt(nxt)
                                     stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                                 else:
                                     alt_target = None
                             else:
                                 alt_target = None
                             time.sleep(3.0); continue
+                        if stop is not None and stop.is_set():
+                            # 12/10 : F11 / « pause » (ou F12) pendant le rechargement : pas un echec. Le jeu a pu recharger.
+                            navp.displaced(); alt_target = None; plan.last_t = -99.0; path_failures = 0
+                            _log('rechargement interrompu (pause / arret) : repris a la reprise si V est encore mort')
+                            time.sleep(0.3); continue
                         _log('rechargement impossible : arret'); break
                     time.sleep(0.3); continue
                 dead_since = None
@@ -837,6 +978,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             _log(f"etat fige depuis {int(time.perf_counter() - frozen_t)} s malgre plusieurs series d Echap : tentative de rechargement de la derniere sauvegarde")
                             remote.notify(f"V semble bloque (etat fige depuis {int(time.perf_counter() - frozen_t)} s) : tentative de rechargement.")
                             if _reload_last_save(_log, stop=stop):
+                                navp.displaced()
                                 frozen_seq, frozen_t, frozen_logged, frozen_esc, frozen_notified = st.get('seq'), time.perf_counter(), False, 0, False
                                 time.sleep(3.0); continue
                         else:
@@ -891,10 +1033,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log(f'V est deja en vehicule et l objectif est a {dv:.0f} m : autodrive')
                         r = driving.autodrive_to(qv['mx'], qv['my'], stop=stop, log=_log)
                         _log(f"conduite : {'arrive' if r.get('ok') else r.get('reason')}")
-                        driving.exit_vehicle(log=_log)
+                        navp.displaced()                                 # V a roule (meme si F11 suit)
+                        if _halted(r):
+                            continue                                     # 12/10 : le joueur garde la voiture
+                        driving.exit_vehicle(log=_log, stop=stop)
                     else:
                         _log('V est dans un vehicule et l objectif est proche : il descend')
-                        driving.exit_vehicle(log=_log)
+                        navp.displaced()
+                        driving.exit_vehicle(log=_log, stop=stop)
                     continue
 
                 q = st.get('quest') or {}
@@ -906,7 +1052,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     _log(f"quete suivie « {q.get('text')} » de niveau {q['lvl']} pour V niveau {st['level']} : trop haute, on en cherche une de son niveau")
                     nxt = quests.switch(q.get('hash'), log=_log)
                     if nxt:
-                        alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                        alt_target = _alt(nxt)
                         stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                         continue
                 if q.get('text') and q['text'] != last_quest_text:
@@ -963,13 +1109,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         time.sleep(0.5)
                         nxt = quests.switch(q.get('hash'), log=_log)
                         if nxt:
-                            alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                            alt_target = _alt(nxt)
                             stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                             same_hub, last_hub_sig = 0, None
                             time.sleep(1.0); continue
                         nxe = explore.pick(log=_log)
                         if nxe:
-                            alt_target = {'x': nxe['x'], 'y': nxe['y'], 'text': nxe.get('text'), 'hash': nxe.get('hash'), 't0': time.perf_counter()}
+                            alt_target = _alt(nxe)
                             stats['explorations'] = stats.get('explorations', 0) + 1
                             same_hub, last_hub_sig = 0, None
                             time.sleep(1.0); continue
@@ -1038,6 +1184,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 rich_sale = inv_full
                 if CFG.features.get('sell', True) and not _threat_near(st) and (inv_full or need_heals) and time.perf_counter() - last_sell_t > 600.0 \
                         and (not focus or need_heals):    # en focus, seules les courses de soins passent avant la quete
+                    prev_sell_t = last_sell_t
                     last_sell_t = time.perf_counter()
                     vendor.MAX_VENDOR_M = 5000.0                       # course dediee : le marchand connu le plus proche fera l affaire,
                                                                        # sell_trip() sait deja s y rendre a toute distance (conduite/voyage rapide)
@@ -1046,6 +1193,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log(f"courses : poids {inventory.WEIGHT:.0f}/{inventory.CARRY:.0f}, {len(inventory.SELLABLE)} objets a vendre, soins {inventory.HEALS}, marchand a {vend['dist']:.0f} m")
                         hud.update(mode='RAVITAILLEMENT', directive=hud.ascii_up(f"marchand a {vend['dist']:.0f} m"))
                         tr = vendor.sell_trip(vend, stop=stop, log=_log)
+                        navp.displaced()
+                        if _halted(tr):
+                            last_sell_t = prev_sell_t                    # 12/10 : coupe par F11/F12 : ni echec ni vente
+                            continue
                         if not tr.get('ok'):
                             _log(f"courses : marchand non atteint ({tr.get('reason')}) : ecarte 15 min, on essaiera un autre")
                             vendor.mark_failed(vend, log=_log); vendor_fail_streak += 1
@@ -1081,6 +1232,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 if CFG.features.get('ripperdoc', True) and inventory.MONEY >= 6000 and not st.get('combat') and not _threat_near(st) and not focus \
                         and (ripper_forced or (alt_target is None and time.perf_counter() - last_ripper_t > 1800.0
                                                and vendor.ripper_allowed(time.perf_counter() - t0)[0])):
+                    prev_rip = (last_ripper_t, ripper_forced)
                     last_ripper_t = time.perf_counter(); ripper_forced = False
                     vendor.MAX_VENDOR_M = 5000.0
                     rip = vendor.pick_vendor(vendor.list_vendors(), prefer='ripper')
@@ -1088,6 +1240,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log(f"charcudoc : {inventory.MONEY} eddies, « {rip.get('variant')} » a {rip['dist']:.0f} m : V va s optimiser")
                         hud.update(mode='OPTIMISATION CYBERNETIQUE', directive=hud.ascii_up(f"charcudoc a {rip['dist']:.0f} m"))
                         tr = vendor.sell_trip(rip, stop=stop, log=_log)
+                        navp.displaced()
+                        if _halted(tr):
+                            last_ripper_t, ripper_forced = prev_rip      # 12/10 : coupe par F11/F12 : rien de consomme
+                            continue
                         if tr.get('ok'):
                             rr = vendor.ripperdoc_shop(log=_log)
                             _log(f"charcudoc : {rr.get('poses', 0)} implant(s) pose(s) pour {rr.get('eddies', 0)} eddies ({rr.get('reason') or 'ok'})")
@@ -1117,12 +1273,43 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     kbm.act('consumable', 0.1); last_heal_t = time.perf_counter()
                     _log(f"soin hors combat (vie {st.get('hp'):.0f} %)")
 
+                # 12/10 : quete suivie jugee inaccessible a pied depuis ici (echelle de deblocage plus bas) : V fait autre
+                # chose tant que la mise de cote court (20, 40 puis 60 min ; memoire de session). Levee si V est a moins
+                # de 30 m du marqueur ou sur directive « objectif ».
+                if alt_target is None and q.get('hasMappin') and q.get('mx') is not None and not st.get('combat') \
+                        and navp.unreach and time.perf_counter() - focus_skip_t > 60.0:
+                    u_key = _tid(None, q)
+                    w_u = navp.unreach_wait(u_key)
+                    _dzu = _dz(st, q.get('mz'))
+                    if w_u > 0 and math.hypot(st['x'] - q['mx'], st['y'] - q['my']) <= 30.0 and _dzu is not None and _dzu < navprog.NOVEL_DZ:
+                        navp.lift(u_key); w_u = 0.0                  # V est au marqueur, au bon etage
+                    if w_u > 0:
+                        nxt = quests.switch(q.get('hash'), log=_log, avoid=(q['mx'], q['my'], navprog.SECTOR_M))
+                        if nxt:
+                            stats['changements_quete'] = stats.get('changements_quete', 0) + 1
+                        else:
+                            nxt = explore.pick(log=_log)
+                            if nxt:
+                                stats['explorations'] = stats.get('explorations', 0) + 1
+                        if not nxt:
+                            focus_skip_t = time.perf_counter()      # rien d autre a faire : on retente la quete, reessai dans 1 min
+                        if nxt:
+                            _log(f"quete suivie « {q.get('text')} » mise de cote (inaccessible d ici, encore {w_u / 60:.0f} min) : V fait autre chose (« {nxt.get('text')} »)")
+                            alt_target = _alt(nxt)
+                            plan.last_t = -99.0; plan.action = 'objectif'
+                            time.sleep(1.0); continue
                 # 4. DECISION de V (modele local) : objectif / parler / attaquer / changer_quete / attendre
                 if alt_target is not None:
                     dist = math.hypot(st['x'] - alt_target['x'], st['y'] - alt_target['y'])
-                    if dist < ARRIVE_M or time.perf_counter() - alt_target['t0'] > 900:
+                    # 12/10 : marqueur sur un objet (comptoir, terminal mural) : le mod vise le navmesh dans 6 m, V plafonne
+                    # a 4-8 m au meme etage -> arrivee (avant : troncons sans fin jusqu a l expiration de 15 min)
+                    _arr = dist < ARRIVE_M or navp.near_stall(_tid(alt_target, q), dist, _dz(st, alt_target.get('z')))
+                    if _arr:
+                        for _v in navp.after_leg(None, None, True):      # V atteint une cible : il n etait pas coince
+                            quests.marker_result(_v[1], _v[2], _v[3], False, 'inaccessible a pied', z=_v[4], log=_log)
+                    if _arr or time.perf_counter() - alt_target['t0'] > 900:
                         _used = None
-                        if dist < ARRIVE_M and not st.get('combat') and not ((st.get('interact') or {}).get('choices')):
+                        if _arr and not st.get('combat') and not ((st.get('interact') or {}).get('choices')):
                             _used = False
                             if _approach_machine(alt_target['x'], alt_target['y'], dist, _log, stop):   # console / donneur de quete
                                 stats['interactions'] += 1
@@ -1132,7 +1319,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         # 24/09 : bilan du marqueur (seulement ceux de quete choisis par V, pas exploration / directive) :
                         # toujours observe (une invite visible, ex. porte « Forcer » sans effet, ne prouve rien) ;
                         # « jamais atteint en 15 min » n est pas penalise (pauses, courses, combats faussent le delai)
-                        if str(alt_target.get('text') or '').endswith('Variant') and dist < ARRIVE_M \
+                        if str(alt_target.get('text') or '').endswith('Variant') and _arr \
                                 and not (stop is not None and stop.is_set()):
                             if marker_watch is not None:                # grappe de marqueurs : on clot l observation en cours
                                 _pw = marker_watch
@@ -1143,7 +1330,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         _log('cible alternative atteinte ou expiree : retour a la quete suivie')
                         quests.mark_visited(alt_target.get('hash'))
                         alt_target = None
-                        dist = _dist_to_mappin(st)
+                        time.sleep(0.5); continue                        # 12/10 : bloc « mise de cote » d abord
                 else:
                     dist = _dist_to_mappin(st)
                 inter = st.get('interact')
@@ -1169,7 +1356,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         stats['evitements'] = stats.get('evitements', 0) + 1
                     nxt = quests.switch(alt_target.get('hash') if alt_target else q.get('hash'), log=_log)
                     if nxt:
-                        alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                        alt_target = _alt(nxt)
                         stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                     plan.last_t = -99.0; plan.action = 'objectif'
                     continue
@@ -1347,7 +1534,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 if action == 'changer_quete':
                     nxt = quests.switch(q.get('hash') if alt_target is None else alt_target.get('hash'), log=_log)
                     if nxt:
-                        alt_target = {'x': nxt['x'], 'y': nxt['y'], 'z': nxt.get('z'), 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                        alt_target = _alt(nxt)
                         stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                         plan.note('a change de cible')
                         plan.last_t = -99.0; plan.action = 'objectif'     # forcer une nouvelle decision (3 changements en 3 s sinon)
@@ -1355,7 +1542,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     # 24/09 : plus aucun marqueur accessible (steriles exclus, bloques...) -> exploration plutot qu attendre
                     nxe = explore.pick(log=_log)
                     if nxe:
-                        alt_target = {'x': nxe['x'], 'y': nxe['y'], 'text': nxe.get('text'), 'hash': nxe.get('hash'), 't0': time.perf_counter()}
+                        alt_target = _alt(nxe)
                         stats['explorations'] = stats.get('explorations', 0) + 1
                         plan.last_t = -99.0; plan.action = 'objectif'
                         time.sleep(1.0); continue
@@ -1386,7 +1573,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         obj_inter_tries[ikey] = (4, t_first)
                         _log(f"invite « {inter['choices'][0]} » ignoree ({'vehicule' if vehicle_prompt else 'sans effet apres 3 essais'})")
                 # 5a. ARRIVE au marqueur (< 7 m) sans invite : machines a quetes (bornes, terminaux, distributeurs) -> on s approche a 1 m
-                if dist is not None and dist < ARRIVE_M + 4.0 and not (inter and inter.get('choices'))                 and time.perf_counter() - last_close_t > 30.0 and not st.get('combat'):
+                if dist is not None and dist < navprog.NEAR_M and not (inter and inter.get('choices'))                 and time.perf_counter() - last_close_t > 30.0 and not st.get('combat'):
                     last_close_t = time.perf_counter()
                     tx, ty = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
                     if tx is not None:
@@ -1405,16 +1592,25 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                                  ft_key is None or time.perf_counter() - ft_tried.get(ft_key, -1e9) < 600.0)
                     if how == 'fasttravel':
                         _log(f'objectif a {dist:.0f} m : voyage rapide d abord ({why_not})')
-                        ft = nav.fast_travel_to(tx_t, ty_t, log=_log, min_gain_m=300.0)
+                        ft = nav.fast_travel_to(tx_t, ty_t, log=_log, min_gain_m=300.0, stop=stop)
+                        if ft.get('ok') and _halted():
+                            navp.displaced(); continue
                         _log(f"voyage rapide : {('arrive a ' + str(ft.get('point'))) if ft.get('ok') else ft.get('reason')}")
                         if ft.get('ok'):
                             stats['voyages'] = stats.get('voyages', 0) + 1
+                            navp.displaced()
                             continue
+                        if _halted(ft):
+                            plan.last_t = -99.0; continue             # 12/10 : F11/F12, pas un echec
                         ft_tried[ft_key] = time.perf_counter()     # echec seulement : pas de nouvel essai vers cette cible avant 10 min
                     if how == 'drive':
                         _log(f'objectif a {dist:.0f} m : V prend la voiture (autodrive)')
                         plan.note('a pris la voiture')
                         r = driving.drive_to(tx_t, ty_t, stop=stop, log=_log)
+                        if r.get('boarded'):
+                            navp.displaced()                             # V a roule (meme si F11 suit)
+                        if _halted(r):
+                            plan.last_t = -99.0; continue                # 12/10 : F11/F12, rien de consomme
                         last_drive_t = time.perf_counter()               # delai compte a partir de la FIN de la conduite
                         stats['conduites'] = stats.get('conduites', 0) + 1
                         _log(f"conduite : {'arrive' if r.get('ok') else r.get('reason')}")
@@ -1422,15 +1618,19 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             last_drive_t = time.perf_counter() + 360.0      # ici la moto ne vient pas / ne se monte pas : pas avant 10 min
                         continue
 
-                if dist is not None and dist > ARRIVE_M:
+                if dist is not None and dist > ARRIVE_M and not (alt_target is None and navp.near_stall(_tid(None, q), dist, _dz(st, q.get('mz')))):
+                    # (12/10 : quete suivie dont V plafonne dans la zone d arrivee -> etape 6, comme une arrivee)
                     no_mappin_since = None
                     _log(f'objectif a {dist:.0f} m : aller_a')
-                    req = (lambda t=alt_target: nav.request_path_to(t['x'], t['y'])) if alt_target is not None else nav.request_path_to_quest
+                    req = (lambda t=alt_target: _path_alt(t)) if alt_target is not None else nav.request_path_to_quest
                     r = nav.goto(req, arrive_m=ARRIVE_M, max_legs=1, timeout=60.0, stop=stop, log=_log,
                                  interrupt=_threat_near)
                     if r.get('reason') == 'interrompu':
                         _log('trajet interrompu : menace proche -> decision immediate')
                         plan.last_t = -99.0
+                        continue
+                    if _halted(r):
+                        plan.last_t = -99.0                 # 12/10 : F11/F12 pendant le trajet : ni echec compte, ni escalade
                         continue
                     stats['trajets'] += 1
                     # coince au meme endroit deux fois : on memorise la zone, le mod evitera d y renvoyer
@@ -1459,11 +1659,27 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             continue
                     else:
                         rot_failures = 0
-                    if r.get('ok') or r.get('real_legs', 0) > 0:      # 'legs' seul comptait un troncon bloque des le 1er pas comme un progres
-                        path_failures = 0; straight_tried = False
+                    # 12/10 : « un point du chemin atteint » comptait un troncon qui bute toujours au meme endroit comme un
+                    # progres (« bloque, reste 36.6 m » 36 fois de suite le 05/10, 14 min, aucun echec compte). Voir navprog.
+                    tx_p, ty_p = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
+                    tz_p = alt_target.get('z') if alt_target is not None else q.get('mz')
+                    k_p = _tid(alt_target, q)
+                    if k_p != navp.key:
+                        path_failures = 0; straight_tried = False      # autre cible : les echecs de la precedente ne comptent pas
+                    d_after = math.hypot(here[0] - tx_p, here[1] - ty_p) if tx_p is not None and ty_p is not None else None
+                    n_fail = navp.leg(k_p, (tx_p, ty_p) if tx_p is not None and ty_p is not None else None, dist, d_after,
+                                      bool(r.get('ok')), r.get('seconds') or 0.0, start=(st['x'], st['y'], st.get('z')),
+                                      end=(s_h['x'], s_h['y'], s_h.get('z')), dz_after=_dz(s_h, tz_p))
+                    for _v in navp.after_leg((st['x'], st['y']), here, navp.kind == 'arrive'):   # V n etait pas coince
+                        quests.marker_result(_v[1], _v[2], _v[3], False, 'inaccessible a pied', z=_v[4], log=_log)
+                    if n_fail == 0:
+                        path_failures = 0
+                        if navp.true_progress:
+                            straight_tried = False
                     else:
-                        path_failures += 1
-                        _log(f"  trajet : {r.get('reason')} (echec {path_failures}/5)")
+                        path_failures += n_fail
+                        _log(f"  trajet : {r.get('reason')}" + (f', reste {d_after:.0f} m (record {navp.best:.0f} m)' if d_after is not None and navp.best is not None else '')
+                             + f' : sans progres (echec {min(path_failures, 5)}/5)')
                         if path_failures >= 5 and dist is not None and not straight_tried and escape_tries < 3:      # meme pour une cible lointaine : d abord SORTIR d ici
                             # le maillage ne repond pas (interieur, escalier, ring...) : on marche EN LIGNE DROITE vers
                             # la cible 20 s (les portes s ouvrent en passant) ; si V a avance, le maillage se recalcule
@@ -1471,20 +1687,34 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             _log(f'aucun chemin : marche en ligne droite vers la cible ({dist:.0f} m) pour sortir d ici')
                             tx, ty = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
                             rw = motion.walk_to(tx, ty, timeout=20.0, stop=stop, interrupt=_threat_near, sprint=True)
+                            if _halted():
+                                straight_tried = False                     # 12/10 : on la refera a la reprise
+                                continue
                             s2 = motion.read_state() or st
+                            for _v in navp.after_leg(here, (s2['x'], s2['y'], s2.get('z')), False):   # deplacement a pied
+                                quests.marker_result(_v[1], _v[2], _v[3], False, 'inaccessible a pied', z=_v[4], log=_log)
                             moved = math.hypot(s2['x'] - st['x'], s2['y'] - st['y'])
                             _log(f"  ligne droite : {'ok' if rw.get('ok') else rw.get('reason')}, {moved:.0f} m parcourus")
                             if moved > 8.0:
-                                path_failures = 0; focus_insist_n = 0
+                                path_failures = 0
                                 continue
                             # toujours coince : V cherche une SORTIE (portes, invites, sondes dans 8 directions)
                             here_e = (s2['x'], s2['y'])
+                            esc_prev = (escape_tries, escape_pos)
                             if escape_pos is not None and math.hypot(here_e[0] - escape_pos[0], here_e[1] - escape_pos[1]) < 4.0:
                                 escape_tries += 1                        # meme point qu au dernier essai : pas de vrai progres
                             else:
                                 escape_tries, escape_pos = 1, here_e
                             _log(f'ilot ferme : recherche d une sortie (portes, invites, sondes) [{escape_tries}/3]')
                             re = escape.escape((tx, ty), stop=stop, log=_log)
+                            if _halted():
+                                escape_tries, escape_pos = esc_prev; straight_tried = False
+                                continue
+                            s3e = motion.read_state() or s2
+                            for _v in navp.after_leg(here_e, (s3e['x'], s3e['y'], s3e.get('z')), False):
+                                quests.marker_result(_v[1], _v[2], _v[3], False, 'inaccessible a pied', z=_v[4], log=_log)
+                            if not re.get('ok') and re.get('moyen') != 'arret d urgence':
+                                escape_fail = (_tid(alt_target, q), time.perf_counter())   # ilot avere pour CETTE cible
                             _log(f"  sortie : {'trouvee par ' + re.get('moyen', '?') if re.get('ok') else 'introuvable (' + re.get('moyen', '?') + ')'}")
                             stats['sorties'] = stats.get('sorties', 0) + (1 if re.get('ok') else 0)
                             if re.get('ok'):
@@ -1500,23 +1730,31 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                     # 19-20/09 : un cycle d evasion epuise laissait juste path_failures=5 pour forcer les branches
                                     # suivantes, mais le troncon partiel qui suit presque toujours remet path_failures a 0 avant
                                     # qu elles ne soient evaluees (9 min bloque au meme secteur, en boucle) -> on escalade ICI, tout de suite.
-                                    _log(f'  bloque dans ce secteur depuis {stuck_cycles} cycles d evasion epuises : voyage rapide direct')
-                                    remote.notify('V etait bloque dans un secteur depuis plusieurs minutes : depart en voyage rapide ailleurs.')
-                                    stuck_cycles = 0
+                                    _log(f'  bloque dans ce secteur depuis {stuck_cycles} cycles d evasion epuises : voyage rapide de sortie')
                                     tx2, ty2 = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
-                                    rft2 = nav.fast_travel_to(tx2, ty2, log=_log, min_gain_m=50.0)
+                                    # 12/10 : n importe quel point a plus de 60 m (sortir d ici d abord) ; F11/F12 -> rien de consomme
+                                    rft2 = nav.fast_travel_to(tx2, ty2, log=_log, min_gain_m=-1e9, stop=stop)
+                                    if rft2.get('ok') and _halted():
+                                        navp.displaced(); continue
+                                    if _halted(rft2):
+                                        continue
+                                    stuck_cycles = 0; navp.trap_ft_mark()
                                     if rft2.get('ok'):
                                         stats['voyages'] = stats.get('voyages', 0) + 1; path_failures = 0; straight_tried = False
+                                        navp.displaced()
+                                        remote.notify('V etait bloque dans un secteur depuis plusieurs minutes : sorti par voyage rapide.')
                                         continue
-                                    nxts = quests.switch(alt_target.get('hash') if alt_target else q.get('hash'), log=_log)
+                                    remote.notify(f"V est bloque dans un secteur depuis plusieurs minutes, voyage rapide impossible ({rft2.get('reason')}) : il change de cible.")
+                                    navp.displaced()                         # coince ici : aucun verdict differe n est fiable
+                                    nxts = quests.switch(alt_target.get('hash') if alt_target else q.get('hash'), log=_log, avoid=(tx2, ty2, navprog.SECTOR_M))
                                     if nxts:
-                                        alt_target = {'x': nxts['x'], 'y': nxts['y'], 'text': nxts.get('text'), 'hash': nxts.get('hash'), 't0': time.perf_counter()}
+                                        alt_target = _alt(nxts)
                                         stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                                         path_failures = 0; straight_tried = False
                                         time.sleep(1.0); continue
                                     nxes = explore.pick(log=_log)
                                     if nxes:
-                                        alt_target = {'x': nxes['x'], 'y': nxes['y'], 'text': nxes.get('text'), 'hash': nxes.get('hash'), 't0': time.perf_counter()}
+                                        alt_target = _alt(nxes)
                                         stats['explorations'] = stats.get('explorations', 0) + 1
                                         path_failures = 0; straight_tried = False
                                         time.sleep(1.0); continue
@@ -1525,47 +1763,145 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                 path_failures = 5; straight_tried = True   # force le passage aux branches suivantes (insister / voyage rapide / quete)
                                 continue
                             continue
-                        if path_failures >= 5 and focus and focus_insist_n >= 3:
-                            # 3 fois de suite sans progres (17/09 : 40 min coince pres de « Parler a Johnny ») : V fait autre chose un moment
-                            focus_insist_n = 0; path_failures = 0; straight_tried = False
-                            nxt = quests.switch(q.get('hash'), log=_log)
-                            if nxt:
-                                _log(f"quete assignee inaccessible 3 fois de suite : V fait autre chose (« {nxt.get('text')} ») avant d y revenir")
-                                alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
-                                stats['changements_quete'] = stats.get('changements_quete', 0) + 1
-                                continue
-                        if path_failures >= 5 and focus:
-                            focus_insist_n += 1
-                            _log(f'objectif inaccessible pour l instant, mais c est la quete assignee : on insiste ({focus_insist_n}/3 ; pause 45 s, puis vehicule / voyage rapide)')
-                            path_failures = 0; straight_tried = False
-                            last_drive_t = -999.0; last_ft_t = -999.0          # debloque les tentatives de vehicule et de voyage rapide
-                            t_w = time.perf_counter()
-                            while time.perf_counter() - t_w < 45.0 and not (stop is not None and stop.is_set()):
-                                time.sleep(1.0)
-                            continue
-                        if path_failures >= 5 and CFG.features.get('fasttravel', True) and time.perf_counter() - last_ft_t > 120.0:
-                            # aucun chemin d ici et la sortie a echoue : le voyage rapide (par requete au systeme du jeu) peut nous sortir
-                            last_ft_t = time.perf_counter()
-                            tx, ty = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
-                            _log('aucun chemin d ici : tentative de voyage rapide vers l objectif')
-                            rft = nav.fast_travel_to(tx, ty, log=_log, min_gain_m=100.0)
-                            if rft.get('ok'):
-                                stats['voyages'] = stats.get('voyages', 0) + 1; path_failures = 0; straight_tried = False
-                                continue
-                            _log(f"  voyage rapide : {rft.get('reason')}")
                         if path_failures >= 5:
-                            _log('objectif inaccessible a pied depuis ici : changement de quete')
-                            path_failures = 0
-                            straight_tried = False
-                            escape_tries, escape_pos = 0, None
-                            nxt = quests.switch(alt_target.get('hash') if alt_target else q.get('hash'), log=_log)
+                            # 12/10 : echelle PAR CIBLE. Le 05/10 19:55-20:14, « on insiste » 3 fois a (-396,720) : 45 s d attente
+                            # a chaque fois, jamais le vehicule ni le voyage rapide annonces (cible a 100 m : ils ne s ouvraient
+                            # qu au-dela de 500 m), puis tout recommencait. Desormais :
+                            #   1. voyage rapide vers un point plus proche de la cible (une fois par cible / 20 min) ;
+                            #   2. quete assignee : UNE courte pause (porte, foule) ;
+                            #   3. deux cibles ELOIGNEES l une de l autre epuisees depuis ce secteur = V coince : aucun verdict,
+                            #      voyage rapide de sortie, sinon pause + Telegram ;
+                            #   4. sinon verdict pour CETTE cible et V passe a une cible a plus de 60 m.
+                            if _halted():
+                                continue
+                            path_failures = 0; straight_tried = False
+                            ex_old = navp.exhaust.get(k_p)
+                            ex_n = navp.exhausted(k_p)
+                            gain = navprog.ft_gain(dist)
+                            island = escape_fail[0] == k_p and time.perf_counter() - escape_fail[1] < 300.0
+                            if island and dist is not None:
+                                # ilot avere : en plus des points plus proches, tout point a moins de 150 m de la cible ; toujours
+                                # negatif (mode sortie de fast_travel_to : point a plus de 30 m de V)
+                                gain = min(gain if gain is not None else 1e9, dist - 150.0, -0.001)
+                            if gain is not None and CFG.features.get('fasttravel', True) and navp.ft_ready(k_p):
+                                _log(f'objectif inaccessible a pied d ici (cycle {ex_n}) : voyage rapide '
+                                     + ('(ilot : point a moins de 150 m de la cible)' if island else 'vers un point plus proche'))
+                                rft = nav.fast_travel_to(tx_p, ty_p, log=_log, min_gain_m=gain, stop=stop)
+                                if rft.get('ok') and _halted():
+                                    navp.displaced(); continue
+                                if _halted(rft):                     # F11/F12 : rien de consomme
+                                    if ex_old is None:
+                                        navp.exhaust.pop(k_p, None)
+                                    else:
+                                        navp.exhaust[k_p] = ex_old
+                                    continue
+                                navp.ft_mark(k_p)
+                                if rft.get('ok'):
+                                    stats['voyages'] = stats.get('voyages', 0) + 1
+                                    navp.displaced()
+                                    continue
+                                _log(f"  voyage rapide : {rft.get('reason')}")
+                                s_n = motion.read_state() or s_h
+                                if math.hypot(s_n['x'] - here[0], s_n['y'] - here[1]) > navprog.MOVED_M:
+                                    # 12/10 : le voyage a echoue mais V a MARCHE (vers une borne) : on reprend d ici
+                                    for _v in navp.after_leg(here, (s_n['x'], s_n['y'], s_n.get('z')), False):
+                                        quests.marker_result(_v[1], _v[2], _v[3], False, 'inaccessible a pied', z=_v[4], log=_log)
+                                    navp.reset()
+                                    continue
+                            if focus and navp.pause_ready(k_p):
+                                navp.pause_mark(k_p)
+                                _log('objectif inaccessible pour l instant, mais c est la quete assignee : courte pause (45 s) puis nouvel essai')
+                                t_w = time.perf_counter()
+                                while time.perf_counter() - t_w < 45.0 and not _halted():
+                                    time.sleep(1.0)
+                                if _halted():
+                                    navp.paused.pop(k_p, None)
+                                navp.reset()
+                                continue
+                            free_now = False                         # V vient de prouver qu il peut sortir a pied
+                            trap = navp.sector(k_p, (tx_p, ty_p), here)
+                            if trap:
+                                # 12/10 : avant de conclure « V coince », le VERIFIER : retour a pied vers un endroit deja atteint
+                                # a pied hors du secteur. S il y arrive, il n etait pas coince (rues denses, interieurs fermes).
+                                op = navp.outside_point()
+                                if op is not None:
+                                    _log(f'V coince ? verification : retour a pied vers ({op[0]:.0f},{op[1]:.0f})')
+                                    sec0 = navp.sec_pos
+                                    rpv = nav.goto(lambda p=op: nav.request_path_to(p[0], p[1]), arrive_m=5.0, max_legs=3,
+                                                   timeout=90.0, stop=stop, log=_log, interrupt=_threat_near)
+                                    if _halted(rpv):
+                                        continue
+                                    if rpv.get('reason') == 'interrompu':      # menace en route : on decide, on reviendra ici
+                                        plan.last_t = -99.0; continue
+                                    s_v = motion.read_state() or s_h
+                                    if math.hypot(s_v['x'] - sec0[0], s_v['y'] - sec0[1]) > navprog.SECTOR_M:
+                                        _log('  V est ressorti a pied : il n etait pas coince, les cibles sont bien inaccessibles')
+                                        for _v in navp.after_leg(here, (s_v['x'], s_v['y'], s_v.get('z')), False):
+                                            quests.marker_result(_v[1], _v[2], _v[3], False, 'inaccessible a pied', z=_v[4], log=_log)
+                                        free_now, trap = True, False
+                                    else:
+                                        here = (s_v['x'], s_v['y'])
+                            if trap:
+                                # V est coince ICI (ilot, piece fermee, ascenseur hors maillage) : aucune cible n est en cause
+                                _log(f'V coince dans ce secteur ({here[0]:.0f},{here[1]:.0f}) : {len(navp.sec_targets)} cibles eloignees inaccessibles d ici -> c est la position, pas les cibles')
+                                if CFG.features.get('fasttravel', True) and navp.trap_ft_ready():
+                                    rft3 = nav.fast_travel_to(tx_p, ty_p, log=_log, min_gain_m=-1e9, stop=stop)
+                                    if rft3.get('ok') and _halted():
+                                        navp.displaced(); continue
+                                    if _halted(rft3):
+                                        continue
+                                    navp.trap_ft_mark()
+                                    if rft3.get('ok'):
+                                        stats['voyages'] = stats.get('voyages', 0) + 1
+                                        navp.displaced()
+                                        remote.notify('V etait coince : sorti par voyage rapide.')
+                                        continue
+                                    _log(f"  voyage rapide de sortie : {rft3.get('reason')}")
+                                    s_n = motion.read_state() or s_h
+                                    _sp0 = navp.sec_pos or here
+                                    if math.hypot(s_n['x'] - _sp0[0], s_n['y'] - _sp0[1]) > navprog.SECTOR_M:
+                                        # V a marche hors du secteur (vers une borne) : pas coince, verdicts normaux
+                                        for _v in navp.after_leg(here, (s_n['x'], s_n['y'], s_n.get('z')), False):
+                                            quests.marker_result(_v[1], _v[2], _v[3], False, 'inaccessible a pied', z=_v[4], log=_log)
+                                        free_now, trap = True, False
+                                    else:
+                                        here = (s_n['x'], s_n['y'])
+                            if trap:
+                                navp.trapped()
+                                navp.trap_reset()
+                                remote.notify(f'V est coince en ({here[0]:.0f},{here[1]:.0f}) : plusieurs cibles inaccessibles d ici, pas de voyage rapide possible. '
+                                              + ('Mis en pause : deplace-le puis F11 ou « reprendre ».' if pause is not None else 'Session arretee.'))
+                                if pause is not None:
+                                    _log('V coince, aucune sortie : PAUSE (deplace-le puis F11 ou « reprendre »)')
+                                    pause.set()
+                                    continue
+                                _log('V coince, aucune sortie : arret.')
+                                break
+                            v_text = str(alt_target.get('text') or '') if alt_target is not None else ''
+                            if alt_target is None:                 # quete suivie : mise de cote en memoire de session
+                                w_u = navp.mark_unreachable(k_p)
+                                if not free_now:
+                                    navp.defer(('suivie', k_p))
+                                _log(f"quete suivie « {q.get('text')} » inaccessible a pied d ici (cycle {ex_n}) : mise de cote {w_u / 60:.0f} min")
+                                if k_p not in navp.notified:
+                                    navp.notified.add(k_p)
+                                    remote.notify(f"Quete suivie « {q.get('text')} » inaccessible a pied d ici : V fait autre chose {w_u / 60:.0f} min.")
+                            elif v_text.endswith('Variant') and free_now:   # V vient de prouver qu il n etait pas coince
+                                quests.marker_result(v_text, tx_p, ty_p, False, 'inaccessible a pied', z=alt_target.get('z'), log=_log)
+                            elif v_text.endswith('Variant'):        # marqueur choisi par V : verdict ecrit si V n etait pas coince
+                                navp.defer(('marqueur', v_text, tx_p, ty_p, alt_target.get('z')))
+                                _log(f'marqueur « {v_text} » inaccessible a pied d ici (cycle {ex_n}) : changement de cible')
+                            else:
+                                _log(f'cible « {v_text} » inaccessible a pied d ici (cycle {ex_n}) : changement de cible')
+                            _qa = (q.get('mx'), q.get('my'), 10.0) if navp.unreach_wait(_tid(None, q)) > 0 else None
+                            nxt = quests.switch(alt_target.get('hash') if alt_target else q.get('hash'), log=_log, avoid=[(tx_p, ty_p, 60.0), _qa])
                             if nxt:
-                                alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                                alt_target = _alt(nxt)
                                 stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                                 time.sleep(1.0); continue
                             nxe = explore.pick(log=_log)
                             if nxe:
-                                alt_target = {'x': nxe['x'], 'y': nxe['y'], 'text': nxe.get('text'), 'hash': nxe.get('hash'), 't0': time.perf_counter()}
+                                alt_target = _alt(nxe)
                                 stats['explorations'] = stats.get('explorations', 0) + 1
                                 time.sleep(1.0); continue
                             _log('aucune autre quete accessible ni point d exploration connu : arret.')
@@ -1582,12 +1918,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     no_mappin_since = None
                     nxt = quests.switch(q.get('hash'), log=_log, prefer_givers=True)
                     if nxt:
-                        alt_target = {'x': nxt['x'], 'y': nxt['y'], 'text': nxt.get('text'), 'hash': nxt.get('hash'), 't0': time.perf_counter()}
+                        alt_target = _alt(nxt)
                         stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                         time.sleep(1.0); continue
                     nxe = explore.pick(log=_log)
                     if nxe:
-                        alt_target = {'x': nxe['x'], 'y': nxe['y'], 'text': nxe.get('text'), 'hash': nxe.get('hash'), 't0': time.perf_counter()}
+                        alt_target = _alt(nxe)
                         stats['explorations'] = stats.get('explorations', 0) + 1
                         time.sleep(1.0); continue
                     _log('aucune autre quete accessible ni point d exploration connu : arret.')
