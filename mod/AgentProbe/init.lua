@@ -324,6 +324,12 @@ function AgentDriveCtx(inVeh)
         pcall(function() local b, d = bbs:Get(defs.UI_AutodriveData), defs.UI_AutodriveData
             o.av = b:GetBool(d.AutoDriveAvailable); o.on = b:GetBool(d.AutoDriveEnabled)
             o.rem = math.floor(b:GetFloat(d.DestinationRemainingLength)) end)
+        pcall(function() o.fr = bbs:Get(defs.UI_AutodriveData):GetBool(defs.UI_AutodriveData.FreeRoamEnabled) end)
+        pcall(function()                                   -- 12/10 : destination REELLE de l autodrive (diagnostic)
+            local a = Game.GetScriptableSystemsContainer():Get('AutoDriveSystem')
+            o.dt = tonumber(EnumInt(a:GetAutodriveDestinationType()))
+            local v = a:GetAutodriveDestination(); o.ax, o.ay = math.floor(v.x), math.floor(v.y)
+        end)
         pcall(function() local v = pl:GetMountedVehicle()                                             -- player.script:1581
             o.rid = (TDBID.ToStringDEBUG(v:GetRecordID()):gsub('^Vehicle%.', ''))
             o.pv = v:IsPlayerVehicle()
@@ -3562,6 +3568,9 @@ local function handleCommand(player, cmd)
         if cmd.x == 1 then
             local okR, eR = pcall(function() local q = EnableAutoDriveRequest.new(); q.isDelamain = true; ads:QueueRequest(q) end)
             if not okR then okR, eR = pcall(function() resp.direct = ads:SetAutodriveEnabled(true, true) end) end   -- natif :134
+            resp.sent = okR; if not okR then resp.reason = tostring(eR) end
+        elseif cmd.x == 3 then                                -- 12/10 : autodrive NORMAL (voiture de V) sans bascule G
+            local okR, eR = pcall(function() local q = EnableAutoDriveRequest.new(); q.isDelamain = false; ads:QueueRequest(q) end)
             resp.sent = okR; if not okR then resp.reason = tostring(eR) end
         elseif cmd.x == 0 then
             pcall(function() ads:QueueRequest(DisableAutoDriveRequest.new()) end)

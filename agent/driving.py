@@ -509,17 +509,37 @@ def autodrive_to(tx: float, ty: float, stop=None, log=print, stolen: dict | None
         return {'ok': False, 'reason': 'pas de touche autodrive'}
     if stop is not None and stop.is_set():
         return {'ok': False, 'reason': 'arret d urgence', 'seconds': 0.0}
-    if _AUTODRIVE_ON['left_on'] and _current_speed(st) > 3.0:
+    modd = 'on' in dx0                                   # 12/10 : mod recent -> commandes sans bascule
+    if _AUTODRIVE_ON['left_on'] and _current_speed(st) > 3.0 or (modd and dx0.get('on')):
         # 12/10 : V avait enclenche l autodrive avant une pause F11 et la voiture roule encore : G est une BASCULE
-        log('  [conduite] autodrive laisse actif avant la pause : on n y touche pas')
+        log('  [conduite] autodrive deja actif : on n y touche pas')
+    elif modd and _own_start(log=log, stop=stop):
+        log('  [conduite] autodrive enclenche (commande du mod)')
     else:
         autodrive_toggle()
         log('  [conduite] autodrive enclenche (G maintenu 1,5 s)')
     _AUTODRIVE_ON['left_on'] = True
+    if modd:
+        return _watch_drive(tx, ty, st, t0, stop=stop, log=log, relaunch=lambda: _own_start(log=log, stop=stop), relaunches=3, own_cmd=True)
     return _watch_drive(tx, ty, st, t0, stop=stop, log=log, relaunch=autodrive_toggle, relaunches=1)
 
 
-def _watch_drive(tx, ty, st, t0, stop=None, log=print, relaunch=None, relaunches: int = 1, on_flag: bool = False) -> dict:
+def _own_start(log=print, stop=None) -> bool:
+    """12/10 : autodrive NORMAL de la voiture de V par le mod (pas de bascule G) ; vrai si dx.on dans les 3 s."""
+    r = nav._wait(nav._send({'cmd': 'autodrive', 'x': 3}), timeout=2.0) or {}
+    t = time.perf_counter()
+    while time.perf_counter() - t < 3.0:
+        if stop is not None and stop.is_set():
+            return False
+        if ((motion.read_state() or {}).get('dx') or {}).get('on'):
+            return True
+        time.sleep(0.3)
+    log(f"  [conduite] autodrive refuse par le jeu (voie {r.get('lane')}, disponible {r.get('avail')})")
+    return False
+
+
+def _watch_drive(tx, ty, st, t0, stop=None, log=print, relaunch=None, relaunches: int = 1, on_flag: bool = False,
+                 own_cmd: bool = False) -> dict:
     """Surveille l approche de (tx, ty) pendant l autodrive ; relance (G, ou commande du mod pour un vehicule vole)."""
     d0 = _dist(st, tx, ty)
     x0, y0 = st['x'], st['y']
@@ -549,7 +569,11 @@ def _watch_drive(tx, ty, st, t0, stop=None, log=print, relaunch=None, relaunches
             return {'ok': True, 'seconds': time.perf_counter() - t0, 'dist': d}
         if time.perf_counter() - last_log > 20.0:
             last_log = time.perf_counter()
-            log(f'  [conduite] {time.perf_counter() - t0:.0f} s : a {d:.0f} m de l objectif, {math.hypot(s2["x"] - x0, s2["y"] - y0):.0f} m du depart')
+            dxw = s2.get('dx') or {}
+            dest = ''
+            if dxw.get('ax') is not None:
+                dest = f", autodrive on={dxw.get('on')} roue libre={dxw.get('fr')} type={dxw.get('dt')} destination a {math.hypot(dxw['ax'] - tx, dxw['ay'] - ty):.0f} m de la cible"
+            log(f'  [conduite] {time.perf_counter() - t0:.0f} s : a {d:.0f} m de l objectif, {math.hypot(s2["x"] - x0, s2["y"] - y0):.0f} m du depart{dest}')
         if d > d0 + 150.0 + 0.3 * d0:
             # l autodrive s eloigne franchement : pas d itineraire routier vers ce marqueur (zone
             # pietonne) -> le jeu « croise » au hasard. On s arrete la et on finit a pied.
@@ -572,6 +596,8 @@ def _watch_drive(tx, ty, st, t0, stop=None, log=print, relaunch=None, relaunches
             continue
         if math.hypot(s2['x'] - last_pos[0], s2['y'] - last_pos[1]) > 2.0:
             last_move_t, last_pos = time.perf_counter(), (s2['x'], s2['y'])
+        elif own_cmd and (s2.get('dx') or {}).get('on') and time.perf_counter() - last_move_t <= 60.0:
+            pass                       # 12/10 : autodrive ACTIF et immobile (feu, bouchon) : on attend, aucune touche
         elif time.perf_counter() - last_move_t > 20.0:
             traveled = math.hypot(s2['x'] - x0, s2['y'] - y0)
             # arret pres de l objectif = fin de l itineraire routier (le marqueur est dans une zone
@@ -631,6 +657,9 @@ def exit_vehicle(log=print, stop=None) -> bool:
         log(f'  [conduite] freinage avant de descendre ({sp:.0f} m/s)')
         if stolen_now:
             pass
+        elif 'on' in dxs and not _h():
+            _stolen_stop()       # 12/10 : arret par le mod (DisableAutoDriveRequest), pas de bascule G
+            _AUTODRIVE_ON['left_on'] = False
         elif kbm.ACTIONS.get('autodrive') and not _h():
             autodrive_toggle()   # bascule : coupe la croisiere automatique
             _AUTODRIVE_ON['left_on'] = False
