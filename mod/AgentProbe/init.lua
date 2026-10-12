@@ -81,6 +81,7 @@ local craftDiagDone = false
 
 local lootClassesLogged = false             -- classes d objets lootables vues, journalisees une fois
 local lookatLogged = false
+local losLogged = false                       -- 12/10 : 1re mesure de ligne de vue journalisee (validation en jeu)
 local crimeAcc, lastCrimes = 0.0, nil
 local lastDialogSig = ''
 local attachedFor = 0.0         -- temps cumule avec un joueur attache
@@ -1306,6 +1307,25 @@ registerForEvent('onUpdate', function(dt)
                             pcall(function() if not rec.police and ent:IsPolice() then rec.police = true end end)
                             -- 12/10 : nom affiche (journal : « hostile » au QG de Delamain engage 5 fois sans reaction, non identifie)
                             if rec.d < 40.0 then pcall(function() rec.name = GetLocalizedText(tostring(ent:GetDisplayName())) end) end
+                            -- 12/10 (Olivier : « V tire trop souvent sur un mur ») : LIGNE DE VUE oeil -> poitrine, geometrie STATIQUE
+                            -- seulement (meme appel que spatialQueriesSystem.script:56), arretee 0,6 m avant la cible
+                            if rec.d < 60.0 then
+                                local okL, errL = pcall(function()
+                                    local fx, fy, fz = pos.x, pos.y, pos.z + 1.6
+                                    local dx, dy, dz = ep.x - fx, ep.y - fy, (ep.z + 1.2) - fz
+                                    local len = math.sqrt(dx * dx + dy * dy + dz * dz)
+                                    if len < 1.5 then rec.los = true; return end
+                                    local k = (len - 0.6) / len
+                                    local hit = Game.GetSpatialQueriesSystem():SyncRaycastByCollisionGroup(
+                                        Vector4.new(fx, fy, fz, 1.0), Vector4.new(fx + dx * k, fy + dy * k, fz + dz * k, 1.0), CName.new('Static'), true, false)
+                                    rec.los = not (hit == true)
+                                end)
+                                if not losLogged then
+                                    losLogged = true
+                                    journal(okL and ('OK   LOS : ligne de vue mesuree (' .. tostring(rec.los) .. ' a ' .. string.format('%.0f', rec.d) .. ' m)')
+                                        or ('FAIL LOS : ' .. tostring(errL)))
+                                end
+                            end
                             pcall(function()
                                 local sc = cam:ProjectPoint(Vector4.new(ep.x, ep.y, ep.z + 1.3, 1.0))
                                 rec.sx, rec.sy = sc.x, sc.y

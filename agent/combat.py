@@ -190,6 +190,16 @@ def n_foes(st: dict, alive: list) -> int:
         return len(alive)
 
 
+def _xhair_blocked(st: dict, e: dict) -> bool:
+    """12/10 : un objet (voiture, caisse, porte...) plus proche que la cible est sous le reticule -> on tirerait dedans.
+    Un PNJ sous le reticule ne bloque pas (souvent la cible elle-meme, ou un autre hostile)."""
+    la = (st or {}).get('lookat') or {}
+    d = la.get('d')
+    if not isinstance(d, (int, float)) or la.get('cls') in (None, 'gamePuppet'):
+        return False
+    return d < 15.0 and d < float(e.get('d') or 0) - 3.0
+
+
 def _alive(enemies, allow_police: bool = True):
     """Hostiles vivants. allow_police=False exclut la police (engagement proactif interdit).
     En combat (fight), la police reste une cible : c est de la legitime defense."""
@@ -504,6 +514,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     wsync_fail = 0                                     # degainages sans effet (zone a mains nues, arme restreinte)
     blind_hacks, blind_hacks_t = 0, -99.0              # hacks « par defaut » de suite (liste du panneau illisible) : pause, pas coupure
     mode = 'melee'; shots = 0
+    blocked_t, blocked_log_t = None, -99.0   # 12/10 : pas de ligne de tir depuis... / dernier message
     hack_i = 0
     last_hp, last_hp_t = None, time.perf_counter()
     seq = None
@@ -587,6 +598,10 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             no_target_logged = False
 
             e = alive[0]
+            if mode == 'ranged' and e.get('los') is False:
+                vis = [x for x in alive if x.get('los') is True]       # 12/10 : l ennemi VISIBLE le plus proche d abord
+                if vis:
+                    e = vis[0]
             pressure = sum(1 for x in alive if x['d'] < 5.0)
             cx, cy = centroid(alive)
             only_police = all(x.get('police') for x in alive)
@@ -653,7 +668,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             kbm.act_release('sprint')
 
             # -- grenade sur un ennemi ELOIGNE (pas forcement le plus proche), si groupe
-            far = [x for x in alive if GRENADE_MIN_M <= x['d'] <= GRENADE_MAX_M]
+            far = [x for x in alive if GRENADE_MIN_M <= x['d'] <= GRENADE_MAX_M and x.get('los') is not False]   # 12/10 : pas dans un mur
             if far and len(alive) >= 2 and now - t_gren > GRENADE_CD and charges(st, 'gren'):
                 tgt = far[-1]
                 gap = aim_at(tgt, st)
@@ -735,6 +750,24 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                     sprint_pass(e, st, 1.0 if side == 'D' else -1.0, dur=0.8)   # sprint lateral = regeneration + cible mouvante
                     t_sprint = now; stats['sprints'] = stats.get('sprints', 0) + 1
                     seq = None; continue
+                if gap < 4 and holding_ranged and (e.get('los') is False or _xhair_blocked(st, e)):
+                    # 12/10 (Olivier : « V tire trop souvent sur un mur ») : pas de ligne de tir -> on ne tire pas, on se
+                    # decale (1,5 s), puis on avance vers la cible
+                    if blocked_t is None:
+                        blocked_t = now
+                    if now - blocked_log_t > 10.0:
+                        blocked_log_t = now
+                        why_b = 'mur' if e.get('los') is False else f"objet a {((st.get('lookat') or {}).get('d') or 0):.0f} m sous le reticule"
+                        log(f"  [combat] pas de ligne de tir vers la cible a {e['d']:.0f} m ({why_b}) : V se repositionne")
+                    stats['sans_ligne_de_tir'] = stats.get('sans_ligne_de_tir', 0) + 1
+                    if now - blocked_t < 1.5:
+                        side = 'D' if side == 'A' else 'A'; strafe(side, 0.5)
+                    else:
+                        kbm.hold('W'); time.sleep(0.7); kbm.release('W')
+                        if now - blocked_t > 4.0:
+                            blocked_t = None                            # nouveau cycle : decalage de l autre cote
+                    seq = None; continue
+                blocked_t = None
                 if gap < 4 and holding_ranged:
                     kbm.mouse('right', True); time.sleep(0.15)          # viser
                     kbm.mouse_tap('left', 0.12); shots += 1; stats['tirs'] = stats.get('tirs', 0) + 1
