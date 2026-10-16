@@ -182,7 +182,9 @@ def decide(st: dict, extra: dict, timeout: float = 5.0) -> tuple[str, str]:
             return 'secourir', f"regle : agression a {near:.0f} m ({n_aggr} agresseur(s)) -> V s implique"
         if (n_aggr <= 3 and hp >= T_RESCUE_HP) or (n_aggr <= 5 and hp >= 90):   # sauvetage selon le courage ; les renforts arrivent souvent
             return _decide_rescue(st, extra, n_aggr, near, timeout)
-    if extra.get('dist_m') is None or (extra['dist_m'] > 3000 and not _C.focus_tracked):
+    # 16/10 : une cible deja choisie par V (exploration, zone blanche, autre quete) a souvent > 3 km : ce n est pas une
+    # raison d en changer (journal 20:18 : 15 cibles en 40 s, V ne partait jamais) -> on y va (voyage rapide / voiture)
+    if extra.get('dist_m') is None or (extra['dist_m'] > 3000 and not _C.focus_tracked and not extra.get('alt')):
         return 'changer_quete', 'regle : objectif sans marqueur ou trop loin'
     if not st.get('interact'):
         # aborder un PNJ nomme : s il est cite dans l objectif de quete (« Parler a Johnny » -> Johnny), ou, sans quete

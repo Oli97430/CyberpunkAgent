@@ -1389,7 +1389,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 else:
                     dist = _dist_to_mappin(st)
                 inter = st.get('interact')
-                action = plan.maybe_decide(st, {'dist_m': dist, 'approached': _was_approached, 'rescued': _was_rescued, 'muted': _muted}, log=_log)
+                action = plan.maybe_decide(st, {'dist_m': dist, 'alt': alt_target is not None, 'approached': _was_approached, 'rescued': _was_rescued, 'muted': _muted}, log=_log)
                 _explo = alt_target is not None and str(alt_target.get('text') or '').startswith('exploration')
                 hud.update(mode='EXPLORATION' if _explo else _HUD_MODES.get(action, 'EN MISSION'),
                            directive=_hud_directive(st, alt_target, dist),
