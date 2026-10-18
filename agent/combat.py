@@ -384,17 +384,18 @@ def _aim_lock(tgt: dict, st: dict, timeout: float = 0.8):
 
 
 def aim_at(e: dict, st: dict) -> float:
-    """Horizontal par cap (maths validees), vertical sur sy normalise (signe appris).
+    """Horizontal par cap (maths validees), vertical sur sy normalise.
+    18/10 (Olivier : « en combat V regarde souvent trop le ciel ») : le signe vertical etait APPRIS (inverse des que |sy|
+    grandissait) -> une cible qui bouge l inversait a tort et V montait par pas de 120 jusqu au ciel. Le signe est CONNU :
+    le HUD (valide visuellement) place les cadres en (1 - sy) -> sy > 0 = au-dessus du centre -> souris vers le haut
+    (dy < 0). Une projection aberrante (cible derriere / tres decentree : |sy| > 1 ou ecart de cap > 45 deg) est ignoree.
     Renvoie l ecart de cap en degres."""
     err = motion.wrap(motion.bearing_to(st['x'], st['y'], e['x'], e['y']) - st['yaw'])
     dx = max(-motion.MAX_STEP, min(motion.MAX_STEP, motion.SIGN * err * motion.K_COUNTS_PER_DEG * 0.5))
     dy = 0.0
     sy = e.get('sy')
-    if sy is not None and abs(sy) < 1.5:
-        if _last_sy[0] is not None and abs(sy) > abs(_last_sy[0]) + 0.05:
-            _vsign[0] = -_vsign[0]
-        _last_sy[0] = sy
-        dy = max(-120.0, min(120.0, _vsign[0] * sy * 400.0))
+    if isinstance(sy, (int, float)) and abs(sy) <= 1.0 and abs(err) <= 45.0:
+        dy = max(-60.0, min(60.0, -sy * 300.0))
     kbm.look(dx, dy)
     return abs(err)
 
@@ -1334,7 +1335,7 @@ def loot_bodies(stop=None, log=print, max_bodies: int = 5, radius_m: float = 25.
             continue
         # le corps est au sol : regard ~45 deg vers le bas (900 counts), puis balayage lent
         # gauche-droite jusqu a l invite « Fouiller »
-        kbm.look(0, 900)
+        _look_smooth(0, 900)      # 18/10 : par paquets (un gros mouvement unique est ecrete -> derive vers le ciel)
         t1 = time.perf_counter()
         pressed = False
         sweep = 0
@@ -1353,7 +1354,7 @@ def loot_bodies(stop=None, log=print, max_bodies: int = 5, radius_m: float = 25.
             sweep += 1
             kbm.look(60 if (sweep // 10) % 2 == 0 else -60, 0)
             time.sleep(0.1)
-        kbm.look(0, -900)
+        _look_smooth(0, -900)
         if pressed:
             looted += 1
     return {'ok': True, 'corps': len(bodies), 'fouilles': looted, 'seconds': time.perf_counter() - t0}
