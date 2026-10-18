@@ -4482,6 +4482,32 @@ local function hudRead()
         end
     end)
 end
+-- 18/10 BANDEAU DU CHAT YOUTUBE (Olivier : « ou alors en bandeau ») : commandes du chat en bas de l ecran, visibles dans le
+-- direct (le HUD est dessine dans l image du jeu) ; derniere commande acceptee 20 s. Globale : pas d upvalue de plus.
+function AgentDrawBanner(d)
+    if type(d) ~= 'table' or not d.banner then return end
+    local okR, W, H = pcall(GetDisplayResolution)
+    if not (okR and W and H and W > 0) then return end
+    local flags = 0
+    for _, n in ipairs({ 'NoTitleBar', 'NoResize', 'AlwaysAutoResize', 'NoCollapse', 'NoScrollbar', 'NoFocusOnAppearing', 'NoInputs', 'NoMove', 'NoSavedSettings' }) do
+        local f = ImGuiWindowFlags[n]
+        if f then flags = (bit and bit.bor) and bit.bor(flags, f) or (flags + f) end
+    end
+    AgentBannerW = AgentBannerW or 600
+    ImGui.SetNextWindowPos(math.max(0, (W - AgentBannerW) / 2), H - 70, ImGuiCond.Always)
+    ImGui.PushStyleColor(ImGuiCol.WindowBg, 0.05, 0.0, 0.0, 0.70)
+    ImGui.PushStyleColor(ImGuiCol.Border, 0.95, 0.12, 0.08, 0.85)
+    ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.17, 0.10, 1.0)
+    if ImGui.Begin('##agentbanner', flags) then
+        ImGui.Text(tostring(d.banner))
+        if d.banner_last and d.banner_last_t and os.time() - d.banner_last_t < 20 then
+            ImGui.Text('> ' .. tostring(d.banner_last))
+        end
+        pcall(function() local ww = ImGui.GetWindowSize(); if ww and ww > 50 then AgentBannerW = ww end end)
+    end
+    ImGui.End()
+    ImGui.PopStyleColor(3)
+end
 local function drawHud()
     if not hudShow or not lastExport then return end
     hudRead()
@@ -4524,6 +4550,7 @@ local function drawHud()
     if nv > 0 then ImGui.PopStyleVar(nv) end
     if nc > 0 then ImGui.PopStyleColor(nc) end
     local okL, errL = pcall(drawLocks)           -- apres les styles du HUD : les cadres ont les leurs
+    pcall(AgentDrawBanner, hudData)              -- 18/10 : bandeau des commandes du chat YouTube
     if not okL and tostring(errL) ~= hudLastErr then hudLastErr = tostring(errL); journal('HUD cadres : ' .. hudLastErr) end
 end
 registerHotkey('agent_hud_toggle', 'Afficher / masquer le HUD de V', function() hudShow = not hudShow end)

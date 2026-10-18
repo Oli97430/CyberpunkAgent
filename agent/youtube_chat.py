@@ -30,6 +30,21 @@ ALIASES = {'attack': 'attaque', 'fight': 'attaque', 'quest': 'objectif', 'quete'
            'vendre': 'marchand', 'shop': 'marchand', 'heal': 'soigne', 'soin': 'soigne', 'ripperdoc': 'charcudoc',
            'autrequete': 'changer_quete', 'skip': 'changer_quete', 'change': 'changer_quete'}
 USER_CD, GLOBAL_CD = 60.0, 15.0
+BANNER = 'CHAT : !ATTAQUE  !OBJECTIF  !SKIP  !EXPLORE  !SHOP  !CHARCUDOC  !HEAL   (1 COMMANDE / MIN)'
+
+
+def _banner(on: bool, last: str | None = None) -> None:
+    """Bandeau du HUD (bas de l ecran, visible dans le direct) : commandes du chat + derniere commande acceptee."""
+    try:
+        from . import hud
+        if not on:
+            hud.update(banner=None); return
+        kw = {'banner': BANNER}
+        if last:
+            kw.update(banner_last=hud.ascii_up(last)[:60], banner_last_t=int(time.time()))
+        hud.update(**kw)
+    except Exception:
+        pass
 _started = False
 STATUS = {'video_id': None, 'messages': 0, 'accepted': 0, 'last': None, 'error': None}
 
@@ -150,10 +165,12 @@ def _loop(log, put) -> None:
             vid = find_live_video(cfg)
             if not vid:
                 STATUS.update(video_id=None, error='aucun direct en cours')
+                _banner(False)
                 time.sleep(60.0); continue
             key, ver, cont = _initial(vid)
             STATUS.update(video_id=vid, error=None)
             log(f'  [youtube] chat du direct {vid} : en ecoute (commandes « ! »)')
+            _banner(True)
             t_page = time.time()
             while cont and time.time() - t_page < 600.0:           # page rechargee toutes les 10 min (jeton frais)
                 body = json.dumps({'context': {'client': {'clientName': 'WEB', 'clientVersion': ver}}, 'continuation': cont}).encode()
@@ -178,6 +195,7 @@ def _loop(log, put) -> None:
                         hud.event(f"chat : {m['author'][:16]} -> {cmd}")
                     except Exception:
                         pass
+                    _banner(True, f"{m['author'][:20]} -> {cmd}")
                     put(cmd, m)
                 if len(seen) > 5000:
                     seen = set(list(seen)[-2000:])
