@@ -1,0 +1,13 @@
+🤖 V joue tout seul à Cyberpunk 2077 : c'est une IA autonome (Pilote automatique) qui décide, se bat, conduit, pirate et explore Night City en direct.
+
+🎮 TU PEUX LUI DONNER DES ORDRES DANS LE CHAT :
+!attaque — attaquer les ennemis en vue
+!objectif — reprendre la quête en cours
+!changer_quete (ou !skip) — passer à une autre quête
+!explore — partir explorer un nouveau quartier
+!marchand (ou !shop) — aller vendre son butin
+!charcudoc — aller se faire poser des implants
+!soigne (ou !heal) — se soigner
+
+⏱️ Une commande par personne et par minute, une commande prise en compte toutes les 15 secondes pour tout le chat : sois rapide !
+📺 Ta commande s'affiche à l'écran dans le HUD de V (« chat : ton pseudo → commande »).
