@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, travel, vendor
+from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, travel, vendor, youtube_chat
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -519,6 +519,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         return stats
     remote.ensure_started(log=_log)
     remote.bind(hard_stop, pause)          # stop / pause / reprendre Telegram appliques des reception
+    youtube_chat.ensure_started(log=_log)  # 18/10 : commandes « ! » du chat YouTube en direct (youtube.json)
     # 23/09 : config EFFECTIVE et source de chaque reglage (le panneau CET ecrasait le panneau Windows en silence)
     _log(f'config : {CFG.summary()}')
     _log(f'transport : {travel.summary()}')
