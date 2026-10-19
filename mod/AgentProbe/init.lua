@@ -4494,14 +4494,52 @@ function AgentV8Col(r, g, b, a)
     if v >= 2147483648 then v = v - 4294967296 end   -- entier signe 32 bits (meme motif binaire pour ImU32)
     return v
 end
+-- 19/10 : CET d Olivier n a pas GetBackgroundDrawList -> repli : fenetre plein ecran transparente (sans entree ni fond)
+-- et sa liste de dessin. Les fonctions de dessin presentes sont journalisees une fois (diagnostic).
+function AgentV8Probe()
+    if AgentV8.probed then return end
+    AgentV8.probed = true
+    local names = {}
+    pcall(function() for k, _ in pairs(ImGui) do if tostring(k):find('Draw') then names[#names + 1] = tostring(k) end end end)
+    table.sort(names)
+    pcall(journal, 'HUD V-800 : fonctions de dessin ImGui disponibles : ' .. (#names > 0 and table.concat(names, ', ') or 'AUCUNE'))
+end
 function AgentDrawV800(e, d, kills)
     if type(e) ~= 'table' then return end
     d = type(d) == 'table' and d or {}
     local okR, W, H = pcall(GetDisplayResolution)
     if not (okR and W and H and W > 0 and H > 0) then return end
-    local dl
-    local okB, bg = pcall(function() return ImGui.GetBackgroundDrawList() end)
-    if okB and bg then dl = bg else error('GetBackgroundDrawList indisponible') end
+    AgentV8Probe()
+    for _, getter in ipairs({ 'GetBackgroundDrawList', 'GetForegroundDrawList' }) do
+        if ImGui[getter] then
+            local okB, bg = pcall(ImGui[getter])
+            if okB and bg then return AgentV8Body(bg, W, H, e, d, kills) end
+        end
+    end
+    if not ImGui.GetWindowDrawList then error('aucune liste de dessin ImGui (ni arriere-plan, ni fenetre)') end
+    local flags = 0
+    for _, n in ipairs({ 'NoTitleBar', 'NoResize', 'NoMove', 'NoScrollbar', 'NoScrollWithMouse', 'NoCollapse', 'NoSavedSettings',
+                         'NoInputs', 'NoBackground', 'NoFocusOnAppearing', 'NoBringToFrontOnFocus', 'NoNav' }) do
+        local f = ImGuiWindowFlags[n]
+        if f then flags = (bit and bit.bor) and bit.bor(flags, f) or (flags + f) end
+    end
+    ImGui.SetNextWindowPos(0, 0, ImGuiCond.Always)
+    ImGui.SetNextWindowSize(W, H, ImGuiCond.Always)
+    ImGui.PushStyleColor(ImGuiCol.WindowBg, 0, 0, 0, 0)
+    ImGui.PushStyleColor(ImGuiCol.Border, 0, 0, 0, 0)
+    local nv = 0
+    if ImGuiStyleVar.WindowBorderSize then ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0.0); nv = nv + 1 end
+    if ImGuiStyleVar.WindowPadding then ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, 0.0, 0.0); nv = nv + 1 end
+    local ok, err = true, nil
+    if ImGui.Begin('##agentv800', flags) then
+        ok, err = pcall(function() AgentV8Body(ImGui.GetWindowDrawList(), W, H, e, d, kills) end)
+    end
+    ImGui.End()
+    if nv > 0 then ImGui.PopStyleVar(nv) end
+    ImGui.PopStyleColor(2)
+    if not ok then error(err) end
+end
+function AgentV8Body(dl, W, H, e, d, kills)
     local u = H / 1080
     local M = 56 * u
     local now, clk = os.time(), os.clock()
