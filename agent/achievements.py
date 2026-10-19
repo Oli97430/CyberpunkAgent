@@ -105,7 +105,8 @@ def start(log=print) -> None:
     if r is None:
         log('[succes] statut Steam illisible (cache local absent) : on joue quand meme')
         return
-    _STATE.update(mtime=r['mtime'], unlocked=set(r['unlocked']), names=r['names'], t=time.perf_counter())
+    _STATE.update(mtime=r['mtime'], unlocked=set(r['unlocked']), names=r['names'], t=time.perf_counter(),
+                  n0=len(r['unlocked']))      # 19/10 : nombre au debut de la session (bilan : +n cette session)
     tot = len(r['names'])
     left = [a for a in r['names'] if a not in r['unlocked'] and a not in PL and a not in PASSED]
     for aid, lab in (('Roleplayer', 'STANISLAVSKI'), ('GunKata', 'GUN FU'), ('MustBeTheRats', 'SUREMENT DES RATS'),

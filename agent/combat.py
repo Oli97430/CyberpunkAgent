@@ -117,7 +117,9 @@ def quickhack_best(log=print, want=None) -> str | None:
     # / cyberware iconique chez ce joueur -> plus de F d ouverture. Repli : une fois la touche d interaction (selectChoice).
     qh, st_q, nudged = None, None, False
     t0 = time.perf_counter()
-    while time.perf_counter() - t0 < 1.4:
+    # 19/10 : en DLSS 5 (~16 fps, images jusqu a 350 ms) le panneau ne s ouvrait jamais en 1,4 s (20 fois sur une session) :
+    # fenetre de 2,4 s, 2e appui a 1,3 s
+    while time.perf_counter() - t0 < 2.4:
         st_q = motion.read_state() or st_q
         qh = (st_q or {}).get('qh')
         if qh and qh.get('open') and qh.get('list'):
@@ -125,7 +127,7 @@ def quickhack_best(log=print, want=None) -> str | None:
         # 12/10 : OpenQuickHackPanel = touche d interaction du joueur (inputUserMappings.xml:650, overridableUI selectChoice ;
         # chez Olivier E -- F est son cyberware iconique) : appui des 0,3 s, un 2e a 0,9 s si le panneau reste ferme
         el_q = time.perf_counter() - t0
-        if (nudged is False and el_q > 0.3) or (nudged == 1 and el_q > 0.9 and not (qh and qh.get('open'))):
+        if (nudged is False and el_q > 0.3) or (nudged == 1 and el_q > 1.3 and not (qh and qh.get('open'))):
             nudged = 1 if nudged is False else 2
             kbm.act('interact', 0.1)
         time.sleep(0.05)

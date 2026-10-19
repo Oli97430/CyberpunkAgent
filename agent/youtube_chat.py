@@ -352,6 +352,8 @@ def _loop(log, put) -> None:
         try:
             vid = find_live_video(cfg)
             if not vid:
+                if STATUS.get('error') != 'aucun direct en cours':     # 19/10 : dit une fois (avant : silence total)
+                    log(f"  [youtube] aucun direct en cours sur {cfg.get('channel') or cfg.get('channel_id') or cfg.get('video_id')} : nouvel essai chaque minute")
                 STATUS.update(video_id=None, error='aucun direct en cours')
                 _banner(False)
                 time.sleep(60.0); continue

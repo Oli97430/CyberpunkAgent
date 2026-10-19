@@ -251,17 +251,25 @@ def _session_report(stats: dict, t0: float, money_start, ach_start: int | None =
     mins = (time.perf_counter() - t0) / 60.0
     eddies = (inventory.MONEY - money_start) if money_start is not None else None
     ach = achievements._STATE.get('unlocked')
+    n0 = achievements._STATE.get('n0', ach_start)   # 19/10 : ach_start etait pris AVANT la lecture Steam -> « +7 » faux
     lines = [f'BILAN DE SESSION ({mins:.0f} min)',
              f"- combats : {stats.get('combats', 0)} ; ennemis neutralises : ~{combat.KILLS[0]}",
              f"- morts : {stats.get('morts', 0)}" + (f" ; revanches : {stats['revanches']}" if stats.get('revanches') else ''),
              f"- objets lootes : {stats.get('loot', 0)}" + (f' ; eddies gagnes : {eddies:+}' if eddies is not None else ''),
              f"- distance parcourue : {stats.get('km', 0.0):.1f} km",
-             (f"- succes Steam : {len(ach)}" + (f' (+{len(ach) - ach_start} cette session)' if ach_start is not None else ''))
+             (f"- succes Steam : {len(ach)}" + (f' (+{len(ach) - n0} cette session)' if n0 is not None else ''))
              if ach is not None else '- succes Steam : inconnus']
     if youtube_chat.CHAT_STATS['orders'] or stats.get('missions_du_chat'):
         lines.append(f"- chat : {youtube_chat.CHAT_STATS['orders']} ordre(s) suivi(s), {stats.get('missions_du_chat', 0)} mission(s) choisie(s)")
     if clips.STATUS['clips']:
         lines.append(f"- clips enregistres : {clips.STATUS['clips']}" + (f" ; Shorts : {clips.STATUS['shorts']}" if clips.STATUS.get('shorts') else ''))
+    try:
+        from . import sounds
+        lines.append(f"- chat YouTube : " + (f"direct {youtube_chat.STATUS['video_id']}, {youtube_chat.STATUS['messages']} message(s) lu(s)"
+                                             if youtube_chat.STATUS.get('video_id') else f"pas de direct trouve ({youtube_chat.STATUS.get('error') or 'non configure'})")
+                     + f" ; sons du HUD joues : {sounds.STATUS['played']}" + (f" (erreur : {sounds.STATUS['error']})" if sounds.STATUS.get('error') else ''))
+    except Exception:
+        pass
     if stats.get('fetes') or youtube_chat.STATUS.get('soutiens'):
         lines.append(f"- soutiens du chat : {youtube_chat.STATUS.get('soutiens', 0)} ; fetes de V : {stats.get('fetes', 0)}")
     try:
