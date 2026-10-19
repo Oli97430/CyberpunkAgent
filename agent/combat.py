@@ -1461,6 +1461,15 @@ def loot_around(stop=None, log=print, radius_m: float = 20.0, max_items: int = 8
             break
         tried += 1
         seen.add(key)
+        # 19/10 (session 15:14 : ~45 marches « bloque » vers des objets derriere un comptoir / un grillage) : a moins de
+        # 5,5 m on tente d abord le loot par script (sans marcher) ; on ne marche que s il echoue
+        if o['d'] <= 5.5 and o.get('cls') != 'corps':
+            from . import nav
+            rl0 = nav._wait(nav._send({'cmd': 'loot', 'x': o['x'], 'y': o['y'], 'z': o.get('z')}), timeout=4.0)
+            if rl0 and rl0.get('ok') and rl0.get('transferes'):
+                done += 1
+                log(f"  [loot]   script d abord (a {o['d']:.1f} m) : {rl0.get('cls')} -> {rl0.get('transferes')} objet(s) {rl0.get('noms') or ''}")
+                continue
         old = motion.ARRIVE_M; motion.ARRIVE_M = 1.3
         try:
             r = motion.walk_to(o['x'], o['y'], timeout=12.0, stop=stop)
