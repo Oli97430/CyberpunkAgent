@@ -36,6 +36,11 @@ def _scottie_gap(pts: list, log=print) -> dict | None:
         pass
     _pick_n[0] += 1
     n = len(pts)
+    try:
+        from . import achievements as _a
+        _a.set_progress('GetMeThereScottie', 'GRAND VOYAGEUR', n, SCOTTIE_N)
+    except Exception:
+        pass
     if n >= SCOTTIE_N or _pick_n[0] % 3 == 0:
         return None
     import math

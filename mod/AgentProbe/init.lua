@@ -4513,6 +4513,31 @@ function AgentDrawSay(d)
     ImGui.End()
     ImGui.PopStyleColor(3)
 end
+-- 19/10 TABLEAU DES SUCCES (Olivier : « 2 ») : total Steam + objectifs en cours, en haut a droite. Globale.
+function AgentDrawGoals(d)
+    if type(d) ~= 'table' or type(d.goals) ~= 'table' or #d.goals == 0 then return end
+    local okR, W, H = pcall(GetDisplayResolution)
+    if not (okR and W and H and W > 0) then return end
+    local flags = 0
+    for _, n in ipairs({ 'NoTitleBar', 'NoResize', 'AlwaysAutoResize', 'NoCollapse', 'NoScrollbar', 'NoFocusOnAppearing', 'NoInputs', 'NoMove', 'NoSavedSettings' }) do
+        local f = ImGuiWindowFlags[n]
+        if f then flags = (bit and bit.bor) and bit.bor(flags, f) or (flags + f) end
+    end
+    AgentGoalsW = AgentGoalsW or 300
+    ImGui.SetNextWindowPos(math.max(0, W - AgentGoalsW - 20), H * 0.30, ImGuiCond.Always)
+    ImGui.PushStyleColor(ImGuiCol.WindowBg, 0.05, 0.0, 0.0, 0.55)
+    ImGui.PushStyleColor(ImGuiCol.Border, 0.95, 0.12, 0.08, 0.85)
+    ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.17, 0.10, 1.0)
+    if ImGui.Begin('##agentgoals', flags) then
+        for i, line in ipairs(d.goals) do
+            if i > 6 then break end
+            ImGui.Text((i == 1 and '' or '- ') .. tostring(line))
+        end
+        pcall(function() local ww = ImGui.GetWindowSize(); if ww and ww > 50 then AgentGoalsW = ww end end)
+    end
+    ImGui.End()
+    ImGui.PopStyleColor(3)
+end
 -- 18/10 BANDEAU DU CHAT YOUTUBE (Olivier : « ou alors en bandeau ») : commandes du chat en bas de l ecran, visibles dans le
 -- direct (le HUD est dessine dans l image du jeu) ; derniere commande acceptee 20 s. Globale : pas d upvalue de plus.
 function AgentDrawBanner(d)
@@ -4583,6 +4608,7 @@ local function drawHud()
     local okL, errL = pcall(drawLocks)           -- apres les styles du HUD : les cadres ont les leurs
     pcall(AgentDrawBanner, hudData)              -- 18/10 : bandeau des commandes du chat YouTube
     pcall(AgentDrawSay, hudData)                 -- 19/10 : V commente ses decisions en grand
+    pcall(AgentDrawGoals, hudData)               -- 19/10 : tableau des succes (haut droite)
     if not okL and tostring(errL) ~= hudLastErr then hudLastErr = tostring(errL); journal('HUD cadres : ' .. hudLastErr) end
 end
 registerHotkey('agent_hud_toggle', 'Afficher / masquer le HUD de V', function() hudShow = not hudShow end)

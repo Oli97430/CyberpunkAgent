@@ -267,6 +267,11 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
     empty = {a['a'] for a in (cw.get('areas') or []) if a.get('n') == 0 and (a.get('slots') or 0) > 0}
     avail = cw.get('avail')
     if cw.get('areas'):
+        try:
+            from . import achievements as _a
+            _a.set_progress('Cyberjunkie', 'T-2077', sum(1 for a in cw['areas'] if (a.get('n') or 0) > 0), 10)
+        except Exception:
+            pass
         log(f"  [charcudoc] zones vides : {sorted(empty) or 'aucune'} ; capacite libre {avail}")
     if free:
         cyber = [it for it in cyber if not it.get('area') or free.get(it['area'], 1) > 0]

@@ -129,6 +129,12 @@ def manage(log=print) -> dict:
     try:                                                # 12/10 grenade adaptee : familles possedees
         from . import combat as _cb
         _gh = {it['gk'] for it in items if it.get('type') == 'Gad_Grenade' and it.get('gk')}
+        _cb.HAS_KEREN = any(it.get('equipped') and 'kerenzikov' in str(it.get('name') or '').lower() for it in items)   # 19/10
+        from . import achievements as _ach
+        _ach.set_progress('MaxPain', 'TU ES DEJA MORT', None, None, 'KERENZIKOV POSE' if _cb.HAS_KEREN else 'KERENZIKOV A ACHETER')
+        _cw = nav._wait(nav._send({'cmd': 'cw_status'}), timeout=2.0) or {}
+        if _cw.get('areas'):
+            _ach.set_progress('Cyberjunkie', 'T-2077', sum(1 for a in _cw['areas'] if (a.get('n') or 0) > 0), 10)
         if _gh:
             _cb.GREN_HAVE = _gh
     except Exception:

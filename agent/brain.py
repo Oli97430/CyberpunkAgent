@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, travel, vendor, youtube_chat
+from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -1373,6 +1373,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             quests.marker_result(_v[1], _v[2], _v[3], False, 'inaccessible a pied', z=_v[4], log=_log)
                     if _arr or time.perf_counter() - alt_target['t0'] > 900:
                         _used = None
+                        if _arr and alt_target.get('text') == 'HuntForPsychoVariant' and not st.get('combat') \
+                                and not (stop is not None and stop.is_set()):
+                            # 19/10 : zone de traque -> fouille en spirale jusqu au contact (le psycho n est pas au centre)
+                            if psycho.search(alt_target['x'], alt_target['y'], alt_target.get('z'), stop=stop, log=_log):
+                                stats['cyberpsychos'] = stats.get('cyberpsychos', 0) + 1
+                                alt_target = None; plan.last_t = -99.0
+                                continue                                 # le combat prend le relais
                         if _arr and not st.get('combat') and not ((st.get('interact') or {}).get('choices')):
                             _used = False
                             if _approach_machine(alt_target['x'], alt_target['y'], dist, _log, stop):   # console / donneur de quete

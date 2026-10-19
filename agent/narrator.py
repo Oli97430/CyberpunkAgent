@@ -37,11 +37,14 @@ RULES: list[tuple[str, str]] = [
     (r'\[armes\] emplacement \d : .* -> « (.+?) »', 'CHANGEMENT D ARME : {0}.'),
     (r'\[exploration\] .* decouvrir « (.+?) »', 'AUCUNE MISSION ICI. J EXPLORE : {0}.'),
     (r'V fige par le jeu', 'SCENE EN COURS. J ATTENDS.'),
+    (r'\[cyberpsycho\] zone de traque', 'CYBERPSYCHO SIGNALE. TRAQUE EN COURS.'),
+    (r'\[cyberpsycho\] contact', 'CYBERPSYCHO LOCALISE. NEUTRALISATION.'),
+    (r'\[succes\] Tu es deja mort', 'KERENZIKOV ACTIVE. LE TEMPS RALENTIT.'),
     (r'quete de course .* passe a autre chose', 'COURSE DE RUE ? NEGATIF.'),
     (r'^objectif : (.+?)\s+\(marqueur', 'NOUVELLE MISSION : {0}'),
 ]
 # 19/10 (revue de securite) : regles ANCREES en debut de ligne (etiquette interne facultative : [vente], [conduite]...)
-_PREFIX = r'^(?:\[(?:vente|conduite|armes|charcudoc|exploration|vol|gouts|succes|combat|quetes)\]\s*)?'
+_PREFIX = r'^(?:\[(?:vente|conduite|armes|charcudoc|exploration|vol|gouts|succes|combat|quetes|cyberpsycho)\]\s*)?'
 _RX = [(re.compile(p if p.startswith(('^', r'\[')) else _PREFIX + p), s) for p, s in RULES]
 _RX = [(re.compile('^' + rx.pattern) if not rx.pattern.startswith('^') else rx, s) for rx, s in _RX]
 # 19/10 (revue de securite) : lignes dont le texte vient de l EXTERIEUR (chat YouTube, Telegram, SMS, dialogues, panneau,

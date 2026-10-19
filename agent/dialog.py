@@ -131,6 +131,9 @@ def hub_signature(d: dict) -> str:
     return str(d.get('title', '?')) + '|' + '|'.join(str(c) for c in (d.get('choices') or []))
 
 
+_LP_N = [0]   # 19/10 : repliques de parcours choisies cette session (succes Stanislavski)
+
+
 def answer_once(stop=None, log=print) -> dict | None:
     """Si un dialogue est ouvert : choisit, selectionne, confirme. Renvoie ce qui a ete fait.
     - ignore les choix INACTIFS (grises : le jeu les saute a la molette, F ne fait rien)
@@ -189,6 +192,12 @@ def answer_once(stop=None, log=print) -> dict | None:
     elif lp:
         # 12/10 : succes « Methode de Stanislavski » (10 choix lies au parcours de V) : la ligne de parcours d abord
         idx, source = lp[0], 'parcours de vie (succes)'
+        try:
+            from . import achievements as _a
+            _LP_N[0] += 1
+            _a.set_progress('Roleplayer', 'STANISLAVSKI', _LP_N[0], None, 'CETTE SESSION')
+        except Exception:
+            pass
     else:
         sub = [choices[i] for i in allowed]
         k = llm_choice(title, sub)

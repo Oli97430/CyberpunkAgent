@@ -108,6 +108,11 @@ def start(log=print) -> None:
     _STATE.update(mtime=r['mtime'], unlocked=set(r['unlocked']), names=r['names'], t=time.perf_counter())
     tot = len(r['names'])
     left = [a for a in r['names'] if a not in r['unlocked'] and a not in PL and a not in PASSED]
+    for aid, lab in (('Roleplayer', 'STANISLAVSKI'), ('GunKata', 'GUN FU'), ('MustBeTheRats', 'SUREMENT DES RATS'),
+                     ('IAmMaxTac', 'LA LOI C EST MOI'), ('MaxPain', 'TU ES DEJA MORT')):
+        if aid not in r['unlocked']:
+            PROGRESS.setdefault(aid, {'label': lab, 'cur': None, 'tot': None, 'note': ''})
+    publish()
     log(f"[succes] Steam {len(r['unlocked'])}/{tot} debloques ({len(PL)} Phantom Liberty hors jeu, {len(PASSED)} passe dans cette sauvegarde) ; "
         f"{len(left)} a gagner en jouant")
 
@@ -137,3 +142,39 @@ def status_text() -> str:
     if u is None:
         return 'succes Steam : statut inconnu'
     return f'succes Steam : {len(u)}/{len(names)} debloques'
+
+
+# ---- 19/10 TABLEAU DES SUCCES (HUD, en haut a droite) --------------------------------------------------------------
+PROGRESS: dict = {}          # id -> {'label': str, 'cur': int|None, 'tot': int|None, 'note': str}
+ORDER = ('GetMeThereScottie', 'Cyberjunkie', 'MaxPain', 'IAmMaxTac', 'GunKata', 'MustBeTheRats', 'Roleplayer')
+
+
+def set_progress(aid: str, label: str, cur: int | None = None, tot: int | None = None, note: str = '') -> None:
+    """Progression d un objectif ; un palier franchi est annonce par le narrateur."""
+    if aid in (_STATE.get('unlocked') or set()):
+        PROGRESS.pop(aid, None); publish(); return
+    old = PROGRESS.get(aid) or {}
+    PROGRESS[aid] = {'label': label, 'cur': cur, 'tot': tot, 'note': note}
+    if cur is not None and old.get('cur') is not None and cur > old['cur']:
+        try:
+            from . import narrator
+            narrator.say(f'PROGRES : {label} {cur}' + (f'/{tot}' if tot else '') + '.', key='progres ' + aid, force=True)
+        except Exception:
+            pass
+    publish()
+
+
+def publish() -> None:
+    try:
+        from . import hud
+        u, names = _STATE.get('unlocked'), _STATE.get('names') or {}
+        lines = [f'SUCCES STEAM {len(u)}/{len(names)}'] if u is not None else []
+        for aid in ORDER:
+            p = PROGRESS.get(aid)
+            if not p:
+                continue
+            val = (f" {p['cur']}/{p['tot']}" if p.get('cur') is not None and p.get('tot') else (f" {p['cur']}" if p.get('cur') is not None else ''))
+            lines.append(hud.ascii_up(p['label'] + val + (f" - {p['note']}" if p.get('note') else ''))[:42])
+        hud.update(goals=lines[:6])
+    except Exception:
+        pass

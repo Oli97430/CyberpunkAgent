@@ -410,6 +410,40 @@ def dodge(side: str) -> None:
         kbm.tap(side, 0.07); time.sleep(0.07); kbm.tap(side, 0.07)
 
 
+HAS_KEREN = False      # 19/10 : implant Kerenzikov pose (inventory.manage)
+KEREN_CD = 8.0
+
+
+def maxpain_wanted() -> bool:
+    """Succes « Tu es deja mort » (50 eliminations sous ralenti) pas encore debloque."""
+    try:
+        from . import achievements as _ach
+        return 'MaxPain' not in (_ach._STATE.get('unlocked') or set())
+    except Exception:
+        return True
+
+
+def keren_burst(e: dict, st: dict, side: str) -> int:
+    """19/10 (succes « Tu es deja mort ») : Kerenzikov = viser PENDANT une esquive -> ralenti ; 3 tirs pendant le ralenti.
+    Renvoie le nombre de tirs."""
+    kbm.hold(side); time.sleep(0.04)
+    if kbm.ACTIONS.get('dodge'):
+        kbm.act('dodge', 0.08)
+    else:
+        kbm.tap(side, 0.07); time.sleep(0.05); kbm.tap(side, 0.07)
+    kbm.mouse('right', True)                       # visee DANS l esquive : declenche le Kerenzikov
+    time.sleep(0.12)
+    kbm.release(side)
+    shots = 0
+    for _ in range(3):
+        s2 = motion.read_state(timeout=0.1) or st
+        aim_at(e, s2)
+        kbm.mouse_tap('left', 0.08); shots += 1
+        time.sleep(0.12)
+    kbm.mouse('right', False)
+    return shots
+
+
 def sprint_pass(e: dict, st: dict, side_sign: float, dur: float = 0.8) -> None:
     """Passe en SPRINT de biais (75 degres) autour de la cible : V regenere 60 % plus vite en sprintant (perk).
     On tourne d abord (boucle fermee sur le cap, 0,5 s max), puis W + sprint pendant dur, puis on relache."""
@@ -885,6 +919,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     wsync_fail = 0                                     # degainages sans effet (zone a mains nues, arme restreinte)
     blind_hacks, blind_hacks_t = 0, -99.0              # hacks « par defaut » de suite (liste du panneau illisible) : pause, pas coupure
     qh_skip_t, qh_fail = -99.0, 0                      # 12/10 : quickhack reporte (cible pas sous le reticule) : message / echecs
+    t_keren = -99.0                                    # 19/10 : derniere rafale Kerenzikov
     mode = 'melee'; shots = 0
     blocked_t, blocked_log_t = None, -99.0   # 12/10 : pas de ligne de tir depuis... / dernier message
     adv_t0, adv_d0, adv_block = None, 0.0, -1.0   # 12/10 : pompe hors de portee (avance verifiee)
@@ -1182,6 +1217,15 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                             blocked_t = None                            # nouveau cycle : decalage de l autre cote
                     seq = None; continue
                 blocked_t = None
+                if HAS_KEREN and holding_ranged and gap < 8 and 5.0 < e['d'] < 25.0 and now - t_keren > KEREN_CD                         and e.get('los') is not False and maxpain_wanted():
+                    # 19/10 : esquive + visee = Kerenzikov (ralenti) -> tirs (succes « Tu es deja mort »)
+                    side = 'D' if side == 'A' else 'A'
+                    n_k = keren_burst(e, st, side)
+                    t_keren = now; shots += n_k; stats['tirs'] = stats.get('tirs', 0) + n_k
+                    stats['kerenzikov'] = stats.get('kerenzikov', 0) + 1
+                    if stats['kerenzikov'] in (1, 5, 20):
+                        log(f"  [succes] Tu es deja mort : rafale Kerenzikov n {stats['kerenzikov']} sur cible a {e['d']:.0f} m")
+                    seq = None; continue
                 cur_w = ARSENAL.get(st.get('wk')) or {}
                 sg_far = (gap < 4 and holding_ranged and FAMILY.get(cur_w.get('type') or '') == 'shotgun'
                           and e['d'] > 1.2 * _rng(cur_w) and not high and now >= adv_block
