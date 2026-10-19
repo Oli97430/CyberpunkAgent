@@ -1281,6 +1281,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             continue
                         if tr.get('ok'):
                             rr = vendor.ripperdoc_shop(log=_log)
+                            if rr.get('stock_cyber') is not None or rr.get('useless'):
+                                vendor.ripper_stock_seen(rip, int(rr.get('stock_cyber') or 0), log=_log)
                             _log(f"charcudoc : {rr.get('poses', 0)} implant(s) pose(s) pour {rr.get('eddies', 0)} eddies ({rr.get('reason') or 'ok'})")
                             stats['implants'] = stats.get('implants', 0) + rr.get('poses', 0)
                             if rr.get('useless'):
@@ -1289,9 +1291,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             if not (stop is not None and stop.is_set()):
                                 vendor.ripper_result(int(rr.get('poses') or 0), rr.get('useless') or rr.get('reason') or 'aucun implant abordable', log=_log)
                         else:
-                            _log(f"charcudoc : non atteint ({tr.get('reason')})"); vendor.mark_failed(rip, log=_log)
-                            if not (stop is not None and stop.is_set()):
-                                vendor.ripper_result(0, f"non atteint ({tr.get('reason')})", log=_log)
+                            _log(f"charcudoc : non atteint ({tr.get('reason')}) : un autre charcudoc dans 5 min"); vendor.mark_failed(rip, log=_log)
+                            # 19/10 : un charcudoc injoignable n est pas « sans implant » : pas de suspension de 6 h, on essaie un
+                            # AUTRE charcudoc (celui-ci est ecarte 15 min, puis 1 jour au 2e echec) dans 5 min
+                            last_ripper_t = time.perf_counter() - 1500.0
                         continue
 
                 # 3a-quinquies. APPARENCE : une fois par mois, si un appartement de V est proche, passage au miroir

@@ -9,5 +9,5 @@
 !charcudoc — aller se faire poser des implants
 !soigne (ou !heal) — se soigner
 
-⏱️ Une commande par personne et par minute, une commande prise en compte toutes les 15 secondes pour tout le chat : sois rapide !
-📺 Ta commande s'affiche à l'écran dans le HUD de V (« chat : ton pseudo → commande »).
+🗳️ C'EST UN VOTE : toutes les 30 secondes, V exécute la commande la plus demandée par le chat. Une voix par personne (tu peux changer d'avis pendant le tour).
+📺 Le décompte s'affiche en direct dans le bandeau en bas de l'écran (« VOTE 18 S : EXPLORE 4 . ATTAQUE 2 »).

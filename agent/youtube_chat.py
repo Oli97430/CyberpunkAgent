@@ -29,8 +29,54 @@ MOD_CMDS = VIEWER_CMDS | {'stop', 'pause', 'reprendre', 'courage', 'style', 'agg
 ALIASES = {'attack': 'attaque', 'fight': 'attaque', 'quest': 'objectif', 'quete': 'objectif', 'explorer': 'explore',
            'vendre': 'marchand', 'shop': 'marchand', 'heal': 'soigne', 'soin': 'soigne', 'ripperdoc': 'charcudoc',
            'autrequete': 'changer_quete', 'skip': 'changer_quete', 'change': 'changer_quete'}
-USER_CD, GLOBAL_CD = 60.0, 15.0
-BANNER = 'CHAT : !ATTAQUE  !OBJECTIF  !SKIP  !EXPLORE  !SHOP  !CHARCUDOC  !HEAL   (1 COMMANDE / MIN)'
+VOTE_S = 30.0          # 19/10 : vote du chat -- la commande la plus demandee en 30 s est executee
+BANNER = 'VOTE DU CHAT : !ATTAQUE  !OBJECTIF  !SKIP  !EXPLORE  !SHOP  !CHARCUDOC  !HEAL   (1 VOTE / PERSONNE, 30 S)'
+
+
+class Vote:
+    """Vote du chat (19/10, Olivier) : chaque spectateur a UNE voix par tour (il peut changer d avis), le tour dure VOTE_S
+    a partir de la premiere voix ; egalite -> la commande qui a recu sa premiere voix le plus tot."""
+
+    def __init__(self, duration: float = VOTE_S):
+        self.duration = duration
+        self.t0: float | None = None
+        self.voices: dict[str, str] = {}
+        self.first: dict[str, float] = {}
+
+    def add(self, author: str, cmd: str, now: float) -> None:
+        if self.t0 is None:
+            self.t0 = now
+        self.voices[author] = cmd
+        self.first.setdefault(cmd, now)
+
+    def tally(self) -> list[tuple[str, int]]:
+        cnt: dict[str, int] = {}
+        for c in self.voices.values():
+            cnt[c] = cnt.get(c, 0) + 1
+        return sorted(cnt.items(), key=lambda kv: (-kv[1], self.first.get(kv[0], 0.0)))
+
+    def remaining(self, now: float) -> float:
+        return 0.0 if self.t0 is None else max(0.0, self.duration - (now - self.t0))
+
+    def close_if_due(self, now: float) -> tuple[str, int, int] | None:
+        """(gagnant, voix, votants) si le tour est fini, sinon None ; remet le vote a zero."""
+        if self.t0 is None or now - self.t0 < self.duration:
+            return None
+        t = self.tally()
+        res = (t[0][0], t[0][1], len(self.voices)) if t else None
+        self.t0, self.voices, self.first = None, {}, {}
+        return res
+
+
+def _banner_tally(v: 'Vote', now: float) -> None:
+    try:
+        from . import hud
+        t = v.tally()
+        if t:
+            hud.update(banner_last=hud.ascii_up(f"VOTE {v.remaining(now):.0f} S : " + ' . '.join(f'{c} {n}' for c, n in t[:4]))[:70],
+                       banner_last_t=int(time.time()))
+    except Exception:
+        pass
 
 
 def _banner(on: bool, last: str | None = None) -> None:
@@ -156,8 +202,7 @@ def to_command(text: str, mod: bool) -> str | None:
 
 def _loop(log, put) -> None:
     t_start = time.time()
-    last_user: dict[str, float] = {}
-    last_global = [0.0]
+    vote = Vote()
     seen: set[str] = set()
     while True:
         cfg = _cfg()
@@ -185,9 +230,11 @@ def _loop(log, put) -> None:
                     cmd = to_command(m['text'], m['mod'])
                     if not cmd:
                         continue
-                    if not m['mod'] and (now - last_user.get(m['author'], 0.0) < USER_CD or now - last_global[0] < GLOBAL_CD):
-                        continue                                  # rythme : on ignore sans bruit
-                    last_user[m['author']] = now; last_global[0] = now
+                    if not m['mod']:
+                        vote.add(m['author'], cmd, now)          # spectateur : une voix (modifiable) pour ce tour de vote
+                        log(f"  [youtube] vote de {m['author']} : « {cmd} »")
+                        _banner_tally(vote, now)
+                        continue
                     STATUS['accepted'] += 1; STATUS['last'] = f"{m['author']} : {cmd}"
                     log(f"  [youtube] {m['author']}{' (mod)' if m['mod'] else ''} -> « {cmd} »")
                     try:
@@ -197,6 +244,20 @@ def _loop(log, put) -> None:
                         pass
                     _banner(True, f"{m['author'][:20]} -> {cmd}")
                     put(cmd, m)
+                res = vote.close_if_due(time.time())
+                if res:
+                    w, n, voters = res
+                    STATUS['accepted'] += 1; STATUS['last'] = f'vote : {w} ({n}/{voters})'
+                    log(f"  [youtube] VOTE : « {w} » l emporte ({n} voix sur {voters} votant(s))")
+                    try:
+                        from . import hud
+                        hud.event(f'vote du chat : {w} ({n} voix)')
+                    except Exception:
+                        pass
+                    _banner(True, f'LE CHAT A VOTE : {w} ({n} voix)')
+                    put(w, {'author': 'vote', 'mod': False})
+                elif vote.t0 is not None:
+                    _banner_tally(vote, time.time())
                 if len(seen) > 5000:
                     seen = set(list(seen)[-2000:])
                 time.sleep(4.0)                                     # meme jeton de rechargement (voir _initial)

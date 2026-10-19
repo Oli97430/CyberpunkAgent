@@ -122,6 +122,32 @@ def ripper_result(posed: int, reason: str = '', log=print) -> None:
         log(f'  [charcudoc] memoire non sauvee : {e}')
 
 
+RIPPER_GOOD_FILE = CFG.log_file.parent / 'ripperdocs_known.json'   # 19/10 : charcudocs atteints AVEC du cyberware en stock
+_good: dict | None = None
+
+
+def _good_state() -> dict:
+    global _good
+    if _good is None:
+        try:
+            d = json.loads(RIPPER_GOOD_FILE.read_text(encoding='utf-8'))
+            _good = d if isinstance(d, dict) else {}
+        except Exception:
+            _good = {}
+    return _good
+
+
+def ripper_stock_seen(v: dict, n_cyber: int, log=print) -> None:
+    """Memorise le stock de cyberware vu chez ce charcudoc (0 = inutile, deja ecarte 7 jours par mark_useless)."""
+    g = _good_state()
+    g[_key(v)] = {'t': time.time(), 'cyber': int(n_cyber), 'name': v.get('name') or v.get('variant')}
+    try:
+        RIPPER_GOOD_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RIPPER_GOOD_FILE.write_text(json.dumps(g, ensure_ascii=False, indent=1), encoding='utf-8')
+    except Exception as e:
+        log(f'  [charcudoc] memoire des stocks non sauvee : {e}')
+
+
 def mark_failed(v: dict, log=print) -> None:
     k = (round(v.get('x', 0)), round(v.get('y', 0)))
     _failed[k] = time.perf_counter()
@@ -142,6 +168,12 @@ def pick_vendor(vendors: list[dict], prefer: str | None = None) -> dict | None:
     if prefer:
         pref = [v for v in near if prefer in (v.get('variant') or '').lower()]
         if pref:
+            if prefer == 'ripper':
+                # 19/10 : d abord les charcudocs ou V a deja VU du cyberware (le voyage rapide rend la distance secondaire)
+                g = _good_state()
+                good = [v for v in pref if (g.get(_key(v)) or {}).get('cyber', 0) > 0]
+                if good:
+                    return min(good, key=lambda v: v['dist'])
             return min(pref, key=lambda v: v['dist'])
     return min(near, key=lambda v: v['dist'])
 
@@ -302,7 +334,7 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
             # une fraction du prix : la revente immediate perdait ~80 %), il servira plus tard
             spent += int(r.get('total') or price)
             log(f"  [charcudoc] « {it.get('name')} » ne se pose pas ({(er or {}).get('method')}) : conserve dans l inventaire")
-    return {'ok': True, 'poses': posed, 'eddies': spent, 'reste': money}
+    return {'ok': True, 'poses': posed, 'eddies': spent, 'reste': money, 'stock_cyber': len(cyber)}
 
 
 def buy_supplies(items: list[dict], log=print) -> dict:

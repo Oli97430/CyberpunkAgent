@@ -610,6 +610,17 @@ def _watch_drive(tx, ty, st, t0, stop=None, log=print, relaunch=None, relaunches
                 return {'ok': False, 'reason': why, 'seconds': time.perf_counter() - t0, 'dist': d}
             continue
         dxr = s2.get('dx') or {}
+        # 19/10 (16/10 : mort en descendant de voiture au milieu de 6 ennemis) : 3 ennemis ou plus a < 60 m pres de
+        # l arrivee -> V s arrete ICI et descend avant d entrer dans le groupe (il finit a pied, en discretion)
+        foes = [e for e in (s2.get('enemies') or []) if not e.get('dead') and not e.get('police') and float(e.get('d') or 999) < 60.0]
+        if len(foes) >= 3 and d < 400.0:
+            if on_flag or own_cmd:
+                _stolen_stop()
+            elif kbm.ACTIONS.get('autodrive') and _AUTODRIVE_ON['left_on']:
+                autodrive_toggle(); _AUTODRIVE_ON['left_on'] = False
+            log(f'  [conduite] {len(foes)} ennemis a moins de 60 m (le plus proche a {min(float(e.get("d") or 999) for e in foes):.0f} m) : '
+                f'V s arrete a {d:.0f} m de l objectif et descend avant d entrer dans le groupe')
+            return {'ok': True, 'reason': 'ennemis a l arrivee', 'seconds': time.perf_counter() - t0, 'dist': d}
         if own_cmd and dxr.get('on') and dxr.get('fr') is True and dxr.get('dt') == 0 and time.perf_counter() - t0 > 6.0:
             # 12/10 (journal 14:31 : 980 m de balade, plus loin qu au depart) : autodrive SANS destination = roue libre
             _stolen_stop()
