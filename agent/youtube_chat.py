@@ -245,12 +245,61 @@ def _text(runs: list) -> str:
     return ''.join(out).strip()
 
 
+def _support(item: dict) -> dict | None:
+    """Soutien du chat -> {'kind': superchat|sticker|membre|cadeau, 'author', 'amount', 'text', ...} ; None sinon."""
+    for key, kind in (('liveChatPaidMessageRenderer', 'superchat'), ('liveChatPaidStickerRenderer', 'sticker'),
+                      ('liveChatMembershipItemRenderer', 'membre')):
+        it = item.get(key)
+        if it:
+            return {'id': it.get('id'), 'kind': kind, 'author': (it.get('authorName') or {}).get('simpleText') or '?',
+                    'amount': (it.get('purchaseAmountText') or {}).get('simpleText') or '',
+                    'text': _text((it.get('message') or {}).get('runs')), 'ts': int(it.get('timestampUsec') or 0) / 1e6, 'mod': False}
+    g = item.get('liveChatSponsorshipsGiftPurchaseAnnouncementRenderer')
+    if g:
+        h = ((g.get('header') or {}).get('liveChatSponsorshipsHeaderRenderer') or {})
+        n = re.search(r'\d+', _text((h.get('primaryText') or {}).get('runs')) or '')
+        return {'id': g.get('id'), 'kind': 'cadeau', 'author': (h.get('authorName') or {}).get('simpleText') or '?',
+                'amount': (n.group(0) + ' abonnement(s)') if n else '', 'text': '',
+                'ts': int(g.get('timestampUsec') or 0) / 1e6, 'mod': False}
+    return None
+
+
+SUPPORT_SAY = {'superchat': 'MERCI {who} POUR LE SUPER CHAT ({amt}) ! ON FETE CA.', 'sticker': 'MERCI {who} ({amt}) ! ON FETE CA.',
+               'membre': 'BIENVENUE DANS L EQUIPE, {who} !', 'cadeau': 'MERCI {who} POUR LES CADEAUX ({amt}) !'}
+
+
+def on_support(m: dict, log, put) -> None:
+    """Soutien : remerciement en grand (pseudo et montant nettoyes), celebration de V ; un Super Chat qui contient une
+    commande « ! » est execute TOUT DE SUITE (sans vote)."""
+    from .narrator import clean
+    who = (clean(m['author'], 20) or 'TOI').upper()
+    amt = clean(m.get('amount') or '', 24).upper()
+    log(f"  [youtube] soutien ({m['kind']}) de {m['author'][:30]} {m.get('amount') or ''}")
+    STATUS['soutiens'] = STATUS.get('soutiens', 0) + 1
+    try:
+        from . import narrator
+        narrator.say(SUPPORT_SAY[m['kind']].format(who=who, amt=amt).replace(' ()', ''), force=True)
+    except Exception:
+        pass
+    cmd = to_command(m.get('text') or '', False) if m['kind'] == 'superchat' else None
+    put('celebre', {'author': 'soutien', 'mod': False})
+    if cmd:
+        log(f"  [youtube] commande du Super Chat executee sans vote : « {cmd} »")
+        count_order(m['author'])
+        put(cmd, {'author': m['author'], 'mod': False})
+
+
 def parse_actions(data: dict) -> tuple[list[dict], str | None, float]:
     """Reponse get_live_chat -> (messages, jeton suivant, attente en s)."""
     cc = ((data.get('continuationContents') or {}).get('liveChatContinuation') or {})
     msgs = []
     for a in cc.get('actions') or []:
-        it = ((a.get('addChatItemAction') or {}).get('item') or {}).get('liveChatTextMessageRenderer')
+        item = ((a.get('addChatItemAction') or {}).get('item') or {})
+        sup = _support(item)                     # 19/10 : Super Chat / sticker / nouveau membre / abonnements offerts
+        if sup:
+            msgs.append(sup)
+            continue
+        it = item.get('liveChatTextMessageRenderer')
         if not it:
             continue
         badges = ' '.join(str(((b.get('liveChatAuthorBadgeRenderer') or {}).get('icon') or {}).get('iconType') or '')
@@ -310,6 +359,9 @@ def _loop(log, put) -> None:
                         continue
                     seen.add(m['id'])
                     STATUS['messages'] += 1
+                    if m.get('kind'):
+                        on_support(m, log, put)
+                        continue
                     if poll_vote(m['author'], m['text']):           # 19/10 : !1 !2 !3 pendant un sondage de mission
                         log(f"  [youtube] voix de mission de {m['author']} : {m['text'].strip()}")
                         continue

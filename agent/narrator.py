@@ -13,6 +13,7 @@ import time
 from . import hud
 
 _last = {'t': 0.0, 'by_key': {}}
+LAST = {'text': '', 't': 0.0}     # 19/10 : derniere phrase affichee (legende des Shorts)
 MIN_GAP, SAME_GAP = 4.0, 20.0
 
 # (motif du journal, phrase ; {0} = premier groupe capture)
@@ -39,7 +40,7 @@ RULES: list[tuple[str, str]] = [
     (r'V fige par le jeu', 'SCENE EN COURS. J ATTENDS.'),
     (r'\[cyberpsycho\] zone de traque', 'CYBERPSYCHO SIGNALE. TRAQUE EN COURS.'),
     (r'\[cyberpsycho\] contact', 'CYBERPSYCHO LOCALISE. NEUTRALISATION.'),
-    (r'\[succes\] Tu es deja mort', 'KERENZIKOV ACTIVE. LE TEMPS RALENTIT.'),
+    (r'\[succes\] Tu es deja mort : rafale', 'KERENZIKOV ACTIVE. LE TEMPS RALENTIT.'),
     (r'quete de course .* passe a autre chose', 'COURSE DE RUE ? NEGATIF.'),
     (r'\[revanche\] retour', 'REVANCHE. J AI DEJA PERDU ICI. PAS CETTE FOIS.'),
     (r'\[quetes\] mission choisie par le chat : « (.+?) »', 'ORDRE DU CHAT : {0}. EN ROUTE.'),
@@ -72,6 +73,7 @@ def say(text: str, key: str | None = None, force: bool = False) -> bool:
     if len(_last['by_key']) > 200:
         _last['by_key'].clear()
     hud.update(say=hud.ascii_up(text)[:90], say_t=int(now))
+    LAST.update(text=hud.ascii_up(text)[:90], t=now)
     return True
 
 

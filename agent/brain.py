@@ -32,7 +32,7 @@ _DIRECTIVE_KEYWORDS = frozenset({
     'attaque', 'attaquer', 'combat', 'objectif', 'quete', 'marchand', 'vendre', 'boutique',
     'charcudoc', 'ripperdoc', 'implant', 'explore', 'explorer', 'balade', 'changer_quete', 'autre_quete',
     'status', 'etat', 'etat?', 'photo', 'screenshot', 'capture', 'niveau', 'soigne', 'stats',
-    'modeles', 'liste_modeles', 'modele_liste', 'hud', 'config', 'reglages', 'mission', 'missions', 'bilan',
+    'modeles', 'liste_modeles', 'modele_liste', 'hud', 'config', 'reglages', 'mission', 'missions', 'bilan', 'celebre',
 })
 _DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ', 'modele ', 'mission_choix ')
 _STOP_WORDS = ('stop', 'arret', 'arrete-toi', 'arrete toi')
@@ -141,8 +141,9 @@ def _log(msg: str) -> None:
     try:
         from . import narrator                     # 19/10 : V commente ses decisions en grand sur le HUD
         narrator.feed(str(msg).strip())
-        from . import clips                        # 19/10 : moments forts -> clip OBS (tampon de rediffusion)
+        from . import clips, features              # 19/10 : moments forts -> clip OBS ; fonctions vues en jeu
         clips.feed(str(msg).strip(), log=_log)
+        features.feed(str(msg).strip())
     except Exception:
         pass
     try:
@@ -231,7 +232,19 @@ def _tid(alt_target, q) -> tuple:
     return ('q', (q or {}).get('hash'), str((q or {}).get('text') or ''))
 
 
-def _session_report(stats: dict, t0: float, money_start, ach_start: int | None = None) -> str:
+def _celebrate() -> None:
+    """Petite fete sur place (aucune arme : pas de tirs en l air en ville -> police / passants) : 2 sauts, un tour
+    complet en deux demi-tours, accroupi-debout deux fois (le « salut » des joueurs)."""
+    for _ in range(2):
+        kbm.act('jump', 0.1); time.sleep(0.9)
+    st = motion.read_state() or {}
+    if st.get('yaw') is not None:
+        motion.turn_by(180.0, timeout=2.0); motion.turn_by(180.0, timeout=2.0)
+    for _ in range(2):
+        kbm.act('crouch', 0.08); time.sleep(0.45); kbm.act('crouch', 0.08); time.sleep(0.45)
+
+
+def _session_report(stats: dict, t0: float, money_start, ach_start: int | None = None, final: bool = False) -> str:
     """19/10 (Olivier : « tout » -> 3) : bilan de session lisible (Telegram + journal)."""
     from . import clips, youtube_chat
     mins = (time.perf_counter() - t0) / 60.0
@@ -247,7 +260,14 @@ def _session_report(stats: dict, t0: float, money_start, ach_start: int | None =
     if youtube_chat.CHAT_STATS['orders'] or stats.get('missions_du_chat'):
         lines.append(f"- chat : {youtube_chat.CHAT_STATS['orders']} ordre(s) suivi(s), {stats.get('missions_du_chat', 0)} mission(s) choisie(s)")
     if clips.STATUS['clips']:
-        lines.append(f"- clips enregistres : {clips.STATUS['clips']}")
+        lines.append(f"- clips enregistres : {clips.STATUS['clips']}" + (f" ; Shorts : {clips.STATUS['shorts']}" if clips.STATUS.get('shorts') else ''))
+    if stats.get('fetes') or youtube_chat.STATUS.get('soutiens'):
+        lines.append(f"- soutiens du chat : {youtube_chat.STATUS.get('soutiens', 0)} ; fetes de V : {stats.get('fetes', 0)}")
+    try:
+        from . import features
+        lines.append(features.report(features.save() if final else None))
+    except Exception:
+        pass
     return '\n'.join(lines)
 
 
@@ -446,6 +466,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     km_last = None                  # 19/10 : derniere position (distance parcourue, bilan de session)
     revenge_done: set = set()       # 19/10 : lieux de mort deja « prepares » (soin + annonce) pour la revanche
     combat.KILLS[0] = 0
+    from . import features as _features
+    _features.reset()
     ach_start = len(achievements._STATE.get('unlocked') or ())
     vendor_fail_streak = 0
     last_drive_t = -999.0
@@ -773,6 +795,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             _log(f"[quetes] mission choisie par le chat : « {q_m.get('text')} » a {q_m.get('dist') or 0:.0f} m")
                         else:
                             _log('[quetes] mission choisie par le chat introuvable (terminee entre-temps ?)')
+                    elif low == 'celebre':
+                        # 19/10 (Olivier : « 3 ») : soutien du chat -> V fete ca (hors combat / conduite) ; le clip suit
+                        if st.get('combat') or st.get('vehicle') or st.get('mounted'):
+                            _log('[fete] soutien du chat : V est occupe (combat / volant), remerciement a l ecran seulement')
+                        else:
+                            _log('[fete] V celebre un soutien du chat : sauts, tour sur lui-meme, salut')
+                            stats['fetes'] = stats.get('fetes', 0) + 1
+                            _celebrate()
                     elif low == 'bilan':
                         remote.notify(_session_report(stats, t0, money_start, ach_start))
                     elif low in ('changer_quete', 'autre_quete'):
@@ -2114,7 +2144,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         _log(f'=== fin : {stats} ===')
         hud.update(ended=True, paused=False, mode='SESSION TERMINEE')
         hud.flush()
-        _rep = _session_report(stats, t0, money_start, ach_start)
+        _rep = _session_report(stats, t0, money_start, ach_start, final=True)
         _log(_rep.replace('\n', ' | '))
         try:
             from . import narrator

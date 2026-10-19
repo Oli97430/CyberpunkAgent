@@ -31,14 +31,18 @@ MIN_GAP = 20.0             # un clip toutes les 20 s au plus (le tampon en couvr
 TRIGGERS: list[tuple[str, str, float]] = [
     (r'^\[succes\] DEBLOQUE', 'succes', 2.0),
     (r'^\[succes\] Gun Fu', 'gunfu', 2.0),
-    (r'^\[succes\] Tu es deja mort', 'kerenzikov', 3.0),
+    (r'^\[succes\] Tu es deja mort : rafale', 'kerenzikov', 3.0),
     (r'^\[cyberpsycho\] contact', 'cyberpsycho', 45.0),
     (r'^V EST MORT', 'mort', 0.0),
     (r'^\[succes\] Surement des rats', 'rats', 2.0),
+    (r'^\[fete\] V celebre', 'merci', 8.0),
 ]
 _RX = [(re.compile(p), n, d) for p, n, d in TRIGGERS]
+DEFAULT_CAPTION = {'succes': 'SUCCES DEBLOQUE !', 'gunfu': 'MODE GUN FU', 'kerenzikov': 'KERENZIKOV : LE TEMPS RALENTIT',
+                   'cyberpsycho': 'CHASSE AU CYBERPSYCHO', 'mort': 'ECHEC CRITIQUE. I LL BE BACK.', 'rats': 'VA VOIR, PETIT RAT...',
+                   'merci': 'MERCI LE CHAT !'}
 EXTERNAL = ('[youtube]', '[telegram]', '[sms]', '[directive]', '[dialog]', 'DIRECTIVE', '"')
-STATUS = {'clips': 0, 'error': None, 'last': None}
+STATUS = {'clips': 0, 'shorts': 0, 'error': None, 'last': None}
 _last = [0.0]
 _lock = threading.Lock()
 
@@ -106,6 +110,25 @@ def _ws_recv(s: socket.socket) -> dict:
             return json.loads(data.decode('utf-8'))
 
 
+class _Buffered:
+    """Socket dont les premiers octets ont deja ete lus (reste de la poignee de main HTTP)."""
+
+    def __init__(self, sock: socket.socket, pending: bytes):
+        self.sock, self.pending = sock, pending
+
+    def recv(self, n: int) -> bytes:
+        if self.pending:
+            out, self.pending = self.pending[:n], self.pending[n:]
+            return out
+        return self.sock.recv(n)
+
+    def sendall(self, data: bytes) -> None:
+        self.sock.sendall(data)
+
+    def close(self) -> None:
+        self.sock.close()
+
+
 class Obs:
     """Session obs-websocket v5 : Hello -> Identify (authentification SHA-256) -> requetes."""
 
@@ -122,6 +145,8 @@ class Obs:
             resp += c
         if b' 101 ' not in resp.split(b'\r\n', 1)[0]:
             raise ConnectionError('OBS n a pas accepte la connexion WebSocket')
+        # 19/10 : le debut du premier message (Hello) peut arriver dans le meme paquet que la reponse HTTP : on le garde
+        self.s = _Buffered(self.s, resp.split(b'\r\n\r\n', 1)[1])
         hello = _ws_recv(self.s)
         ident = {'rpcVersion': 1, 'eventSubscriptions': 0}
         auth = (hello.get('d') or {}).get('authentication')
@@ -225,9 +250,20 @@ def feed(line: str, log=print) -> None:
             return
         _last[0] = now
     name, delay = m
+    caption = None
+    try:
+        from . import narrator                    # phrase dite pour CE moment (feed du narrateur passe avant)
+        if time.time() - narrator.LAST['t'] < 3.0:
+            caption = narrator.LAST['text']
+    except Exception:
+        pass
 
     def run():
         if delay:
             time.sleep(delay)
-        save(name, log=log)
+        path = save(name, log=log)
+        if path and _cfg().get('shorts', True):
+            from . import shorts                   # 19/10 : Short vertical 9:16 legende
+            if shorts.make(path, caption or DEFAULT_CAPTION.get(name), log=log):
+                STATUS['shorts'] += 1
     threading.Thread(target=run, daemon=True).start()
