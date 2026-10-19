@@ -180,7 +180,14 @@ def answer_once(stop=None, log=print) -> dict | None:
     # un choix qui OUVRE UN EDITEUR (apparence chez le charcudoc, personnalisation) : Echap n en sort pas sans confirmation
     # (17/09 05:57 : 3 min bloque chez Chiyo Omoto) -> ecarte tant qu il reste autre chose
     SCREEN_WORDS = ('apparence', 'appearance', 'changer de look', 'personnaliser', 'customize')
-    allowed = [i for i in allowed if not any(w in choices[i].lower() for w in SCREEN_WORDS)] or allowed
+    _no_screen = [i for i in allowed if not any(w in choices[i].lower() for w in SCREEN_WORDS)]
+    if allowed and not _no_screen:
+        # 19/10 (16:11:49, Rony Lafleur : « J ai envie de changer d apparence » pris comme « seul choix possible ») :
+        # ne reste que l editeur d apparence -> V quitte le dialogue au lieu de l ouvrir
+        log('  [dialog] seul choix restant : editeur d apparence -> V quitte le dialogue (Retour arriere)')
+        kbm.tap('BACKSPACE', 0.08)
+        return None
+    allowed = _no_screen or allowed
     if not allowed:
         allowed = [i for i in range(len(choices)) if not inactive[i]] or list(range(len(choices)))
         tried.clear()

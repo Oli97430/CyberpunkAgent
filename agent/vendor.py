@@ -414,6 +414,58 @@ def buy_recipes(items: list[dict], log=print, max_buys: int = 2) -> dict:
     return {'ok': True, 'appris': learned, 'reste': money}
 
 
+SHOP_WORDS = ('implant', 'cyberware', 'charcudoc', 'ripperdoc', 'marchandise', 'ce que tu as', 'ce que t as', 'acheter',
+              'vendre', 'commerce', 'boutique', 'trade', 'shop')
+NO_SHOP_WORDS = ('apparence', 'visage', 'coiffure', 'look', 'appearance')
+
+
+def shop_choice(choices: list) -> int | None:
+    """Indice de la replique qui ouvre la boutique (implants...), jamais celle de l editeur d apparence."""
+    from .hud import ascii_plain
+    for i, c in enumerate(choices or []):
+        t = ascii_plain(str(c)).lower()
+        if any(w in t for w in NO_SHOP_WORDS):
+            continue
+        if any(w in t for w in SHOP_WORDS):
+            return i
+    return None
+
+
+def _open_by_dialogue(stop=None, log=print, wait_s: float = 12.0) -> dict | None:
+    """Attend le dialogue du marchand / charcudoc, choisit la replique de boutique, lit le stock ecran ouvert, ferme."""
+    from . import dialog
+    t0 = time.perf_counter()
+    talked = False
+    while time.perf_counter() - t0 < wait_s:
+        if stop is not None and stop.is_set():
+            return None
+        st = motion.read_state() or {}
+        dlg = st.get('dialog') or {}
+        choices = dlg.get('choices') or []
+        if choices:
+            idx = shop_choice(choices)
+            if idx is None:
+                log(f"  [vente] dialogue du marchand sans replique de boutique ({' / '.join(str(c) for c in choices)[:120]})")
+                return None
+            log(f"  [vente] dialogue du marchand : « {choices[idx]} »")
+            if dialog.select_index(idx):
+                dialog.confirm()
+            t1 = time.perf_counter()
+            while time.perf_counter() - t1 < 4.0 and not (motion.read_state() or {}).get('menu'):
+                time.sleep(0.2)
+            probe = vendor_stock()
+            n = len((probe or {}).get('items') or [])
+            log(f"  [vente] ecran ouvert par le dialogue : {'stock lu (' + str(n) + ' articles)' if probe and probe.get('ok') else 'stock illisible'}")
+            if (motion.read_state() or {}).get('menu'):
+                kbm.tap('ESC', 0.1); time.sleep(0.8)
+            return probe
+        inter = st.get('interact') or {}
+        if not talked and inter.get('choices') and any(w in str(inter['choices'][0]).lower() for w in ('parler', 'talk')):
+            kbm.act('interact', 0.2); talked = True
+        time.sleep(0.4)
+    return None
+
+
 def sell_trip(vendor: dict, stop=None, log=print) -> dict:
     """Va au marchand, ouvre la boutique (F maintenu), vend la camelote (G), valide (F), sort."""
     t0 = time.perf_counter()
@@ -504,6 +556,12 @@ def sell_trip(vendor: dict, stop=None, log=print) -> dict:
                 probe = vendor_stock()
             else:
                 log(f"  [vente] aucun marchand a 40 m du marqueur ({loc.get('reason') or 'mod muet'})")
+        if not (probe and probe.get('ok')) and not _halted():
+            # 19/10 (16:11, Rony Lafleur) : charcudoc PNJ qui s ouvre par un DIALOGUE (« J ai besoin d implants ») -- V
+            # concluait « aucune invite » 6 s trop tot, puis le menu ouvert par le dialogue etait referme comme un menu
+            # parasite. On attend le dialogue, on choisit la replique « implants / marchandise » (JAMAIS « apparence »),
+            # on lit le stock pendant que l ecran est ouvert, puis on le ferme (achats par script).
+            probe = _open_by_dialogue(stop=stop, log=log) or probe
         if probe and probe.get('ok'):
             log(f"  [vente] pas d invite, mais « {probe.get('vendor')} » est a portee ({len(probe.get('items') or [])} articles) : transactions par script")
             return {'ok': True, 'seconds': time.perf_counter() - t0, 'script_only': True}

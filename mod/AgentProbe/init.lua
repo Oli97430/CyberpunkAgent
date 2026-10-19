@@ -3809,6 +3809,44 @@ local function handleCommand(player, cmd)
         resp.ok, resp.points = true, out
         journal(string.format('OK   access_points : %d point(s) d acces', #out))
         return resp
+    elseif cmd.cmd == 'lifts' then
+        -- 19/10 ASCENSEURS (Olivier : « 3 ») : terminaux d etage (ElevatorFloorTerminal) et cabines (LiftDevice) a < 40 m
+        journal('RUN  lifts')
+        local q = Game['TSQ_ALL;']()
+        q.maxDistance = 40.0
+        q.filterObjectByDistance = true
+        pcall(function() q.testedSet = TargetingSet.Complete end)
+        local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
+        local pos = player:GetWorldPosition()
+        local out, seenEnt = {}, {}
+        if okT and parts then
+            for i = 1, #parts do
+                local comp = TS_TargetPartInfo.GetComponent(parts[i])
+                local ent = comp and comp:GetEntity() or nil
+                if ent then
+                    local okH, h = pcall(function() return ent:GetEntityID().hash end)
+                    local key = okH and tostring(h) or tostring(ent)
+                    if not seenEnt[key] then
+                        seenEnt[key] = true
+                        local cls = nil
+                        for _, c in ipairs({ 'ElevatorFloorTerminal', 'LiftDevice' }) do
+                            local okA, isA = pcall(function() return ent:IsA(c) end)
+                            if okA and isA then cls = c; break end
+                        end
+                        if cls then
+                            local wp = ent:GetWorldPosition()
+                            local rec = { cls = cls, x = wp.x, y = wp.y, z = wp.z, d = math.sqrt((wp.x - pos.x) ^ 2 + (wp.y - pos.y) ^ 2), dz = wp.z - pos.z }
+                            pcall(function() rec.name = GetLocalizedText(tostring(ent:GetDisplayName())) end)
+                            out[#out + 1] = rec
+                        end
+                    end
+                end
+            end
+        end
+        table.sort(out, function(a, b) return a.d < b.d end)
+        resp.ok, resp.lifts = true, out
+        journal(string.format('OK   lifts : %d element(s) d ascenseur', #out))
+        return resp
     elseif cmd.cmd == 'jack_in' then
         -- CONNEXION A UN POINT D ACCES PAR SCRIPT : l action ToggleNetrunnerDive (celle du Breach a distance) executee
         -- sur le DevicePS ouvre le mini-jeu sans l animation de branchement (scriptableDeviceBasePS.OnActionRemoteBreach)

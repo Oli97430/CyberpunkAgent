@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, narrator, relaunch, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
+from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, narrator, relaunch, lift, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -593,6 +593,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     except Exception:
         pass
     hp_alarm_t = -99.0
+    lift_tried: dict = {}                 # 19/10 : cible -> derniere tentative d ascenseur
     carry_logged, carry_keep_until, carry_drops = False, -1.0, []   # 19/10 : corps porte pour la quete
     hp_prev, hit_snd_t = None, -99.0      # 19/10 : son de degat
     hud_tgt_t = -99.0                     # 19/10 : cible de V sur le cap du HUD
@@ -2111,6 +2112,16 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             #   4. sinon verdict pour CETTE cible et V passe a une cible a plus de 60 m.
                             if _halted():
                                 continue
+                            # 19/10 (Olivier : « 3 ») : objectif a un AUTRE ETAGE (> 4 m plus haut / bas) -> ascenseur d abord
+                            # (une tentative par cible et par 10 min) ; s il marche, le trajet repart de ce nouvel etage
+                            tz_p = (alt_target.get('z') if alt_target is not None else q.get('mz'))
+                            if isinstance(tz_p, (int, float)) and st.get('z') is not None and abs(tz_p - st['z']) > 4.0 \
+                                    and time.perf_counter() - lift_tried.get(k_p, -1e9) > 600.0:
+                                lift_tried[k_p] = time.perf_counter()
+                                if lift.try_reach(float(tz_p), stop=stop, log=_log):
+                                    stats['ascenseurs'] = stats.get('ascenseurs', 0) + 1
+                                    path_failures = 0; straight_tried = False; navp.displaced()
+                                    continue
                             path_failures = 0; straight_tried = False
                             ex_old = navp.exhaust.get(k_p)
                             ex_n = navp.exhausted(k_p)
