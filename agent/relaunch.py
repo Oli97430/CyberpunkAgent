@@ -65,18 +65,28 @@ def relaunch(log=print, stop=None, start=os.startfile) -> bool:
     log(f'[relance] le jeu a disparu (crash ?) : relance par Steam ({len(_crashes)} crash(s) dans l heure)')
     if not _sleep(15.0, stop):                      # le rapport de crash du moteur finit de s ecrire
         return False
-    try:
-        start(STEAM_URL)
-    except Exception as e:
-        log(f'[relance] Steam injoignable : {e}')
+    # 19/10 (18:39, journal de Steam) : Steam refuse le lancement (« WaitingPrevProcess » -> echec) tant que l ancien
+    # processus finit d ecrire son rapport de crash (il n a disparu qu a 18:42) -> on relance Steam CHAQUE MINUTE, 6 essais
+    started = False
+    for attempt in range(6):
+        try:
+            start(STEAM_URL)
+        except Exception as e:
+            log(f'[relance] Steam injoignable : {e}')
+            return False
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < 60.0:
+            if game_running():
+                started = True
+                break
+            if not _sleep(3.0, stop):
+                return False
+        if started:
+            break
+        log(f'[relance] le jeu ne demarre pas (essai {attempt + 1}/6 : Steam attend sans doute la fin de l ancien processus) : on relance Steam')
+    if not started:
+        log('[relance] le jeu ne demarre pas apres 6 essais (6 min) : abandon')
         return False
-    t0 = time.perf_counter()
-    while not game_running():
-        if time.perf_counter() - t0 > 180.0:
-            log('[relance] le jeu ne demarre pas apres 3 min : abandon')
-            return False
-        if not _sleep(3.0, stop):
-            return False
     log('[relance] jeu demarre : ecran-titre puis « Continuer »')
     # ecran-titre : Entree (« appuyez sur une touche » puis « Continuer », premier choix) toutes les 6 s, seulement quand le
     # jeu est au premier plan ; on s arrete des que V est en jeu. Jamais F (cyberware iconique d Olivier une fois en jeu).

@@ -17,20 +17,20 @@ def _hostiles(st: dict) -> list[dict]:
     return [e for e in (st.get('enemies') or []) if not e.get('dead') and not e.get('police') and float(e.get('d') or 999) < 60.0]
 
 
-def search(x: float, y: float, z: float | None, stop=None, log=print) -> bool:
+def search(x: float, y: float, z: float | None, stop=None, log=print, tag: str = 'cyberpsycho') -> bool:
     """Vrai si un combat / des hostiles ont ete trouves (le combat prend le relais), faux sinon."""
     t0 = time.perf_counter()
-    log(f'  [cyberpsycho] zone de traque ({x:.0f},{y:.0f}) : fouille en spirale (12, 25, 40 m)')
+    log(f'  [{tag}] zone de traque ({x:.0f},{y:.0f}) : fouille en spirale (12, 25, 40 m)')
     for r in RINGS:
         for k in range(8):
             if stop is not None and stop.is_set():
                 return False
             if time.perf_counter() - t0 > MAX_S:
-                log('  [cyberpsycho] 3 min de fouille sans contact : on passe')
+                log(f'  [{tag}] 3 min de fouille sans contact : on passe')
                 return False
             st = motion.read_state() or {}
             if st.get('combat') or _hostiles(st):
-                log(f"  [cyberpsycho] contact ! ({len(_hostiles(st))} hostile(s), combat={bool(st.get('combat'))})")
+                log(f"  [{tag}] contact ! ({len(_hostiles(st))} hostile(s), combat={bool(st.get('combat'))})")
                 return True
             a = k * math.pi / 4 + (r / 12.0) * 0.4          # decalage par anneau : les points ne s alignent pas
             px, py = x + r * math.sin(a), y + r * math.cos(a)
@@ -39,5 +39,5 @@ def search(x: float, y: float, z: float | None, stop=None, log=print) -> bool:
     st = motion.read_state() or {}
     found = bool(st.get('combat') or _hostiles(st))
     if not found:
-        log('  [cyberpsycho] zone fouillee sans contact')
+        log(f'  [{tag}] zone fouillee sans contact')
     return found

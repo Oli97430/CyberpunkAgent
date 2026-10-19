@@ -1634,7 +1634,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         if _arr and alt_target.get('text') in contracts.SEARCH_KINDS and not st.get('combat') \
                                 and not (stop is not None and stop.is_set()):
                             # 19/10 : zone de traque -> fouille en spirale jusqu au contact (le psycho n est pas au centre)
-                            if psycho.search(alt_target['x'], alt_target['y'], alt_target.get('z'), stop=stop, log=_log):
+                            if psycho.search(alt_target['x'], alt_target['y'], alt_target.get('z'), stop=stop, log=_log,
+                                             tag='cyberpsycho' if alt_target.get('text') == 'HuntForPsychoVariant' else 'contrat'):
                                 _k_c = 'cyberpsychos' if alt_target.get('text') == 'HuntForPsychoVariant' else 'contrats'
                                 stats[_k_c] = stats.get(_k_c, 0) + 1
                                 alt_target = None; plan.last_t = -99.0
