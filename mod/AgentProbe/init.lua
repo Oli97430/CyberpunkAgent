@@ -4543,6 +4543,104 @@ function AgentDrawV800(e, d, kills)
     ImGui.PopStyleColor(2)
     if not ok then error(err) end
 end
+-- 19/10 RADAR TACTIQUE (Olivier : « 2 ») : vue de dessus, tourne avec le regard de V (avant = haut), portee 60 m a pied /
+-- 200 m en vehicule ; faisceau de balayage ; hostiles en rouge (danger), police ambre, PNJ et vehicules discrets, voiture
+-- de V et objectif en blanc glace. Globale (limite d upvalues) ; P = palette + fonctions de dessin du HUD.
+function AgentV8Radar(P, e, d, cx, cy, r, clk)
+    local u, L, T, R, arc = P.u, P.L, P.T, P.R, P.arc
+    if not (tonumber(e.x) and tonumber(e.y) and tonumber(e.yaw)) then return end
+    local range = e.vehicle and 200 or 60
+    local function wrapd(a) return ((a + 180) % 360) - 180 end
+    local function place(x, y)
+        local dx, dy = x - e.x, y - e.y
+        local dist = math.sqrt(dx * dx + dy * dy)
+        local rel = wrapd(math.deg(math.atan2(-dx, dy)) - e.yaw)
+        local a = math.rad(-90 - rel)
+        local rr = math.min(dist / range, 1.0) * r
+        return cx + rr * math.cos(a), cy + rr * math.sin(a), dist, dist > range
+    end
+    -- fond, anneaux, axes
+    arc(cx, cy, r, 0, 360, P.MID, 1.2, 72)
+    arc(cx, cy, r * 2 / 3, 0, 360, P.FAINT, 1, 56)
+    arc(cx, cy, r / 3, 0, 360, P.FAINT, 1, 40)
+    L(cx - r, cy, cx + r, cy, P.FAINT, 1); L(cx, cy - r, cx, cy + r, P.FAINT, 1)
+    for deg = 0, 350, 10 do
+        local a = math.rad(deg)
+        local r0 = (deg % 30 == 0) and r - 9 * u or r - 5 * u
+        L(cx + r0 * math.cos(a), cy + r0 * math.sin(a), cx + r * math.cos(a), cy + r * math.sin(a), P.DIM, 1)
+    end
+    -- champ de vision (environ 80 degres) et faisceau de balayage avec trainee
+    for _, sg in ipairs({ -1, 1 }) do
+        local a = math.rad(-90 + sg * 40)
+        L(cx, cy, cx + r * math.cos(a), cy + r * math.sin(a), P.FAINT, 1)
+    end
+    local sweep = (clk * 144) % 360
+    for k = 0, 9 do
+        local a = math.rad(sweep - k * 3)
+        L(cx, cy, cx + r * math.cos(a), cy + r * math.sin(a), k == 0 and P.MID or P.FAINT, k == 0 and 1.6 or 1)
+    end
+    -- PNJ (points discrets) et vehicules
+    for _, n in ipairs(e.npcs or {}) do
+        if tonumber(n.x) and tonumber(n.y) then
+            local x, y, _, out = place(n.x, n.y)
+            if not out then R(x - 1.5 * u, y - 1.5 * u, x + 1.5 * u, y + 1.5 * u, P.DIM) end
+        end
+    end
+    local ownCar = false
+    for _, v in ipairs(e.vehicles or {}) do
+        if tonumber(v.x) and tonumber(v.y) then
+            local x, y, _, out = place(v.x, v.y)
+            if not out then
+                if v.player then ownCar = true; P.RO(x - 4 * u, y - 6 * u, x + 4 * u, y + 6 * u, P.BONE, 1.4)
+                else P.RO(x - 2.5 * u, y - 4 * u, x + 2.5 * u, y + 4 * u, P.FAINT, 1) end
+            end
+        end
+    end
+    local sm = e.summon
+    if not ownCar and type(sm) == 'table' and tonumber(sm.x) and tonumber(sm.y) then
+        local x, y, _, out = place(sm.x, sm.y)
+        if not out then P.RO(x - 4 * u, y - 6 * u, x + 4 * u, y + 6 * u, P.BONE, 1.4) end
+    end
+    -- objectif : losange (au bord du radar s il est hors de portee)
+    local tg = type(d.target) == 'table' and d.target or nil
+    local tx, ty
+    if tg and tonumber(tg.x) and tonumber(tg.y) then tx, ty = tonumber(tg.x), tonumber(tg.y)
+    elseif type(e.quest) == 'table' and tonumber(e.quest.mx) and tonumber(e.quest.my) then tx, ty = tonumber(e.quest.mx), tonumber(e.quest.my) end
+    if tx then
+        local x, y = place(tx, ty)
+        ImGui.ImDrawListAddTriangleFilled(P.dl, x, y - 6 * u, x - 5 * u, y, x + 5 * u, y, P.BONE)
+        ImGui.ImDrawListAddTriangleFilled(P.dl, x - 5 * u, y, x + 5 * u, y, x, y + 6 * u, P.BONE)
+    end
+    -- hostiles (rouge = danger) et police (ambre) ; le plus proche cerne
+    local nH, nearest, nd = 0, nil, 1e9
+    for _, en in ipairs(e.enemies or {}) do
+        if not en.dead and tonumber(en.x) and tonumber(en.y) then
+            local x, y, dist, out = place(en.x, en.y)
+            local col = en.police and P.AMBER or P.HOSTILE
+            if out then
+                L(x, y, cx + (x - cx) * 0.92, cy + (y - cy) * 0.92, col, 2.5)
+            else
+                R(x - 3.5 * u, y - 3.5 * u, x + 3.5 * u, y + 3.5 * u, col)
+            end
+            if not en.police then
+                nH = nH + 1
+                if dist < nd then nd, nearest = dist, { x, y, out } end
+            end
+        end
+    end
+    if nearest and not nearest[3] then
+        local b = 8 * u
+        P.RO(nearest[1] - b, nearest[2] - b, nearest[1] + b, nearest[2] + b, P.HOSTILE, 1.2)
+    end
+    -- V au centre
+    ImGui.ImDrawListAddTriangleFilled(P.dl, cx, cy - 8 * u, cx - 5 * u, cy + 5 * u, cx + 5 * u, cy + 5 * u, P.BRIGHT)
+    -- legendes
+    T(cx - r, cy - r - 22 * u, 'RADAR', 11, P.BONE)
+    T(cx + r, cy - r - 22 * u, string.format('%d M', range), 10, P.DIM, 'r')
+    T(cx - r, cy + r + 8 * u, nH > 0 and string.format('%d HOSTILE%s', nH, nH > 1 and 'S' or '') or 'ZONE CALME', 10,
+      nH > 0 and P.HOSTILE or P.DIM)
+    if nearest then T(cx + r, cy + r + 8 * u, string.format('%d M', math.floor(nd + 0.5)), 10, P.HOSTILE, 'r') end
+end
 function AgentV8Body(dl, W, H, e, d, kills)
     local u = H / 1080
     local M = 56 * u
@@ -4860,6 +4958,14 @@ function AgentV8Body(dl, W, H, e, d, kills)
     end
 
     end   -- boot >= 0.15
+    if boot >= 0.45 then                               -- 19/10 : radar tactique, en bas a gauche (a cote de la colonne)
+        local rr = 128 * u
+        local rcx, rcy = M + 262 * u + 40 * u + rr, H - 86 * u - 40 * u - rr
+        R(rcx - rr - 14 * u, rcy - rr - 34 * u, rcx + rr + 14 * u, rcy + rr + 30 * u, PLATE)
+        local okRad, errRad = pcall(AgentV8Radar, { u = u, dl = dl, L = L, T = T, R = R, RO = RO, arc = arc, MID = RED_MID,
+            DIM = RED_DIM, FAINT = RED_FAINT, BRIGHT = RED, BONE = BONE, AMBER = AMBER, HOSTILE = AgentV8Col(1, 0.2, 0.15, 1) }, e, d, rcx, rcy, rr, clk)
+        if not okRad and AgentV8.radarErr ~= tostring(errRad) then AgentV8.radarErr = tostring(errRad); pcall(journal, 'HUD radar : ' .. tostring(errRad)) end
+    end
     -- ===== droite : registre des succes =====
     if boot >= 0.35 then
     local gv = type(d.goalsv) == 'table' and d.goalsv or nil
