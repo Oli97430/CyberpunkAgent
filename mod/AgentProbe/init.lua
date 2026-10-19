@@ -2884,6 +2884,12 @@ local function handleCommand(player, cmd)
         resp.ok, resp.price, resp.total, resp.qty = true, price, total, qty
         journal(string.format('OK   buy : %d x -> %d eddies', qty, total))
         return resp
+    elseif cmd.cmd == 'loot_all' then
+        journal('RUN  loot_all')
+        local r = AgentLootAll(player, tonumber(cmd.x) or 6.0)
+        for k, v in pairs(r) do resp[k] = v end
+        journal(string.format('OK   loot_all : %d source(s), %d objet(s), %d vide(s) %s', r.sources, r.transferes, r.vides, table.concat(r.noms, ' | '):sub(1, 160)))
+        return resp
     elseif cmd.cmd == 'loot' then
         -- LOOT PAR SCRIPT : l interface de loot (tooltip + E) est capricieuse ; on transfere directement
         -- le contenu de l objet vise (conteneur, sac, objet au sol, corps) vers V, comme le ferait
@@ -4522,6 +4528,74 @@ local function hudRead()
             end
         end
     end)
+end
+-- 19/10 LOOT GROUPE (Olivier : « 5 ») : tout ce qui est fouillable a < 6 m (conteneurs, sacs, objets au sol, corps), en
+-- une fois, sans marcher ni viser. Objets de quete exclus (le jeu les donne lui-meme). Globale (limite d upvalues).
+function AgentLootAll(player, radius)
+    local q = Game['TSQ_ALL;']()
+    q.maxDistance = radius or 6.0
+    q.filterObjectByDistance = true
+    pcall(function() q.testedSet = TargetingSet.Complete end)
+    local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
+    local ts = Game.GetTransactionSystem()
+    local pos = player:GetWorldPosition()
+    local out = { ok = true, sources = 0, transferes = 0, noms = {}, vides = 0 }
+    if not (okT and parts) then return out end
+    local seen = {}
+    for i = 1, #parts do
+        local comp = TS_TargetPartInfo.GetComponent(parts[i])
+        local ent = comp and comp:GetEntity() or nil
+        if ent then
+            local okH, h = pcall(function() return ent:GetEntityID().hash end)
+            local key = okH and tostring(h) or tostring(ent)
+            if not seen[key] then
+                seen[key] = true
+                local cls = nil
+                for _, cn in ipairs({ 'gameLootContainerBase', 'gameItemDropObject', 'gameLootBag', 'gameContainerObject', 'gamePuppet' }) do
+                    local okI, isIt = pcall(function() return ent:IsA(cn) end)
+                    if okI and isIt then cls = cn; break end
+                end
+                local okDead, dead = pcall(function() return ent:IsDead() end)
+                if cls == 'gamePuppet' and not (okDead and dead) then cls = nil end          -- jamais un PNJ vivant
+                if not cls and okDead and dead then cls = 'gamePuppet' end
+                if cls and ent:GetEntityID() ~= player:GetEntityID() then
+                    local before = out.transferes
+                    if cls == 'gameItemDropObject' then
+                        local id = nil
+                        pcall(function() id = ent:GetItemObject():GetItemID() end)
+                        if id then
+                            local okX, didX = pcall(function() return ts:TransferItem(ent, player, id, 1) end)
+                            if okX and didX ~= false then
+                                out.transferes = out.transferes + 1
+                                pcall(function() out.noms[#out.noms + 1] = GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):DisplayName()) end)
+                            end
+                        end
+                    else
+                        local okL, items = ts:GetItemList(ent)
+                        if type(okL) == 'table' then items = okL end
+                        if type(items) == 'table' then
+                            for k = 1, #items do
+                                local idata = items[k]
+                                local id, qty, skip = nil, 1, false
+                                pcall(function() id = idata:GetID() end)
+                                pcall(function() qty = idata:GetQuantity() end)
+                                pcall(function() skip = idata:HasTag('Quest') or idata:HasTag('SkipActivityLog') end)
+                                if id and not skip and pcall(function() ts:TransferItem(ent, player, id, qty or 1) end) then
+                                    out.transferes = out.transferes + 1
+                                    if #out.noms < 12 then
+                                        pcall(function() out.noms[#out.noms + 1] = GetLocalizedTextByKey(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):DisplayName()) end)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    out.sources = out.sources + 1
+                    if out.transferes == before then out.vides = out.vides + 1 end
+                end
+            end
+        end
+    end
+    return out
 end
 -- 19/10 HUD V-800 « ANATOMIE DU SIGNAL » (Olivier : « redesign le hud du v800 » puis « applique-le en jeu ») : tout est
 -- dessine en primitives (lignes, cases, chiffres 7 segments nets a toute taille) sur la liste de dessin d arriere-plan

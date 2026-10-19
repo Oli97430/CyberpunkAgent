@@ -1453,6 +1453,21 @@ def loot_around(stop=None, log=print, radius_m: float = 20.0, max_items: int = 8
     objs += [{'x': b['x'], 'y': b['y'], 'z': b.get('z', st['z']), 'd': b['d'], 'cls': 'corps'} for b in (st.get('bodies') or []) if b['d'] <= min(radius_m, 12.0)]
     objs.sort(key=lambda o: o['d'])
     done, tried = 0, 0
+    # 19/10 (Olivier : « 5 ») : tout ce qui est a < 6 m d un coup, par script (ni marche, ni visee, ni balayage) ;
+    # ensuite on ne marche que vers les objets plus loin (3 au plus)
+    near = [o for o in objs if o['d'] <= 5.8 and (round(o['x']), round(o['y'])) not in seen]
+    if near:
+        from . import nav
+        ra = nav._wait(nav._send({'cmd': 'loot_all', 'x': 6.0}), timeout=5.0) or {}
+        if ra.get('ok'):
+            for o in near:
+                seen.add((round(o['x']), round(o['y'])))
+            done += int(ra.get('transferes') or 0)
+            noms = ', '.join(str(n) for n in (ra.get('noms') or [])[:6])
+            log(f"  [loot] fouille groupee (< 6 m) : {ra.get('sources', 0)} source(s), {ra.get('transferes', 0)} objet(s)"
+                + (f" ({noms})" if noms else '') + (f", {ra.get('vides')} vide(s)" if ra.get('vides') else ''))
+            max_items = min(max_items, 3)
+            objs = [o for o in objs if o['d'] > 5.8]
     for o in objs:
         key = (round(o['x']), round(o['y']))
         if key in seen:
