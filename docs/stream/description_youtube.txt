@@ -23,4 +23,5 @@
 📺 Le décompte s'affiche en direct dans le bandeau en bas de l'écran (« VOTE 18 S : EXPLORE 4 . ATTAQUE 2 »).
 🎯 Toutes les 15 minutes, V vous laisse choisir sa prochaine mission : tapez !1, !2 ou !3 (45 secondes pour voter).
 💸 Super Chat avec une commande (ex. « !attaque ») : exécutée TOUT DE SUITE, sans vote. Chaque Super Chat ou nouveau membre : V vous remercie à l'écran et fait la fête.
+⭐ POINTS : ta commande gagne le vote = +10, bon choix de mission = +15, Super Chat = +50, nouveau membre = +30. Le top 3 s'affiche à l'écran, tape !points pour voir ton score. Le MVP est salué en fin de live.
 🏆 En haut à droite : ses succès Steam en cours et le nombre d'ordres du chat suivis.

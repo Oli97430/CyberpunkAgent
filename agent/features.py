@@ -29,6 +29,7 @@ FEATURES: list[tuple[str, str, str]] = [
     ('charcudoc', 'implant pose', r'^\[charcudoc\] POSE '),
     ('quickhack', 'quickhack lance', r'^\[combat\] quickhack « [^»]+ » (?!jamais)'),
     ('succes', 'succes Steam debloque', r'^\[succes\] DEBLOQUE'),
+    ('relance', 'relance apres crash', r'^\[relance\] V est de retour'),
 ]
 EXTERNAL = ('[telegram]', '[sms]', '[directive]', '[dialog]', 'DIRECTIVE', '"')
 _RX = [(k, lab, re.compile(p)) for k, lab, p in FEATURES]

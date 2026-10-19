@@ -94,6 +94,7 @@ def poll_close_if_due(now: float) -> tuple[int, str, int, int] | None:
     best = max(range(len(cnt)), key=lambda i: (cnt[i], -i))
     h, lab = POLL['options'][best]
     res = (h, lab, cnt[best], len(POLL['voices']))
+    POLL['last_winners'] = [a for a, i in POLL['voices'].items() if i == best]
     POLL.update(options=[], t0=None, voices={})
     _banner(True)
     return res
@@ -108,6 +109,64 @@ def _poll_banner() -> None:
                    banner_last=None)
     except Exception:
         pass
+
+
+# 19/10 (Olivier : « 4 ») : POINTS DU CHAT -- vote gagnant +10, bon choix au sondage de mission +15, Super Chat +50,
+# nouveau membre +30, abonnements offerts +50. Classement de la session sur le HUD ; cumul entre directs dans chat_points.json.
+POINTS_FILE = DATA_DIR / 'chat_points.json'
+PTS = {'vote': 10, 'sondage': 15, 'superchat': 50, 'sticker': 30, 'membre': 30, 'cadeau': 50}
+SESSION_PTS: dict[str, int] = {}
+_points_said = [0.0]
+
+
+def _load_points() -> dict:
+    try:
+        d = json.loads(POINTS_FILE.read_text(encoding='utf-8'))
+        return {str(k): int(v) for k, v in d.items()} if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def award(authors, why: str) -> None:
+    """Points a un ou plusieurs spectateurs (jamais aux pseudos internes « vote » / « soutien »)."""
+    n = PTS.get(why, 0)
+    authors = [a for a in ([authors] if isinstance(authors, str) else authors) if a and a not in ('vote', 'soutien', 'le chat')]
+    if not n or not authors:
+        return
+    tot = _load_points()
+    for a in authors:
+        SESSION_PTS[a] = SESSION_PTS.get(a, 0) + n
+        tot[a] = tot.get(a, 0) + n
+    try:
+        POINTS_FILE.write_text(json.dumps(tot, ensure_ascii=False), encoding='utf-8')
+    except Exception:
+        pass
+    try:
+        from . import achievements
+        achievements.publish()
+    except Exception:
+        pass
+
+
+def top(n: int = 3) -> list[tuple[str, int]]:
+    return sorted(SESSION_PTS.items(), key=lambda kv: -kv[1])[:n]
+
+
+def show_points(author: str) -> bool:
+    """!points : score du spectateur en grand (pseudo nettoye), une fois toutes les 20 s pour tout le chat."""
+    if time.time() - _points_said[0] < 20.0:
+        return False
+    _points_said[0] = time.time()
+    from .narrator import clean
+    rank = [a for a, _ in sorted(SESSION_PTS.items(), key=lambda kv: -kv[1])]
+    pts = SESSION_PTS.get(author, 0)
+    pos = (f' ({rank.index(author) + 1}E)' if author in rank else '')
+    try:
+        from . import narrator
+        narrator.say(f"{(clean(author, 20) or 'ANONYME').upper()} : {pts} POINTS{pos}. CUMUL : {_load_points().get(author, 0)}.", force=True)
+    except Exception:
+        pass
+    return True
 
 
 def count_order(author: str) -> None:
@@ -156,6 +215,7 @@ class Vote:
             return None
         t = self.tally()
         res = (t[0][0], t[0][1], len(self.voices)) if t else None
+        self.last_winners = [a for a, c in self.voices.items() if t and c == t[0][0]]   # 19/10 : points du chat
         self.t0, self.voices, self.first = None, {}, {}
         return res
 
@@ -285,6 +345,7 @@ def on_support(m: dict, log, put) -> None:
     amt = clean(m.get('amount') or '', 24).upper()
     log(f"  [youtube] soutien ({m['kind']}) de {m['author'][:30]} {m.get('amount') or ''}")
     STATUS['soutiens'] = STATUS.get('soutiens', 0) + 1
+    award(m['author'], m['kind'])
     try:
         from . import narrator
         narrator.say(SUPPORT_SAY[m['kind']].format(who=who, amt=amt).replace(' ()', ''), force=True)
@@ -375,6 +436,9 @@ def _loop(log, put) -> None:
                     if m.get('kind'):
                         on_support(m, log, put)
                         continue
+                    if m['text'].strip().lower() in ('!points', '!score', '!classement'):
+                        show_points(m['author'])
+                        continue
                     if poll_vote(m['author'], m['text']):           # 19/10 : !1 !2 !3 pendant un sondage de mission
                         log(f"  [youtube] voix de mission de {m['author']} : {m['text'].strip()}")
                         continue
@@ -406,6 +470,7 @@ def _loop(log, put) -> None:
                 if pres:
                     h, lab, n, voters = pres
                     if voters:
+                        award(POLL.get('last_winners') or [], 'sondage')
                         log(f"  [youtube] SONDAGE : mission « {lab} » ({n} voix sur {voters} votant(s))")
                         try:
                             from . import narrator
@@ -421,6 +486,7 @@ def _loop(log, put) -> None:
                 res = vote.close_if_due(time.time())
                 if res:
                     w, n, voters = res
+                    award(getattr(vote, 'last_winners', []), 'vote')
                     STATUS['accepted'] += 1; STATUS['last'] = f'vote : {w} ({n}/{voters})'
                     log(f"  [youtube] VOTE : « {w} » l emporte ({n} voix sur {voters} votant(s))")
                     try:

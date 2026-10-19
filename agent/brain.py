@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, narrator, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
+from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, narrator, relaunch, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -254,7 +254,8 @@ def _session_report(stats: dict, t0: float, money_start, ach_start: int | None =
     n0 = achievements._STATE.get('n0', ach_start)   # 19/10 : ach_start etait pris AVANT la lecture Steam -> « +7 » faux
     lines = [f'BILAN DE SESSION ({mins:.0f} min)',
              f"- combats : {stats.get('combats', 0)} ; ennemis neutralises : ~{combat.KILLS[0]}",
-             f"- morts : {stats.get('morts', 0)}" + (f" ; revanches : {stats['revanches']}" if stats.get('revanches') else ''),
+             f"- morts : {stats.get('morts', 0)}" + (f" ; revanches : {stats['revanches']}" if stats.get('revanches') else '')
+             + (f" ; crashs du jeu relances : {stats['crashs']}" if stats.get('crashs') else ''),
              f"- objets lootes : {stats.get('loot', 0)}" + (f' ; eddies gagnes : {eddies:+}' if eddies is not None else ''),
              f"- distance parcourue : {stats.get('km', 0.0):.1f} km",
              (f"- succes Steam : {len(ach)}" + (f' (+{len(ach) - n0} cette session)' if n0 is not None else ''))
@@ -270,6 +271,8 @@ def _session_report(stats: dict, t0: float, money_start, ach_start: int | None =
                      + f" ; sons du HUD joues : {sounds.STATUS['played']}" + (f" (erreur : {sounds.STATUS['error']})" if sounds.STATUS.get('error') else ''))
     except Exception:
         pass
+    if youtube_chat.SESSION_PTS:
+        lines.append('- points du chat : ' + ', '.join(f'{i + 1}. {a} {p}' for i, (a, p) in enumerate(youtube_chat.top(3))))
     if stats.get('fetes') or youtube_chat.STATUS.get('soutiens'):
         lines.append(f"- soutiens du chat : {youtube_chat.STATUS.get('soutiens', 0)} ; fetes de V : {stats.get('fetes', 0)}")
     try:
@@ -581,6 +584,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     except Exception:
         pass
     hp_alarm_t = -99.0
+    crash_check_t, game_gone = -99.0, 0     # 19/10 : relance automatique apres un crash du jeu
     _vr = CFG.vr_mode()
     if _vr:
         _log(f'MODE VR ACTIF ({_vr}) : l agent joue a plat seulement -- VR-OFF.bat puis relancer V. Session annulee.')
@@ -694,6 +698,24 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     if not unfocused:
                         unfocused = True
                         _log('jeu hors premier plan : entrees suspendues')
+                    # 19/10 (Olivier : « 1 », DLSS 5) : le jeu a DISPARU (crash) 2 controles de suite (~20 s) -> relance
+                    if time.perf_counter() - crash_check_t > 10.0:
+                        crash_check_t = time.perf_counter()
+                        game_gone = 0 if relaunch.game_running() else game_gone + 1
+                    if game_gone >= 2:
+                        game_gone = 0
+                        if not relaunch.allowed():
+                            _log(f'[relance] {relaunch.MAX_PER_HOUR} crashs en moins d 1 h : V s arrete (relance automatique suspendue)')
+                            remote.notify(f'Le jeu a plante {relaunch.MAX_PER_HOUR} fois en moins d 1 h : V s arrete. Relance-le toi-meme.')
+                            break
+                        stats['crashs'] = stats.get('crashs', 0) + 1
+                        remote.notify('Le jeu a plante : relance automatique en cours (Steam puis « Continuer »).')
+                        if relaunch.relaunch(log=_log, stop=stop):
+                            navp.displaced(); plan.last_t = -99.0; km_last = None
+                            remote.notify('V est de retour en jeu apres le crash.')
+                            continue
+                        remote.notify('Relance automatique ratee : V s arrete.')
+                        break
                     if _idle_directive('focus'):
                         break
                     time.sleep(0.3); continue
@@ -2206,8 +2228,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         _log(_rep.replace('\n', ' | '))
         try:
             from . import narrator
+            _mvp = youtube_chat.top(1)
             narrator.say(f"BILAN : {stats.get('combats', 0)} COMBATS, ~{combat.KILLS[0]} NEUTRALISES, {stats.get('morts', 0)} MORTS, "
-                         f"{stats.get('km', 0.0):.1f} KM. I'LL BE BACK.", force=True)
+                         f"{stats.get('km', 0.0):.1f} KM." + (f" MVP DU CHAT : {narrator.clean(_mvp[0][0], 16).upper()} ({_mvp[0][1]} PTS)."
+                                                              if _mvp and narrator.clean(_mvp[0][0], 16) else '') + " I'LL BE BACK.", force=True)
             hud.flush()
         except Exception:
             pass

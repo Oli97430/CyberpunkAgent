@@ -103,7 +103,7 @@ def _readable(h: dict) -> bool:
     return bool((a and not a.startswith('userdata')) or (t and not t.startswith('userdata')))
 
 
-def quickhack_best(log=print, want=None) -> str | None:
+def quickhack_best(log=print, want=None, tgt: dict | None = None) -> str | None:
     """Ouvre le panneau sur la cible visee, lit la liste (blackboard), choisit le meilleur hack
     utilisable (non verrouille, RAM suffisante), fait defiler jusqu a ce qu il soit SURLIGNE
     (boucle fermee sur qh.sel), applique (F), ferme (Retour arriere). Renvoie le titre applique.
@@ -124,6 +124,14 @@ def quickhack_best(log=print, want=None) -> str | None:
         qh = (st_q or {}).get('qh')
         if qh and qh.get('open') and qh.get('list'):
             break
+        # 19/10 (Olivier : « 2 ») : la moitie des panneaux jamais ouverts avaient le reticule dans le vide -- la cible bouge
+        # pendant l attente (scanner maintenu) : on la GARDE sous le reticule tant que le panneau n est pas ouvert
+        if tgt is not None and st_q and not (qh and qh.get('open')):
+            cur_t = _same_foe(tgt, st_q)
+            la_t = st_q.get('lookat') or {}
+            if cur_t is not None and la_t.get('cls') != 'gamePuppet':
+                tgt = cur_t
+                aim_at(cur_t, st_q)
         # 12/10 : OpenQuickHackPanel = touche d interaction du joueur (inputUserMappings.xml:650, overridableUI selectChoice ;
         # chez Olivier E -- F est son cyberware iconique) : appui des 0,3 s, un 2e a 0,9 s si le panneau reste ferme
         el_q = time.perf_counter() - t0
@@ -360,7 +368,7 @@ def _same_foe(tgt: dict, st: dict):
     return best
 
 
-def _aim_lock(tgt: dict, st: dict, timeout: float = 0.8):
+def _aim_lock(tgt: dict, st: dict, timeout: float = 1.3):   # 19/10 : 0,8 -> 1,3 s (DLSS 5, ~16 fps)
     """12/10 : vise la cible du quickhack sur des mesures FRAICHES jusqu a l avoir sous le reticule (le panneau ne s ouvre
     que sur la cible du reticule). (ok, st, raison)."""
     kbm.release('W'); kbm.act_release('sprint')
@@ -872,7 +880,7 @@ def engage(target: dict, stop=None, log=print, max_s: float | None = None, rescu
                     hacks_done = max_hacks; t_hack0 = time.perf_counter(); seq = None   # 12/10 : panneau qui ne s ouvre pas
                     log('  [combat] le panneau de quickhack ne s ouvre pas ici : pas de hack d ouverture pendant 60 s, on engage')
                     continue
-                title = quickhack_best(log=log)
+                title = quickhack_best(log=log, tgt=tgt if tgt.get('x') is not None else None)
                 if title and title not in ('ram', 'aucun'):
                     _QH_NOPEN[0] = 0
                 if title in ('ram', 'aucun'):
@@ -1183,7 +1191,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                             qh_skip_t = now; log(f"  [combat] quickhack reporte : reticule pas sur la cible a {tgt['d']:.0f} m ({why_aim})")
                         seq = None; continue
                     qh_fail = 0
-                    title = quickhack_best(log=log)
+                    title = quickhack_best(log=log, tgt=tgt)
                     t_hack = time.perf_counter()                        # le delai court APRES le hack (il dure ~4 s)
                     if title in ('ram', 'aucun'):
                         log('  [combat] quickhack : ' + ('RAM insuffisante' if title == 'ram' else 'aucun hack offensif') + ', on tire'); seq = None; continue
@@ -1287,7 +1295,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 qh_fail = 0
                 if tgt['d'] > 3.0:
                     e = tgt
-                title = quickhack_best(log=log)
+                title = quickhack_best(log=log, tgt=tgt)
                 t_hack = time.perf_counter()
                 if title in ('ram', 'aucun'):
                     log('  [combat] quickhack : ' + ('RAM insuffisante' if title == 'ram' else 'aucun hack offensif')); seq = None; continue

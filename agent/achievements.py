@@ -173,7 +173,9 @@ def publish() -> None:
         try:                                       # 19/10 : ordres du chat suivis + spectateur le plus actif (pseudo nettoye)
             from . import youtube_chat as _yc
             from .narrator import clean
-            if _yc.CHAT_STATS['orders']:
+            if _yc.SESSION_PTS:                    # 19/10 : classement des points du chat (session)
+                lines.append(hud.ascii_up('TOP CHAT : ' + '  '.join(f'{i + 1}.{clean(a, 10)} {p}' for i, (a, p) in enumerate(_yc.top(3)))))
+            elif _yc.CHAT_STATS['orders']:
                 top = _yc.top_viewer()
                 lines.append(hud.ascii_up(f"CHAT : {_yc.CHAT_STATS['orders']} ORDRES" + (f' - TOP {clean(top, 14)}' if top and clean(top, 14) else '')))
         except Exception:
