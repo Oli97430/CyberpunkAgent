@@ -73,6 +73,11 @@ def say(text: str, key: str | None = None, force: bool = False) -> bool:
     if len(_last['by_key']) > 200:
         _last['by_key'].clear()
     hud.update(say=hud.ascii_up(text)[:90], say_t=int(now))
+    try:
+        from . import sounds                       # 19/10 : sons du HUD T-800 (bips + crepitement de l ecriture)
+        sounds.for_text(hud.ascii_up(text)[:90])
+    except Exception:
+        pass
     LAST.update(text=hud.ascii_up(text)[:90], t=now)
     return True
 
@@ -92,7 +97,10 @@ def feed(line: str) -> None:
 CHAT_PHRASES = {'attaque': 'J ATTAQUE !', 'objectif': 'RETOUR A LA MISSION.', 'explore': 'JE PARS EXPLORER.',
                 'marchand': 'JE VAIS VENDRE MON BUTIN.', 'charcudoc': 'DIRECTION LE CHARCUDOC.', 'soigne': 'JE ME SOIGNE.',
                 'changer_quete': 'JE CHANGE DE MISSION.', 'stop': 'ARRET DEMANDE. TERMINE.', 'pause': 'PAUSE.',
-                'reprendre': 'JE REPRENDS.', 'mission': 'A VOUS DE CHOISIR MA MISSION.'}
+                'reprendre': 'JE REPRENDS.', 'mission': 'A VOUS DE CHOISIR MA MISSION.',
+                'vole': 'JE ME TROUVE UN VEHICULE.', 'voiture': 'J APPELLE MA VOITURE.', 'fete': 'ON FETE CA !',
+                'loot': 'FOUILLE DE LA ZONE.', 'radio': 'UN PEU DE MUSIQUE.', 'cyberpsycho': 'CHASSE AU CYBERPSYCHO.',
+                'etat': 'ANALYSE DE MON ETAT.', 'style': 'CHANGEMENT DE STYLE DE COMBAT.', 'courage': 'NOUVEAU PROTOCOLE.'}
 
 
 def thank(who: str, cmd: str, votes: int | None = None) -> None:

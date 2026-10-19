@@ -70,3 +70,18 @@ def tick(st: dict, log=print, busy: bool = False) -> None:
         name = re.sub(r'(?<!^)(?=[A-Z])', ' ', m.group(1))          # « AggroTechno » -> « Aggro Techno »
     _state.update(on=True, until=now + random.uniform(LISTEN_MIN_S, LISTEN_MAX_S), station=name)
     log(f"  [radio] V allume la radio : « {name or 'station inconnue'} » pour {(_state['until'] - now) / 60:.0f} min")
+
+
+def on_or_next(log=print) -> str:
+    """19/10 (commande !radio) : allume la radio (4 min) ou passe a la station suivante si elle joue deja."""
+    if _state['on']:
+        r = _cmd(2)
+        log(f"  [radio] station suivante ({'ok' if r and r.get('ok') else (r or {}).get('reason', 'mod muet')})")
+        return 'suivante'
+    r = _cmd(1)
+    if not (r and r.get('ok')):
+        log(f"  [radio] impossible d allumer : {(r or {}).get('reason', 'mod muet')}")
+        return 'echec'
+    _state.update(on=True, until=time.perf_counter() + 240.0)
+    log('  [radio] allumee a la demande du chat (4 min)')
+    return 'allumee'

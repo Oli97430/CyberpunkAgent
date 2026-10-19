@@ -24,14 +24,23 @@ from .config import DATA_DIR
 
 YOUTUBE_FILE = DATA_DIR / 'youtube.json'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
-VIEWER_CMDS = {'attaque', 'objectif', 'explore', 'marchand', 'charcudoc', 'soigne', 'changer_quete', 'mission'}
-MOD_CMDS = VIEWER_CMDS | {'stop', 'pause', 'reprendre', 'courage', 'style', 'aggro', 'photo', 'hud'}   # photo -> Telegram d Olivier
+VIEWER_CMDS = {'attaque', 'objectif', 'explore', 'marchand', 'charcudoc', 'soigne', 'changer_quete', 'mission',
+               'vole', 'voiture', 'fete', 'loot', 'radio', 'cyberpsycho', 'etat', 'melee', 'distance', 'mixte', 'prudent',
+               'temeraire'}     # 19/10 (Olivier : « rajoute plus d ordres »)
+MOD_CMDS = VIEWER_CMDS | {'style', 'stop', 'pause', 'reprendre', 'courage', 'style', 'aggro', 'photo', 'hud'}   # photo -> Telegram d Olivier
 ALIASES = {'attack': 'attaque', 'fight': 'attaque', 'quest': 'objectif', 'quete': 'objectif', 'explorer': 'explore',
            'vendre': 'marchand', 'shop': 'marchand', 'heal': 'soigne', 'soin': 'soigne', 'ripperdoc': 'charcudoc',
            'autrequete': 'changer_quete', 'skip': 'changer_quete', 'change': 'changer_quete', 'missions': 'mission',
-           'quetes': 'mission', 'choix': 'mission'}
+           'quetes': 'mission', 'choix': 'mission',
+           'steal': 'vole', 'voler': 'vole', 'car': 'voiture', 'caisse': 'voiture', 'party': 'fete', 'danse': 'fete',
+           'gg': 'fete', 'fouille': 'loot', 'musique': 'radio', 'psycho': 'cyberpsycho', 'status': 'etat', 'vie': 'etat',
+           'corps': 'melee', 'sabre': 'melee', 'katana': 'melee', 'tir': 'distance', 'gun': 'distance', 'calme': 'prudent',
+           'yolo': 'temeraire', 'berserk': 'temeraire'}
+MACROS = {'melee': 'style melee', 'distance': 'style distance', 'mixte': 'style mixte', 'prudent': 'courage prudent',
+          'temeraire': 'courage temeraire'}     # commande de spectateur -> reglage de V
 VOTE_S = 30.0          # 19/10 : vote du chat -- la commande la plus demandee en 30 s est executee
-BANNER = 'VOTE DU CHAT : !ATTAQUE  !OBJECTIF  !SKIP  !MISSION  !EXPLORE  !SHOP  !CHARCUDOC  !HEAL   (1 VOTE / PERSONNE, 30 S)'
+BANNER = ('VOTE : !ATTAQUE !OBJECTIF !SKIP !MISSION !EXPLORE !SHOP !CHARCUDOC !HEAL !VOLE !VOITURE !LOOT !FETE !RADIO '
+          '!PSYCHO !ETAT !MELEE !DISTANCE !PRUDENT !YOLO  (1 VOTE / 30 S)')
 POLL_S = 45.0          # 19/10 : le chat choisit la mission parmi 3 (!1 !2 !3)
 POLL: dict = {'options': [], 't0': None, 'voices': {}}
 CHAT_STATS: dict = {'orders': 0, 'by': {}}      # 19/10 : ordres du chat suivis (tableau des succes) et spectateur le plus actif
@@ -329,6 +338,8 @@ def to_command(text: str, mod: bool) -> str | None:
     allowed = MOD_CMDS if mod else VIEWER_CMDS
     if cmd not in allowed:
         return None
+    if cmd in MACROS:
+        return MACROS[cmd]
     return ' '.join([cmd] + parts[1:2])[:80]
 
 

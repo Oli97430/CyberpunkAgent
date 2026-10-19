@@ -9,6 +9,15 @@
 !marchand (ou !shop) — aller vendre son butin
 !charcudoc — aller se faire poser des implants
 !soigne (ou !heal) — se soigner
+!vole — voler la voiture la plus proche
+!voiture — appeler sa voiture
+!loot — fouiller la zone
+!fete (ou !gg) — V fait la fête
+!radio — allumer la radio / station suivante
+!psycho — partir chasser un cyberpsycho
+!etat — V affiche sa vie, son niveau, ses eddies
+!melee / !distance — style de combat (corps à corps / armes à feu)
+!prudent / !yolo — V joue prudent ou téméraire
 
 🗳️ C'EST UN VOTE : toutes les 30 secondes, V exécute la commande la plus demandée par le chat. Une voix par personne (tu peux changer d'avis pendant le tour).
 📺 Le décompte s'affiche en direct dans le bandeau en bas de l'écran (« VOTE 18 S : EXPLORE 4 . ATTAQUE 2 »).

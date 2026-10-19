@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
+from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, narrator, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -33,6 +33,7 @@ _DIRECTIVE_KEYWORDS = frozenset({
     'charcudoc', 'ripperdoc', 'implant', 'explore', 'explorer', 'balade', 'changer_quete', 'autre_quete',
     'status', 'etat', 'etat?', 'photo', 'screenshot', 'capture', 'niveau', 'soigne', 'stats',
     'modeles', 'liste_modeles', 'modele_liste', 'hud', 'config', 'reglages', 'mission', 'missions', 'bilan', 'celebre',
+    'vole', 'voiture', 'fete', 'loot', 'radio', 'cyberpsycho', 'etat',
 })
 _DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ', 'modele ', 'mission_choix ')
 _STOP_WORDS = ('stop', 'arret', 'arrete-toi', 'arrete toi')
@@ -566,6 +567,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                      for m in ('brain', 'combat', 'planner', 'motion'))
     _write_diag()
     _log(f'=== cerveau v1 demarre ({duration_s:.0f} s max) | code : {stamp} ===')
+    try:
+        from . import sounds                       # 19/10 : sons du HUD T-800 (demarrage + generation en fond)
+        sounds.prewarm(); sounds.play('boot')
+    except Exception:
+        pass
+    hp_alarm_t = -99.0
     _vr = CFG.vr_mode()
     if _vr:
         _log(f'MODE VR ACTIF ({_vr}) : l agent joue a plat seulement -- VR-OFF.bat puis relancer V. Session annulee.')
@@ -706,6 +713,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                              _why or ('reparti sans resultat' if _dm > 30.0 else 'rien en 60 s'), z=_mw.get('z'), log=_log)
                         marker_watch = None
 
+                # 19/10 : alarme du HUD T-800 quand la vie passe sous 25 % (toutes les 15 s au plus)
+                if (st.get('hp') or 100) < 25 and (st.get('hp') or 0) > 0.5 and time.time() - hp_alarm_t > 15.0:
+                    hp_alarm_t = time.time()
+                    try:
+                        from . import sounds
+                        sounds.play('alarm')
+                    except Exception:
+                        pass
                 # 19/10 : distance parcourue (sauts > 300 m = voyage rapide / rechargement, non comptes)
                 if st.get('x') is not None:
                     if km_last is not None:
@@ -795,7 +810,42 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             _log(f"[quetes] mission choisie par le chat : « {q_m.get('text')} » a {q_m.get('dist') or 0:.0f} m")
                         else:
                             _log('[quetes] mission choisie par le chat introuvable (terminee entre-temps ?)')
-                    elif low == 'celebre':
+                    elif low == 'vole':
+                        # 19/10 (chat) : vole la voiture la plus proche (pas pres de la police : driving.steal_candidate)
+                        if st.get('combat') or st.get('vehicle'):
+                            _log('[ordre] vol de voiture refuse : V est en combat ou deja au volant')
+                        else:
+                            ok_v = driving.steal_nearby(stop=stop, log=_log, max_d=40.0)
+                            _log(f"[ordre] vol de voiture : {'reussi' if ok_v else 'aucune voiture prenable a 40 m'}")
+                    elif low == 'voiture':
+                        if st.get('combat') or st.get('vehicle'):
+                            _log('[ordre] voiture refusee : V est en combat ou deja au volant')
+                        else:
+                            ok_c = driving.summon_and_board(stop=stop, log=_log)
+                            _log(f"[ordre] voiture appelee : {'V monte' if ok_c else 'pas venue'}")
+                    elif low == 'loot':
+                        if st.get('combat'):
+                            _log('[ordre] fouille refusee : combat en cours')
+                        else:
+                            lr = combat.loot_around(stop=stop, log=_log, seen=looted)
+                            stats['loot'] = stats.get('loot', 0) + lr.get('ramasses', 0)
+                            _log(f"[ordre] fouille : {lr.get('ramasses', 0)}/{lr.get('objets', 0)} objet(s) ramasse(s)")
+                    elif low == 'radio':
+                        radio.on_or_next(log=_log)
+                    elif low == 'cyberpsycho':
+                        _ps = [q_p for q_p in quests.list_active() if q_p.get('text') == 'HuntForPsychoVariant' and q_p.get('x') is not None]
+                        if _ps:
+                            _p = min(_ps, key=lambda q_p: q_p.get('dist') or 1e9)
+                            alt_target = _alt(_p)
+                            plan.last_t = -99.0; plan.action = 'objectif'
+                            _log(f"[ordre] chasse au cyberpsycho : zone a {_p.get('dist') or 0:.0f} m")
+                        else:
+                            _log('[ordre] chasse au cyberpsycho : aucun signalement sur la carte')
+                            narrator.say('AUCUN CYBERPSYCHO SIGNALE.', force=True)
+                    elif low == 'etat':
+                        narrator.say(f"VIE {st.get('hp', 0):.0f} %. NIVEAU {st.get('level', '?')}. {inventory.MONEY} EDDIES. "
+                                     f"{stats.get('combats', 0)} COMBATS, {stats.get('morts', 0)} MORTS.", force=True)
+                    elif low in ('celebre', 'fete'):
                         # 19/10 (Olivier : « 3 ») : soutien du chat -> V fete ca (hors combat / conduite) ; le clip suit
                         if st.get('combat') or st.get('vehicle') or st.get('mounted'):
                             _log('[fete] soutien du chat : V est occupe (combat / volant), remerciement a l ecran seulement')

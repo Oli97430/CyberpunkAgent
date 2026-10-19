@@ -1,1 +1,1 @@
-Bienvenue ! 🤖 V joue en autonomie et le chat VOTE ses actions toutes les 30 s : !attaque !objectif !skip !mission !explore !shop !charcudoc !heal — et quand il propose 3 missions : !1 !2 !3
+Bienvenue ! 🤖 V joue en autonomie et le chat VOTE ses actions toutes les 30 s : !attaque !objectif !skip !mission !explore !shop !charcudoc !heal !vole !voiture !loot !fete !radio !psycho !etat !melee !distance !prudent !yolo — et quand il propose 3 missions : !1 !2 !3
