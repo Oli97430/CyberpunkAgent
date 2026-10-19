@@ -232,6 +232,7 @@ def goto(request, arrive_m: float = 3.0, max_legs: int = 10, timeout: float = 18
     legs = 0
     real_legs = 0            # troncons qui ont VRAIMENT fait avancer V (pas juste demande un chemin qui bloque aussitot)
     target = None
+    waits = 0                # 19/10 : attentes sur un etat passager (V en l air, navmesh pas charge)
     while legs < max_legs and time.perf_counter() - t0 < timeout:
         if stop is not None and stop.is_set():
             return {'ok': False, 'reason': 'arret d urgence', 'legs': legs, 'seconds': time.perf_counter() - t0}
@@ -239,6 +240,13 @@ def goto(request, arrive_m: float = 3.0, max_legs: int = 10, timeout: float = 18
         if resp is None:
             return {'ok': False, 'reason': 'mod muet (jeu pret ? 20 s apres chargement)', 'legs': legs, 'seconds': time.perf_counter() - t0}
         if not resp.get('ok'):
+            why = str(resp.get('reason') or '')
+            # 19/10 (reference PATHFINDING_CP2077 §4.1) : V en l air ou navmesh pas encore charge = etat PASSAGER -> on
+            # attend 1 s et on redemande (3 fois au plus), au lieu de compter un echec de chemin
+            if ('pas au sol' in why or 'non charge' in why) and waits < 3:
+                waits += 1
+                time.sleep(1.0)
+                continue
             return {'ok': False, 'reason': resp.get('reason'), 'legs': legs, 'seconds': time.perf_counter() - t0}
         target = resp['target']
         pts = [(p[0], p[1]) for p in resp['points']]

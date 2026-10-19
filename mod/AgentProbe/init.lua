@@ -2273,17 +2273,113 @@ local function questTarget()
     return m:GetWorldPosition(), nil
 end
 
+-- 19/10 NAVIGATION (Olivier : reference E:\REA\cyberpunk\PATHFINDING_CP2077.md, dumps du jeu) : API de navigation non
+-- utilisee jusqu ici. Globales (limite d upvalues) ; tout est sous pcall, avec repli sur l ancienne methode.
+AgentNav = AgentNav or { obstacles = {}, probed = false }
+function AgentNavProbe(player)
+    -- une fois par session : les points « a verifier en jeu » de la reference, journalises
+    if AgentNav.probed then return end
+    AgentNav.probed = true
+    local ai, ns = Game.GetAINavigationSystem(), Game.GetNavigationSystem()
+    local pos = player:GetWorldPosition()
+    local r = {}
+    local okC, c = pcall(function() return NewObject('worldNavigationScriptCostModCircle') end)
+    r[#r + 1] = 'CostModCircle=' .. tostring(okC and c ~= nil)
+    local okF, f = pcall(function() return ai:HasPathForward(player, 3.0) end)
+    r[#r + 1] = 'HasPathForward=' .. (okF and tostring(f) or 'ERR')
+    local okS, sm = pcall(function() return ns:IsNavmeshStreamedInLocation(pos, 2.0) end)
+    r[#r + 1] = 'Streamed=' .. (okS and tostring(sm) or 'ERR')
+    local okG, g = pcall(function() return ns:IsOnGround(player, 2.0) end)
+    r[#r + 1] = 'IsOnGround=' .. (okG and tostring(g) or 'ERR')
+    local okB, b = pcall(function() return ai:GetNearestNavmeshPointBelow(player, pos, 1.5, 4) end)
+    r[#r + 1] = 'PointBelow=' .. (okB and b and string.format('%.1f,%.1f,%.1f', b.x, b.y, b.z) or 'ERR')
+    local okX, bx = pcall(function() return ai:FindPointInBoxForCharacter(pos, Vector4.new(6, 6, 1.5, 0), player) end)
+    r[#r + 1] = 'PointInBox=' .. (okX and bx and tostring(bx.status) or 'ERR')
+    local okP, po = pcall(function() return Game.GetSpatialQueriesSystem():GetPlayerObstacleSystem() end)
+    r[#r + 1] = 'PlayerObstacleSystem=' .. tostring(okP and po ~= nil)
+    pcall(journal, 'NAV sondes : ' .. table.concat(r, ' | '))
+end
+function AgentSnapStart(player)
+    -- point du navmesh sous / pres de V ; sinon nil + raison (attendre / attendre / reculer cote Python)
+    local ai, ns = Game.GetAINavigationSystem(), Game.GetNavigationSystem()
+    local pos = player:GetWorldPosition()
+    pcall(AgentNavProbe, player)
+    local r = ai:FindPointInSphereForCharacter(pos, 3.0, player)
+    if r and r.point and tostring(r.status):find('OK') then return r.point end
+    local okS, streamed = pcall(function() return ns:IsNavmeshStreamedInLocation(pos, 2.0) end)
+    if okS and streamed == false then return nil, 'depart hors navmesh (navmesh non charge ici)' end
+    local okG, ground = pcall(function() return ns:IsOnGround(player, 2.0) end)
+    if okG and ground == false then return nil, 'depart hors navmesh (V pas au sol)' end
+    local okB, below = pcall(function() return ai:GetNearestNavmeshPointBelow(player, pos, 1.5, 4) end)
+    if okB and below and (below.x ~= 0 or below.y ~= 0) and math.abs(below.z - pos.z) < 6 then
+        AgentNav.snaps = (AgentNav.snaps or 0) + 1
+        return below
+    end
+    local okX, bx = pcall(function() return ai:FindPointInBoxForCharacter(pos, Vector4.new(6, 6, 1.5, 0), player) end)
+    if okX and bx and bx.point and tostring(bx.status):find('OK') then
+        AgentNav.snaps = (AgentNav.snaps or 0) + 1
+        return bx.point
+    end
+    local okW, wide = pcall(function() return ai:FindPointInSphereForCharacter(pos, 8.0, player) end)
+    if okW and wide and wide.point and tostring(wide.status):find('OK') and math.abs(wide.point.z - pos.z) < 3 then
+        AgentNav.snaps = (AgentNav.snaps or 0) + 1
+        return wide.point
+    end
+    return nil, 'depart hors navmesh (5 methodes)'
+end
+function AgentNavAvoid(avoid, z)
+    -- zone bloquante memorisee -> obstacle dynamique du jeu (le pathfinding la contourne) + cercle de cout pour la requete
+    if not avoid then return nil end
+    local key = string.format('%d,%d', math.floor(avoid.x / 3), math.floor(avoid.y / 3))
+    if not AgentNav.obstacles[key] then
+        local ok, o = pcall(function()
+            return Game.GetNavigationSystem():AddObstacle(Vector4.new(avoid.x, avoid.y, z, 1.0), 4.0, 2.0, NavGenAgentSize.Human)
+        end)
+        if ok and o then
+            AgentNav.obstacles[key] = { o = o, t = os.time() }
+            AgentNav.order = AgentNav.order or {}
+            table.insert(AgentNav.order, key)
+            pcall(journal, string.format('NAV obstacle pose (%.0f,%.0f) : %d actif(s)', avoid.x, avoid.y, #AgentNav.order))
+            while #AgentNav.order > 12 do                           -- 12 au plus : on retire le plus ancien
+                local old = table.remove(AgentNav.order, 1)
+                local e = AgentNav.obstacles[old]
+                if e then pcall(function() Game.GetNavigationSystem():RemoveObstacle(e.o) end) end
+                AgentNav.obstacles[old] = nil
+            end
+        elseif not AgentNav.obstErr then
+            AgentNav.obstErr = true
+            pcall(journal, 'NAV AddObstacle indisponible : ' .. tostring(o))
+        end
+    end
+    local okC, c = pcall(function() return NewObject('worldNavigationScriptCostModCircle') end)
+    if okC and c then
+        pcall(function() c.pos = Vector4.new(avoid.x, avoid.y, z, 1.0); c.range = 8.0; c.cost = 100.0 end)
+        return c
+    end
+    return nil
+end
+function AgentNavPath(ai, a, b, player, circle)
+    -- CalculatePathForCharacter avec cercle de cout si dispo, sinon sans
+    if circle then
+        local ok, p = pcall(function() return ai:CalculatePathForCharacter(a, b, 2.0, player, circle) end)
+        if ok then return p end
+    end
+    return ai:CalculatePathForCharacter(a, b, 2.0, player)
+end
+
 local function computePath(player, target, avoid)
     local ai = Game.GetAINavigationSystem()
     local pos = player:GetWorldPosition()
     if avoid and ((pos.x - avoid.x) ^ 2 + (pos.y - avoid.y) ^ 2) < 64 then avoid = nil end   -- 12/10 : zone posee sur V lui-meme
-    local a = ai:FindPointInSphereForCharacter(pos, 3.0, player)
-    if not (a and a.point and tostring(a.status):find('OK')) then return nil, 'depart hors navmesh', false end
+    local aPt, whyA = AgentSnapStart(player)           -- 19/10 : chaine de secours (reference PATHFINDING_CP2077 §4.1)
+    if not aPt then return nil, whyA, false end
+    local a = { point = aPt }
+    local circle = AgentNavAvoid(avoid, pos.z)          -- 19/10 : obstacle dynamique + cercle de cout (§4.2)
     local b = ai:FindPointInSphereForCharacter(target, 6.0, player)
     local partial = false
     local path = nil
     if b and b.point and tostring(b.status):find('OK') then
-        path = ai:CalculatePathForCharacter(a.point, b.point, 2.0, player)
+        path = AgentNavPath(ai, a.point, b.point, player, circle)
     end
     if not path then
         -- point intermediaire vers la cible : on ECHANTILLONNE (distances decroissantes,
@@ -2305,7 +2401,7 @@ local function computePath(player, target, avoid)
                         nearAvoid = ((c.point.x - avoid.x) ^ 2 + (c.point.y - avoid.y) ^ 2) < 25 * 25
                     end
                     if c and c.point and tostring(c.status):find('OK') and not nearAvoid then
-                        local cand = ai:CalculatePathForCharacter(a.point, c.point, 2.0, player)
+                        local cand = AgentNavPath(ai, a.point, c.point, player, circle)
                         if cand and avoid then
                             -- un chemin qui traverse la zone bloquante est ecarte
                             for k = 1, #cand.path do
