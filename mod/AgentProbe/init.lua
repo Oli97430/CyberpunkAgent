@@ -3824,6 +3824,42 @@ local function handleCommand(player, cmd)
         resp.ok = resp.lifepath ~= nil or resp.gender ~= nil
         journal('OK   char_id : ' .. tostring(resp.lifepath) .. ' / ' .. tostring(resp.gender))
         return resp
+    elseif cmd.cmd == 'street_jobs' then
+        -- 19/10 CONTRATS DE RUE (Olivier : « plus de combats ») : activites NCPD / gangs de la carte (marqueurs actifs, pas
+        -- termines) ; ce ne sont pas des marqueurs de quete, list_quests ne les voyait pas
+        journal('RUN  street_jobs')
+        local pos = player:GetWorldPosition()
+        local out = {}
+        local mappins = Game.GetMappinSystem():GetMappins(gamemappinsMappinTargetType.Map)
+        if type(mappins) == 'table' then
+            for i = 1, #mappins do
+                local m = mappins[i]
+                local v = nil
+                pcall(function() v = tostring(m:GetVariant()):gsub('gamedataMappinVariant : ', ''):gsub(' %(%d+%)', '') end)
+                if v and (v:find('GangWatch') or v:find('Outpost') or v:find('HiddenStash') or v:find('ClientInDistress')
+                          or v:find('Convoy') or v:find('BountyHunt') or v:find('NCPDGig') or v:find('HuntForPsycho')
+                          or v:find('MinorActivity')) then
+                    local active, ph = true, ''
+                    pcall(function() active = m:IsActive() end)
+                    pcall(function() ph = tostring(m:GetPhase()) end)
+                    if active and not ph:find('Completed') then
+                        local rec = { variant = v, phase = (ph:gsub('gamedataMappinPhase : ', ''):gsub(' %(%d+%)', '')) }
+                        pcall(function()
+                            local w = m:GetWorldPosition()
+                            rec.x, rec.y, rec.z = w.x, w.y, w.z
+                            rec.dist = math.sqrt((w.x - pos.x) ^ 2 + (w.y - pos.y) ^ 2)
+                        end)
+                        if rec.dist then out[#out + 1] = rec end
+                    end
+                end
+            end
+        end
+        table.sort(out, function(a, b) return a.dist < b.dist end)
+        local keep = {}
+        for i = 1, math.min(30, #out) do keep[i] = out[i] end
+        resp.ok, resp.jobs = true, keep
+        journal(string.format('OK   street_jobs : %d activite(s) de rue (%d gardees)', #out, #keep))
+        return resp
     elseif cmd.cmd == 'lift_info' then
         local r = AgentLiftInfo(player)
         for k, v in pairs(r) do resp[k] = v end

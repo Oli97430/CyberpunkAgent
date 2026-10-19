@@ -46,10 +46,11 @@ RULES: list[tuple[str, str]] = [
     (r'\[quetes\] mission choisie par le chat : « (.+?) »', 'ORDRE DU CHAT : {0}. EN ROUTE.'),
     (r'\[clips\] clip', 'MOMENT ENREGISTRE.'),
     (r'\[relance\] V est de retour', 'REDEMARRAGE DU SYSTEME TERMINE. I M BACK.'),
+    (r'\[contrat\] ([A-Z ]+) signale', 'SIGNALEMENT NCPD : {0}. J INTERVIENS.'),
     (r'^objectif : (.+?)\s+\(marqueur', 'NOUVELLE MISSION : {0}'),
 ]
 # 19/10 (revue de securite) : regles ANCREES en debut de ligne (etiquette interne facultative : [vente], [conduite]...)
-_PREFIX = r'^(?:\[(?:vente|conduite|armes|charcudoc|exploration|vol|gouts|succes|combat|quetes|cyberpsycho|revanche|clips|relance)\]\s*)?'
+_PREFIX = r'^(?:\[(?:vente|conduite|armes|charcudoc|exploration|vol|gouts|succes|combat|quetes|cyberpsycho|revanche|clips|relance|contrat)\]\s*)?'
 _RX = [(re.compile(p if p.startswith(('^', r'\[')) else _PREFIX + p), s) for p, s in RULES]
 _RX = [(re.compile('^' + rx.pattern) if not rx.pattern.startswith('^') else rx, s) for rx, s in _RX]
 # 19/10 (revue de securite) : lignes dont le texte vient de l EXTERIEUR (chat YouTube, Telegram, SMS, dialogues, panneau,

@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, narrator, relaunch, lift, profiles, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
+from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, narrator, relaunch, lift, profiles, contracts, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -593,6 +593,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     except Exception:
         pass
     hp_alarm_t = -99.0
+    last_fight_t, contract_try_t = time.perf_counter(), -1e9   # 19/10 : envie de baston
     profile_t = -99.0                     # 19/10 : profil par personnage (dernier essai)
     lift_tried: dict = {}                 # 19/10 : cible -> derniere tentative d ascenseur
     carry_logged, carry_keep_until, carry_drops = False, -1.0, []   # 19/10 : corps porte pour la quete
@@ -776,6 +777,18 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         sounds.play('alarm')
                     except Exception:
                         pass
+                # 19/10 (Olivier : « plus de combats ») : 15 min sans combat -> V va chercher la bagarre (contrat de rue < 800 m)
+                if st.get('combat'):
+                    last_fight_t = time.perf_counter()
+                elif time.perf_counter() - last_fight_t > 900.0 and time.perf_counter() - contract_try_t > 900.0 \
+                        and not st.get('vehicle') and not (st.get('dialog') or {}).get('choices') \
+                        and CFG.features.get('contracts', True) \
+                        and (alt_target is None or alt_target.get('text') not in contracts.COMBAT_KINDS):
+                    contract_try_t = time.perf_counter()
+                    _nc = contracts.pick(max_d=800.0, log=_log)
+                    if _nc:
+                        alt_target = _alt(_nc)
+                        plan.last_t = -99.0; plan.action = 'objectif'
                 # 19/10 (Olivier : « 2 ») : profil par personnage -- des que le mod repond (un essai / 30 s)
                 if profiles.STATE['id'] is None and time.perf_counter() - profile_t > 30.0:
                     profile_t = time.perf_counter()
@@ -1616,11 +1629,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             quests.marker_result(_v[1], _v[2], _v[3], False, 'inaccessible a pied', z=_v[4], log=_log)
                     if _arr or time.perf_counter() - alt_target['t0'] > 900:
                         _used = None
-                        if _arr and alt_target.get('text') == 'HuntForPsychoVariant' and not st.get('combat') \
+                        if _arr and alt_target.get('text') in contracts.COMBAT_KINDS:
+                            contracts.mark_done(alt_target['x'], alt_target['y'])   # 19/10 : ecarte 2 h, fait ou pas
+                        if _arr and alt_target.get('text') in contracts.SEARCH_KINDS and not st.get('combat') \
                                 and not (stop is not None and stop.is_set()):
                             # 19/10 : zone de traque -> fouille en spirale jusqu au contact (le psycho n est pas au centre)
                             if psycho.search(alt_target['x'], alt_target['y'], alt_target.get('z'), stop=stop, log=_log):
-                                stats['cyberpsychos'] = stats.get('cyberpsychos', 0) + 1
+                                _k_c = 'cyberpsychos' if alt_target.get('text') == 'HuntForPsychoVariant' else 'contrats'
+                                stats[_k_c] = stats.get(_k_c, 0) + 1
                                 alt_target = None; plan.last_t = -99.0
                                 continue                                 # le combat prend le relais
                         if _arr and not st.get('combat') and not ((st.get('interact') or {}).get('choices')):
@@ -1857,6 +1873,12 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         stats['changements_quete'] = stats.get('changements_quete', 0) + 1
                         plan.note('a change de cible')
                         plan.last_t = -99.0; plan.action = 'objectif'     # forcer une nouvelle decision (3 changements en 3 s sinon)
+                        time.sleep(1.0); continue
+                    # 19/10 (Olivier : « plus de combats ») : un contrat de rue avant d aller explorer
+                    nxc = contracts.pick(log=_log) if CFG.features.get('contracts', True) else None
+                    if nxc:
+                        alt_target = _alt(nxc)
+                        plan.last_t = -99.0; plan.action = 'objectif'
                         time.sleep(1.0); continue
                     # 24/09 : plus aucun marqueur accessible (steriles exclus, bloques...) -> exploration plutot qu attendre
                     nxe = explore.pick(log=_log)

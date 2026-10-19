@@ -30,6 +30,7 @@ FEATURES: list[tuple[str, str, str]] = [
     ('quickhack', 'quickhack lance', r'^\[combat\] quickhack « [^»]+ » (?!jamais)'),
     ('succes', 'succes Steam debloque', r'^\[succes\] DEBLOQUE'),
     ('relance', 'relance apres crash', r'^\[relance\] V est de retour'),
+    ('contrat', 'contrat de rue pris', r'^\[contrat\] '),
     ('ascenseur', 'ascenseur pris (etage atteint)', r'^\[ascenseur\] etage atteint'),
     ('charcudoc_dialogue', 'charcudoc ouvert par dialogue', r'^\[vente\] ecran ouvert par le dialogue : stock lu'),
 ]
