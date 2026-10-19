@@ -3815,6 +3815,15 @@ local function handleCommand(player, cmd)
         resp.ok, resp.points = true, out
         journal(string.format('OK   access_points : %d point(s) d acces', #out))
         return resp
+    elseif cmd.cmd == 'char_id' then
+        -- 19/10 PROFIL PAR PERSONNAGE : parcours de vie + corps (playerDevelopmentSystem.script:159, puppet.script:84)
+        pcall(function() resp.lifepath = tostring(PlayerDevelopmentSystem.GetData(player):GetLifePath()) end)
+        pcall(function() resp.gender = NameToString(player:GetResolvedGenderName()) end)
+        if not resp.gender then pcall(function() resp.gender = Game.NameToString(player:GetResolvedGenderName()) end) end
+        if not resp.gender then pcall(function() resp.gender = tostring(player:GetResolvedGenderName()) end) end
+        resp.ok = resp.lifepath ~= nil or resp.gender ~= nil
+        journal('OK   char_id : ' .. tostring(resp.lifepath) .. ' / ' .. tostring(resp.gender))
+        return resp
     elseif cmd.cmd == 'lifts' then
         -- 19/10 ASCENSEURS (Olivier : « 3 ») : terminaux d etage (ElevatorFloorTerminal) et cabines (LiftDevice) a < 40 m
         journal('RUN  lifts')

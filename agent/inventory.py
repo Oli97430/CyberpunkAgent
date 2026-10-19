@@ -329,6 +329,28 @@ def manage(log=print) -> dict:
     def _val(it):
         p = it.get('price') or 0
         return (p * 0.15) if p > 0 else QVAL.get(str(it.get('quality')), 30) * (0.3 if ((it.get('type') or '') == 'Gen_Misc' or (it.get('type') or '').startswith('Prt_')) else 1.0)
+    # 19/10 (Olivier : « 5 », tri de l inventaire) : SAC LEGER -- au-dessus de 70 % de charge, V demonte (composants pour
+    # le craft) les objets a vendre qui rapportent le moins par kilo -- doublons, armes et vetements plus faibles que ce
+    # qu il porte -- jusqu a revenir a 60 % ; les Epiques / Legendaires restent pour la vente (ils valent le detour)
+    if cap and w > 0.7 * cap and SELLABLE:
+        def _per_kg(it):
+            return _val(it) / max(0.1, float(it.get('weight') or 0.1))
+        light = sorted([it for it in SELLABLE if (it.get('weight') or 0) > 0 and str(it.get('quality')) in ('Common', 'Uncommon', 'Rare')
+                        and not (it.get('type') or '').startswith('Prt_')], key=_per_kg)
+        cur_w, gone = float(w), []
+        for it in light:
+            if cur_w <= 0.6 * cap or len(gone) >= 15:
+                break
+            q_it = int(it.get('qty') or 1)
+            if disassemble(it['i'], q_it):
+                cur_w -= float(it.get('weight') or 0) * q_it
+                gone.append(it); dis += 1
+                log(f"  [inventaire] sac leger : demonte « {it.get('name')} » ({it.get('quality')}, {float(it.get('weight') or 0):.1f} kg,"
+                    f" ~{_val(it):.0f} eddies)")
+                time.sleep(0.2)
+        if gone:
+            SELLABLE = [it for it in SELLABLE if it not in gone]
+            log(f'  [inventaire] sac leger : {len(gone)} objet(s) demonte(s), charge {w:.0f} -> ~{cur_w:.0f} / {cap:.0f}')
     SELL_VALUE = int(sum(_val(it) * int(it.get('qty') or 1) for it in SELLABLE))
     if SELLABLE:
         log(f'  [inventaire] {len(SELLABLE)} objet(s) a vendre au prochain marchand (~{SELL_VALUE} eddies)')

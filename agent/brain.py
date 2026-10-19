@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, narrator, relaunch, lift, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
+from . import achievements, appearance, braindance, breach, buffs, combat, dialog, driving, escape, explore, hud, narrator, relaunch, lift, profiles, input_kbm as kbm, inventory, llm, motion, nav, navprog, planner, quests, radio, remote, sms, terminals, psycho, travel, vendor, youtube_chat
 
 from .config import CFG
 LOG_FILE = CFG.log_file                 # %APPDATA%/CyberpunkAgent/brain_log.txt
@@ -593,6 +593,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     except Exception:
         pass
     hp_alarm_t = -99.0
+    profile_t = -99.0                     # 19/10 : profil par personnage (dernier essai)
     lift_tried: dict = {}                 # 19/10 : cible -> derniere tentative d ascenseur
     carry_logged, carry_keep_until, carry_drops = False, -1.0, []   # 19/10 : corps porte pour la quete
     hp_prev, hit_snd_t = None, -99.0      # 19/10 : son de degat
@@ -775,6 +776,13 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         sounds.play('alarm')
                     except Exception:
                         pass
+                # 19/10 (Olivier : « 2 ») : profil par personnage -- des que le mod repond (un essai / 30 s)
+                if profiles.STATE['id'] is None and time.perf_counter() - profile_t > 30.0:
+                    profile_t = time.perf_counter()
+                    try:
+                        profiles.activate(log=_log)
+                    except Exception as _ep:
+                        _log(f'  [profil] erreur : {_ep}')
                 # 19/10 : cible choisie par V -> losange sur le cap du HUD V-800 (sinon le mod montre la quete suivie)
                 if time.time() - hud_tgt_t > 1.0:
                     hud_tgt_t = time.time()
