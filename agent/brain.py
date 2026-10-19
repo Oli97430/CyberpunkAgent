@@ -37,6 +37,10 @@ _DIRECTIVE_KEYWORDS = frozenset({
 })
 _DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ', 'modele ', 'mission_choix ')
 _STOP_WORDS = ('stop', 'arret', 'arrete-toi', 'arrete toi')
+CARRY_WORDS = ('soulever', 'porter', 'transporter', 'emmener', 'amener', 'deposer', 'evacuer', 'sortir le corps', 'cacher le corps',
+               'mettre le corps', 'carry')   # 19/10 : objectifs ou V DOIT porter quelqu un
+_DIR_ALIASES = {'huntforpsychovariant': 'cyberpsycho', 'psycho': 'cyberpsycho', 'cyberpsychose': 'cyberpsycho',
+                'chasse au cyberpsycho': 'cyberpsycho'}   # 19/10 : « Huntforpsychovariant » non compris a 13:06
 _RESUME_WORDS = ('reprendre', 'resume', 'continue')
 
 
@@ -67,6 +71,8 @@ def _understand(dtv: str) -> tuple[str, str]:
     commande la plus proche (20/09, « trop basique »)."""
     low = dtv.lower().strip()
     f = _fold(dtv)
+    if f in _DIR_ALIASES:
+        return _DIR_ALIASES[f], _DIR_ALIASES[f]
     if low.startswith(('courage ', 'style ', 'aggro ')):
         return f, f                                     # valeurs enumerees : « téméraire » = « temeraire »
     if low not in _DIRECTIVE_KEYWORDS and not low.startswith(_DIRECTIVE_PREFIXES):
@@ -587,6 +593,7 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     except Exception:
         pass
     hp_alarm_t = -99.0
+    carry_logged, carry_keep_until, carry_drops = False, -1.0, []   # 19/10 : corps porte pour la quete
     hp_prev, hit_snd_t = None, -99.0      # 19/10 : son de degat
     hud_tgt_t = -99.0                     # 19/10 : cible de V sur le cap du HUD
     crash_check_t, game_gone = -99.0, 0     # 19/10 : relance automatique apres un crash du jeu
@@ -1268,8 +1275,30 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     swim_logged = False; _log('NAGE : V est sorti de l eau')
 
                 if st.get('carrying') and kbm.ACTIONS.get('dropbody'):
+                    # 19/10 (session 12:53 : « Soulever Evelyn », corps lache 114 fois en 2 min) : un corps porte POUR LA
+                    # QUETE (objectif « soulever / porter / transporter / emmener... ») se garde, V suit le marqueur avec ;
+                    # et si le jeu lui remet le corps 3 fois en 20 s, c est une scene : il le garde 5 min
+                    _qc = st.get('quest') or {}
+                    _qt = _fold(str(_qc.get('text') or ''))
+                    _quest_carry = any(w in _qt for w in CARRY_WORDS)
+                    _now_c = time.perf_counter()
+                    if _quest_carry or _now_c < carry_keep_until:
+                        if not carry_logged:
+                            carry_logged = True
+                            _log(f"V porte un corps POUR LA QUETE (« {_qc.get('text') or 'scene'} ») : il le garde et suit le marqueur")
+                        if _qc.get('mx') is not None:
+                            motion.walk_to(_qc['mx'], _qc['my'], timeout=6.0, stop=stop, sprint=False)
+                        else:
+                            time.sleep(0.5)
+                        continue
+                    carry_drops[:] = [t_d for t_d in carry_drops if _now_c - t_d < 20.0] + [_now_c]
+                    if len(carry_drops) >= 3:
+                        carry_keep_until = _now_c + 300.0; carry_drops.clear()
+                        _log('le jeu remet le corps a V (3 fois en 20 s) : c est une scene, V le garde 5 min')
+                        continue
                     _log('V porte un corps : il le lache (il ne peut ni courir ni se battre ainsi)')
                     kbm.act('dropbody', 0.2); time.sleep(1.0); continue
+                carry_logged = False
 
                 if st.get('vehicle'):
                     qv = st.get('quest') or {}
