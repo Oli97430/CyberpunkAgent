@@ -442,7 +442,48 @@ def summon_and_board(stop=None, log=print, want_taste: bool = True) -> bool:
     return _board(car, stop=stop, log=log)
 
 
-_AUTODRIVE_ON = {'left_on': False}   # 12/10 : autodrive enclenche par V puis laisse actif sur F11/F12
+_AUTODRIVE_ON = {'left_on': False}
+_ROAD_TGT: list = [None]     # 19/10 : cible du trajet en cours (manoeuvre hors route)
+
+
+def _seek_road(log=print, stop=None) -> bool:
+    """19/10 (Olivier : « go voiture » ; session 15:14 : autodrive refuse « voie 2 » = hors route, 2 fois) : V conduit
+    lui-meme 1,8 s pour rejoindre une voie -- vers la cible, puis en marche arriere, puis vers la cible -- frein a main,
+    et re-sonde la voie. Vrai des que le jeu dit « voie valide » (0). Court et lent : pas de course-poursuite."""
+    for attempt in range(3):
+        if stop is not None and stop.is_set():
+            return False
+        st = motion.read_state() or {}
+        if not st.get('vehicle') or st.get('x') is None:
+            return False
+        steer = None
+        tgt = _ROAD_TGT[0]
+        if tgt is not None and st.get('yaw') is not None:
+            err = motion.wrap(motion.bearing_to(st['x'], st['y'], tgt[0], tgt[1]) - st['yaw'])
+            steer = 'A' if err > 15.0 else ('D' if err < -15.0 else None)      # cap positif = a gauche
+        back = attempt == 1
+        drive_key = 'S' if back else 'W'
+        turn_key = (('D' if steer == 'A' else 'A') if back else steer) if steer else None   # en arriere, braquage inverse
+        x0, y0 = st['x'], st['y']
+        try:
+            kbm.hold(drive_key)
+            if turn_key:
+                kbm.hold(turn_key)
+            time.sleep(1.8)
+        finally:
+            kbm.release(drive_key)
+            for k in ('A', 'D'):
+                kbm.release(k)
+        kbm.hold('SPACE'); time.sleep(0.6); kbm.release('SPACE')
+        r = nav._wait(nav._send({'cmd': 'autodrive', 'x': 2}), timeout=2.0) or {}
+        s2 = motion.read_state() or st
+        moved = math.hypot(s2.get('x', x0) - x0, s2.get('y', y0) - y0)
+        log(f"  [conduite] hors route : manoeuvre {attempt + 1}/3 ({'marche arriere' if back else 'vers la cible'}"
+            f"{', braque ' + ('gauche' if turn_key == 'A' else 'droite') if turn_key else ''}) : {moved:.0f} m, voie {r.get('lane')}")
+        if r.get('lane') == 0:
+            log('  [conduite] retour sur une voie valide : on relance l autodrive')
+            return True
+    return False   # 12/10 : autodrive enclenche par V puis laisse actif sur F11/F12
 
 
 def _stolen_stop() -> None:
@@ -489,6 +530,7 @@ def autodrive_to(tx: float, ty: float, stop=None, log=print, stolen: dict | None
     """En vehicule : enclenche l autodrive (G) et surveille l approche de (tx, ty).
     stolen : vehicule qui n est pas a V (12/10) -> commande autodrive du mod, refus constate en 8 s."""
     t0 = time.perf_counter()
+    _ROAD_TGT[0] = (tx, ty)
     st = motion.read_state()
     if not st or not st.get('vehicle'):
         return {'ok': False, 'reason': 'pas en vehicule'}
@@ -539,7 +581,7 @@ def _own_relaunch(log=print, stop=None) -> bool:
     return False
 
 
-def _own_start(log=print, stop=None) -> bool:
+def _own_start(log=print, stop=None, _road_tried: bool = False) -> bool:
     """12/10 : autodrive NORMAL de la voiture de V par le mod (pas de bascule G) ; vrai si dx.on dans les 3 s."""
     r = nav._wait(nav._send({'cmd': 'autodrive', 'x': 3}), timeout=2.0) or {}
     t = time.perf_counter()
@@ -550,6 +592,8 @@ def _own_start(log=print, stop=None) -> bool:
             return True
         time.sleep(0.3)
     log(f"  [conduite] autodrive refuse par le jeu (voie {r.get('lane')}, disponible {r.get('avail')})")
+    if r.get('lane') == 2 and not _road_tried and _seek_road(log=log, stop=stop):   # 19/10 : hors route -> rejoindre une voie
+        return _own_start(log=log, stop=stop, _road_tried=True)
     return False
 
 
