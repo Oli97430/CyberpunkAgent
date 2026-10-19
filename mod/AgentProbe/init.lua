@@ -4482,6 +4482,417 @@ local function hudRead()
         end
     end)
 end
+-- 19/10 HUD V-800 « ANATOMIE DU SIGNAL » (Olivier : « redesign le hud du v800 » puis « applique-le en jeu ») : tout est
+-- dessine en primitives (lignes, cases, chiffres 7 segments nets a toute taille) sur la liste de dessin d arriere-plan
+-- d ImGui, sans fenetre ni entree captee. Un seul rouge de signal en 3 intensites, blanc os pour les valeurs.
+-- Globales seulement (limite d upvalues du fichier). Erreur -> retour automatique a l ancien HUD (drawHud).
+AgentHudStyle = AgentHudStyle or 'v800'
+AgentV8 = AgentV8 or { textSized = nil, ramMax = nil, money = nil, slowT = -99 }
+function AgentV8Col(r, g, b, a)
+    local function c(v) return math.max(0, math.min(255, math.floor(v * 255 + 0.5))) end
+    local v = c(a) * 16777216 + c(b) * 65536 + c(g) * 256 + c(r)
+    if v >= 2147483648 then v = v - 4294967296 end   -- entier signe 32 bits (meme motif binaire pour ImU32)
+    return v
+end
+function AgentDrawV800(e, d, kills)
+    if type(e) ~= 'table' then return end
+    d = type(d) == 'table' and d or {}
+    local okR, W, H = pcall(GetDisplayResolution)
+    if not (okR and W and H and W > 0 and H > 0) then return end
+    local dl
+    local okB, bg = pcall(function() return ImGui.GetBackgroundDrawList() end)
+    if okB and bg then dl = bg else error('GetBackgroundDrawList indisponible') end
+    local u = H / 1080
+    local M = 56 * u
+    local now, clk = os.time(), os.clock()
+    local blink = math.floor(clk * 2) % 2 == 0
+    -- couleurs
+    -- 19/10 : intensites relevees pour une vraie scene de jeu (claire) ; plaques sombres derriere les colonnes
+    local RED, RED_MID, RED_DIM, RED_FAINT = AgentV8Col(1, 0.17, 0.10, 1), AgentV8Col(0.86, 0.16, 0.10, 1),
+                                             AgentV8Col(0.62, 0.13, 0.09, 1), AgentV8Col(0.34, 0.08, 0.06, 0.9)
+    local BONE, AMBER = AgentV8Col(0.91, 0.86, 0.82, 0.92), AgentV8Col(1.0, 0.72, 0.15, 1)
+    local SHADE = AgentV8Col(0.03, 0.0, 0.0, 0.55)
+    local PLATE = AgentV8Col(0.04, 0.01, 0.01, 0.42)
+    local SHADOW = AgentV8Col(0, 0, 0, 0.8)
+    local function L(x1, y1, x2, y2, col, th) ImGui.ImDrawListAddLine(dl, x1, y1, x2, y2, col, (th or 1) * u) end
+    local function R(x1, y1, x2, y2, col) ImGui.ImDrawListAddRectFilled(dl, x1, y1, x2, y2, col) end
+    local function RO(x1, y1, x2, y2, col, th) ImGui.ImDrawListAddRect(dl, x1, y1, x2, y2, col, 0, 0, (th or 1) * u) end
+    local fs0 = 13
+    pcall(function() fs0 = ImGui.GetFontSize() end)
+    if AgentV8.textSized == nil then
+        AgentV8.textSized = pcall(function() ImGui.ImDrawListAddText(dl, 12, -500, -500, RED, '.') end)
+    end
+    local function TW(s, size)
+        local w = 0
+        pcall(function() w = ImGui.CalcTextSize(s) end)
+        return w * ((AgentV8.textSized and size or fs0) / fs0)
+    end
+    local function T(x, y, s, size, col, align)
+        s = tostring(s or '')
+        size = (size or 13) * u
+        if align == 'r' then x = x - TW(s, size) elseif align == 'c' then x = x - TW(s, size) / 2 end
+        local o = math.max(1, u)
+        if AgentV8.textSized then
+            ImGui.ImDrawListAddText(dl, size, x + o, y + o, SHADOW, s)
+            ImGui.ImDrawListAddText(dl, size, x, y, col, s)
+        else
+            ImGui.ImDrawListAddText(dl, x + o, y + o, SHADOW, s)
+            ImGui.ImDrawListAddText(dl, x, y, col, s)
+        end
+    end
+    local function arc(cx, cy, r, a0, a1, col, th, n)
+        n = n or 12
+        local px, py
+        for i = 0, n do
+            local a = math.rad(a0 + (a1 - a0) * i / n)
+            local x, y = cx + r * math.cos(a), cy + r * math.sin(a)
+            if px then L(px, py, x, y, col, th) end
+            px, py = x, y
+        end
+    end
+    -- chiffres 7 segments (nets a toute taille : pas de police agrandie floue)
+    local SEG = { ['0'] = 'abcdef', ['1'] = 'bc', ['2'] = 'abged', ['3'] = 'abgcd', ['4'] = 'fgbc', ['5'] = 'afgcd',
+                  ['6'] = 'afgedc', ['7'] = 'abc', ['8'] = 'abcdefg', ['9'] = 'abcfgd', ['-'] = 'g' }
+    local function seg7(x, y, h, str, col, th)
+        local w, gap = h * 0.46, h * 0.2
+        for ch in tostring(str):gmatch('.') do
+            local sg = SEG[ch] or ''
+            local x0, x1, ym, y1 = x, x + w, y + h / 2, y + h
+            local P = { a = { x0, y, x1, y }, b = { x1, y, x1, ym }, c = { x1, ym, x1, y1 }, d = { x0, y1, x1, y1 },
+                        e = { x0, ym, x0, y1 }, f = { x0, y, x0, ym }, g = { x0, ym, x1, ym } }
+            for s in sg:gmatch('.') do local p = P[s]; L(p[1], p[2], p[3], p[4], col, th) end
+            x = x + w + gap
+        end
+        return x
+    end
+
+    -- donnees lentes (1 fois / 2 s) : RAM max, eddies
+    if clk - AgentV8.slowT > 2.0 then
+        AgentV8.slowT = clk
+        pcall(function()
+            local p = Game.GetPlayer()
+            if p then
+                pcall(function() AgentV8.ramMax = math.floor(Game.GetStatsSystem():GetStatValue(p:GetEntityID(), gamedataStatType.Memory) + 0.5) end)
+                pcall(function() AgentV8.money = Game.GetTransactionSystem():GetItemQuantity(p, MarketSystem.Money()) end)
+            end
+        end)
+    end
+
+    local hp = tonumber(e.hp) or 0
+    local stale = (tonumber(d.ts) == nil) or (now - tonumber(d.ts) > 8)
+    local foes, police = {}, 0
+    for _, en in ipairs(e.enemies or {}) do
+        if not en.dead then
+            if en.police then police = police + 1 else foes[#foes + 1] = en end
+        end
+    end
+    table.sort(foes, function(a, b) return (a.d or 999) < (b.d or 999) end)
+    local alert = (not e.dead) and (hp < 30 or #foes >= 6)
+
+    -- ===== centre : reticule (complet en combat, anneau seul sinon) =====
+    local CX, CY = W / 2, H / 2
+    local inCombat = e.combat or #foes > 0
+    local ringCol = inCombat and RED or RED_DIM
+    for deg = 0, 355, 5 do
+        local a = math.rad(deg)
+        local long_ = deg % 30 == 0
+        if inCombat or long_ then
+            local r0, r1 = (long_ and 150 or 156) * u, (long_ and 166 or 162) * u
+            L(CX + r0 * math.cos(a), CY + r0 * math.sin(a), CX + r1 * math.cos(a), CY + r1 * math.sin(a),
+              long_ and ringCol or RED_DIM, long_ and 1.3 or 1)
+        end
+    end
+    if inCombat then
+        for a0 = 0, 354, 6 do arc(CX, CY, 118 * u, a0, a0 + 3, RED_MID, 1, 2) end
+    end
+
+    -- ===== cibles : verrou sur la plus proche, crochets fins sur les autres =====
+    local locked = nil
+    for i, t in ipairs(foes) do
+        if i > 6 then break end
+        local sx, sy = tonumber(t.sx), tonumber(t.sy)
+        if sx and sy and math.abs(sx) <= 1.05 and math.abs(sy) <= 1.05 then
+            local h = math.max(40 * u, math.min(0.6 * H, 1.4 * H / math.max(t.d or 10, 1.5)))
+            local w = h * 0.5
+            local px, py = (sx + 1) * 0.5 * W, (1 - sy) * 0.5 * H
+            local x0, y0, x1, y1 = px - w / 2, py - h / 2, px + w / 2, py + h / 2
+            local cl = math.min(22 * u, w * 0.3)
+            local first = locked == nil
+            local col, th = first and RED or RED_MID, first and 2 or 1.2
+            for _, k in ipairs({ { x0, y0, 1, 1 }, { x1, y0, -1, 1 }, { x0, y1, 1, -1 }, { x1, y1, -1, -1 } }) do
+                L(k[1], k[2], k[1] + k[3] * cl, k[2], col, th); L(k[1], k[2], k[1], k[2] + k[4] * cl, col, th)
+            end
+            if first then
+                locked = t
+                local yy = y0 + 14 * u
+                while yy < y1 - 12 * u do L(x0 + 10 * u, yy, x1 - 10 * u, yy, RED_FAINT, 1); yy = yy + 9.4 * u end
+                local my = (y0 + y1) / 2
+                local ang = math.atan2(my - CY, x0 - CX)
+                if px > CX + 170 * u or px < CX - 170 * u then
+                    L(CX + 166 * u * math.cos(ang), CY + 166 * u * math.sin(ang), x0 - 12 * u, my, RED_MID, 1)
+                end
+                T(x0, y0 - 46 * u, 'CIBLE 01', 18, RED)
+                T(x0, y0 - 22 * u, 'VERROUILLEE', 11, RED_DIM)
+                local rows = { { 'DIST', string.format('%d M', math.floor((t.d or 0) + 0.5)) } }
+                if t.name and t.name ~= '' then rows[#rows + 1] = { 'CLASSE', string.upper(tostring(t.name)):sub(1, 22) } end
+                for k, rw in ipairs(rows) do
+                    T(x0, y1 + 10 * u + (k - 1) * 20 * u, rw[1], 11, RED_DIM)
+                    T(x0 + 64 * u, y1 + 10 * u + (k - 1) * 20 * u, rw[2], 11, BONE)
+                end
+                local ty = y1 + 10 * u + #rows * 20 * u
+                T(x0, ty, 'MENACE', 11, RED_DIM)
+                local lvl = (#foes >= 6 or hp < 35) and 5 or (#foes >= 3 and 3 or 1)
+                for k = 0, 4 do
+                    local tx = x0 + 64 * u + k * 13 * u
+                    if k < lvl then ImGui.ImDrawListAddTriangleFilled(dl, tx, ty + 11 * u, tx + 4.5 * u, ty + 2 * u, tx + 9 * u, ty + 11 * u, RED)
+                    else L(tx, ty + 11 * u, tx + 4.5 * u, ty + 2 * u, RED_DIM, 1); L(tx + 4.5 * u, ty + 2 * u, tx + 9 * u, ty + 11 * u, RED_DIM, 1); L(tx, ty + 11 * u, tx + 9 * u, ty + 11 * u, RED_DIM, 1) end
+                end
+            else
+                T(x0, y1 + 6 * u, string.format('%d M', math.floor((t.d or 0) + 0.5)), 10, RED_DIM)
+            end
+        end
+    end
+    for _, en in ipairs(e.enemies or {}) do         -- police : crochets ambre, jamais une cible
+        if en.police and not en.dead and tonumber(en.sx) and math.abs(en.sx) <= 1 and math.abs(en.sy or 9) <= 1 then
+            local h = math.max(40 * u, math.min(0.5 * H, 1.4 * H / math.max(en.d or 10, 1.5)))
+            local px, py = (en.sx + 1) * 0.5 * W, (1 - en.sy) * 0.5 * H
+            RO(px - h / 4, py - h / 2, px + h / 4, py + h / 2, AMBER, 1)
+            T(px - h / 4, py - h / 2 - 18 * u, 'POLICE : NON-CIBLE', 10, AMBER)
+        end
+    end
+
+    -- ===== haut centre : narrateur (ou directive en veille) =====
+    local NY = 92 * u
+    local sayAge = (d.say and tonumber(d.say_t)) and (now - tonumber(d.say_t)) or 99
+    if d.say and sayAge >= 0 and sayAge <= 7 then
+        AgentSaySeen = AgentSaySeen or {}
+        if AgentSaySeen.t ~= d.say_t then AgentSaySeen.t, AgentSaySeen.c0 = d.say_t, clk end
+        local txt = '> ' .. tostring(d.say)
+        local n = math.min(#txt, math.floor((clk - AgentSaySeen.c0) * 45) + 1)
+        local size = 34
+        local wFull = TW(txt, size * u)
+        local bx0, bx1 = CX - wFull / 2 - 40 * u, CX + wFull / 2 + 64 * u
+        R(bx0, NY, bx1, NY + 86 * u, SHADE)
+        L(bx0, NY, bx0 + 18 * u, NY, RED, 1.4); L(bx0, NY, bx0, NY + 18 * u, RED, 1.4)
+        L(bx1 - 18 * u, NY + 86 * u, bx1, NY + 86 * u, RED, 1.4); L(bx1, NY + 68 * u, bx1, NY + 86 * u, RED, 1.4)
+        L(bx0 + 30 * u, NY, bx1, NY, RED_DIM, 1); L(bx0, NY + 86 * u, bx1 - 30 * u, NY + 86 * u, RED_DIM, 1)
+        local shown = txt:sub(1, n)
+        T(CX - wFull / 2 - 12 * u, NY + 43 * u - size * u / 2, shown, size, RED)
+        if n < #txt or blink then
+            local cx = CX - wFull / 2 - 12 * u + TW(shown, size * u) + 4 * u
+            R(cx, NY + 26 * u, cx + 14 * u, NY + 60 * u, RED)
+        end
+        T(bx0, NY - 20 * u, 'NARRATEUR', 10, RED_DIM)
+        T(bx1, NY - 20 * u, 'V-800 / VOIX 01', 10, RED_DIM, 'r')
+        local typing = n < #txt
+        local nb = 96
+        for i = 0, nb - 1 do                               -- onde sonore : vivante pendant l ecriture
+            local x = bx0 + i * (bx1 - bx0) / (nb - 1)
+            local env = math.sin(math.pi * i / (nb - 1)) ^ 0.7
+            local amp = typing and (6 + 16 * math.abs(math.sin(i * 0.61 + clk * 9) * math.cos(i * 0.23 - clk * 5))) or 2
+            local hh = 2 * u + env * amp * u
+            L(x, NY + 110 * u - hh / 2, x, NY + 110 * u + hh / 2, env > 0.35 and RED_MID or RED_DIM, 1.4)
+        end
+    elseif not stale and d.directive then
+        local s = '> ' .. tostring(d.directive)
+        T(CX, NY + 30 * u, s, 16, RED_MID, 'c')
+        T(CX, NY + 8 * u, 'DIRECTIVE PRIORITAIRE', 10, RED_DIM, 'c')
+    end
+
+    -- ===== gauche : colonne vitale =====
+    local LX = M + 8 * u
+    R(M - 10 * u, 80 * u, M + 262 * u, 966 * u, PLATE)
+    T(LX, 92 * u, (stale and 'LIAISON PERDUE') or (d.paused and 'EN PAUSE') or 'SYS.ONLINE', 10, stale and AMBER or RED_DIM)
+    T(LX, 108 * u, os.date('%H:%M:%S'), 10, RED_MID)
+    T(LX, 168 * u, 'VIE', 13, RED_DIM)
+    local hpCol = (alert and hp < 30 and not blink) and BONE or RED
+    local xEnd = seg7(LX, 192 * u, 80 * u, string.format('%d', math.floor(hp + 0.5)), hpCol, 3)
+    T(xEnd + 2 * u, 252 * u, '%', 20, RED_MID)
+    local lit = math.floor(hp / 2 + 0.5)
+    for i = 0, 49 do
+        local y = 330 * u + i * 7.2 * u
+        local on = i >= 50 - lit
+        local major = i % 5 == 0
+        local col = on and (major and RED or RED_MID) or RED_FAINT
+        if on and alert and hp < 30 and blink then col = BONE end
+        L(LX, y, LX + (major and 40 or 26) * u, y, col, major and 2 or 1.2)
+    end
+    T(LX + 56 * u, 326 * u, '100', 9, RED_DIM)
+    T(LX + 56 * u, 330 * u + 49 * 7.2 * u - 8 * u, '0', 9, RED_DIM)
+    local ry = 730 * u
+    local ram, ramMax = tonumber(e.ram), tonumber(AgentV8.ramMax)
+    T(LX, ry, 'RAM', 13, RED_DIM)
+    if ram then
+        local nCells = math.max(1, math.min(16, ramMax or math.max(8, math.ceil(ram))))
+        local step = math.min(26, 210 / nCells) * u
+        for i = 0, nCells - 1 do
+            local x = LX + i * step
+            if i < math.floor(ram + 0.001) then R(x, ry + 24 * u, x + step * 0.7, ry + 42 * u, RED)
+            else RO(x, ry + 24 * u, x + step * 0.7, ry + 42 * u, RED_DIM, 1) end
+        end
+    end
+    local function kv(y, k, v, col)
+        T(LX, y, k, 13, RED_DIM); T(LX + 120 * u, y, v, 13, col or BONE)
+    end
+    kv(ry + 64 * u, 'NIVEAU', tostring(e.level or '?'))
+    kv(ry + 88 * u, 'EDDIES', AgentV8.money and tostring(math.floor(AgentV8.money)) or '?')
+    L(LX, ry + 120 * u, LX + 210 * u, ry + 120 * u, RED_DIM, 1)
+    local bd = e.bd or {}
+    local mode
+    if e.dead then mode = 'HORS SERVICE'
+    elseif bd.active or bd.rew then mode = 'DANSE SENSORIELLE'
+    elseif e.combat then mode = 'ENGAGEMENT'
+    elseif e.vehicle then mode = 'CONDUITE'
+    elseif (e.dialog or {}).choices then mode = 'DIALOGUE'
+    elseif stale then mode = 'MANUEL'
+    elseif d.paused then mode = 'PAUSE'
+    else mode = tostring(d.mode or 'EN MISSION') end
+    kv(ry + 132 * u, 'MODE', mode:sub(1, 22), RED)
+    kv(ry + 156 * u, 'HOSTILES', tostring(#foes) .. (police > 0 and (' +' .. police .. ' POLICE') or ''), #foes > 0 and RED or BONE)
+    kv(ry + 180 * u, 'ELIMINES', tostring(kills or 0))
+    if alert then
+        T(LX, ry + 212 * u, hp < 30 and 'INTEGRITE CRITIQUE' or 'MENACE CRITIQUE', 13, blink and BONE or RED)
+    end
+
+    -- ===== droite : registre des succes =====
+    local gv = type(d.goalsv) == 'table' and d.goalsv or nil
+    local RX1 = W - M - 8 * u
+    local RX0 = RX1 - 418 * u
+    if gv then
+        local hy = 216 * u                                -- hauteur du registre (plaque a sa taille)
+        local cw = (RX1 - RX0) / 32
+        for _, it in ipairs(gv.items or {}) do
+            if hy > 0.62 * H then break end
+            local cur, tot = tonumber(it.cur), tonumber(it.tot)
+            hy = hy + 26 * u
+            if cur and tot and tot > 20 then hy = hy + math.ceil(tot / 32) * cw + 18 * u
+            elseif cur and tot and tot > 0 then hy = hy + 26 * u
+            else hy = hy + ((it.note and cur) and 18 * u or 0) + 8 * u end
+        end
+        if type(gv.top) == 'table' and #gv.top > 0 then hy = hy + 40 * u + math.min(3, #gv.top) * 24 * u end
+        R(RX0 - 16 * u, 80 * u, RX1 + 16 * u, hy + 10 * u, PLATE)
+        T(RX0, 92 * u, 'REGISTRE', 10, RED_DIM)
+        T(RX1, 92 * u, 'STEAM', 10, RED_DIM, 'r')
+        local st = gv.steam or {}
+        local xs = seg7(RX0, 118 * u, 56 * u, string.format('%02d', tonumber(st[1]) or 0), RED, 2.6)
+        T(xs + 4 * u, 160 * u, '/ ' .. tostring(st[2] or '?') .. ' SUCCES', 18, RED_MID)
+        L(RX0, 200 * u, RX1, 200 * u, RED_DIM, 1)
+        local y = 216 * u
+        for _, it in ipairs(gv.items or {}) do
+            if y > 0.62 * H then break end
+            local cur, tot = tonumber(it.cur), tonumber(it.tot)
+            T(RX0, y, tostring(it.label or ''), 13, BONE)
+            local val = (cur and tot) and string.format('%d / %d', cur, tot) or (cur and tostring(cur)) or tostring(it.note or '')
+            T(RX1, y, val, 12, RED, 'r')
+            y = y + 26 * u
+            if cur and tot and tot > 20 then           -- grille dense : une cellule par lieu / element
+                local cols = 32
+                local cell = (RX1 - RX0) / cols * 0.78
+                local gap = (RX1 - RX0) / cols - cell
+                for i = 0, tot - 1 do
+                    local r_, c_ = math.floor(i / cols), i % cols
+                    local x, yy = RX0 + c_ * (cell + gap), y + r_ * (cell + gap)
+                    if i < cur then R(x, yy, x + cell, yy + cell, i == cur - 1 and BONE or RED)
+                    else RO(x, yy, x + cell, yy + cell, RED_DIM, 1) end
+                end
+                y = y + math.ceil(tot / cols) * (cell + gap) + 18 * u
+            elseif cur and tot and tot > 0 then
+                local step = (RX1 - RX0) / tot
+                for i = 0, tot - 1 do R(RX0 + i * step, y, RX0 + i * step + step * 0.8, y + 8 * u, i < cur and RED or RED_FAINT) end
+                y = y + 26 * u
+            else
+                if it.note and cur then T(RX0, y - 4 * u, tostring(it.note), 11, RED_MID); y = y + 18 * u end
+                y = y + 8 * u
+            end
+        end
+        if type(gv.top) == 'table' and #gv.top > 0 then
+            L(RX0, y, RX1, y, RED_DIM, 1)
+            T(RX0, y + 14 * u, 'TOP CHAT', 13, BONE)
+            local best = tonumber((gv.top[1] or {})[2]) or 1
+            for i, row in ipairs(gv.top) do
+                if i > 3 then break end
+                local yy = y + 40 * u + (i - 1) * 24 * u
+                T(RX0, yy, string.format('%02d', i), 11, RED_DIM)
+                T(RX0 + 34 * u, yy, tostring(row[1] or ''):sub(1, 12), 12, i == 1 and RED or RED_MID)
+                local pts = tonumber(row[2]) or 0
+                L(RX0 + 150 * u, yy + 8 * u, RX0 + 150 * u + 200 * u * pts / math.max(best, 1), yy + 8 * u, i == 1 and RED or RED_DIM, 3)
+                T(RX1, yy, tostring(pts), 11, RED_MID, 'r')
+            end
+        end
+    elseif type(d.goals) == 'table' and #d.goals > 0 then   -- agent plus ancien : lignes deja formatees
+        for i, line in ipairs(d.goals) do T(RX1, 92 * u + (i - 1) * 22 * u, tostring(line), 13, i == 1 and RED or RED_MID, 'r') end
+    end
+
+    -- ===== bas centre : cap =====
+    local yaw = tonumber(e.yaw)
+    if yaw then
+        local heading = (-yaw) % 360
+        local CYc = 922 * u
+        local half = 400 * u
+        R(CX - half - 14 * u, CYc - 40 * u, CX + half + 14 * u, CYc + 40 * u, PLATE)
+        L(CX - half, CYc, CX + half, CYc, RED_DIM, 1)
+        local base = math.floor(heading)
+        for deg = base - 60, base + 61 do
+            local x = CX + (deg - heading) * (2 * half / 120)
+            if x >= CX - half and x <= CX + half then
+                local dm = deg % 360
+                if dm % 15 == 0 then
+                    L(x, CYc - 12 * u, x, CYc, RED_MID, 1.2)
+                    local lab = ({ [0] = 'N', [90] = 'E', [180] = 'S', [270] = 'O' })[dm] or string.format('%03d', dm)
+                    T(x, CYc - 30 * u, lab, 10, (#lab == 1) and RED or RED_DIM, 'c')
+                elseif dm % 5 == 0 then
+                    L(x, CYc - 6 * u, x, CYc, RED_DIM, 1)
+                end
+            end
+        end
+        ImGui.ImDrawListAddTriangleFilled(dl, CX, CYc + 3 * u, CX - 6 * u, CYc + 13 * u, CX + 6 * u, CYc + 13 * u, RED)
+        T(CX, CYc + 20 * u, string.format('%03d', math.floor(heading + 0.5) % 360), 12, BONE, 'c')
+    end
+
+    -- ===== bas : bandeau du chat (seulement en direct) =====
+    if d.banner then
+        local BY = H - 86 * u
+        R(M, BY, W - M, BY + 46 * u, SHADE)
+        L(M, BY, W - M, BY, RED_DIM, 1); L(M, BY + 46 * u, W - M, BY + 46 * u, RED_DIM, 1)
+        local vt = type(d.vote) == 'table' and d.vote or nil
+        local x = M + 8 * u
+        T(x, BY + 15 * u, 'VOTE', 14, BONE)
+        x = x + 62 * u
+        if vt and tonumber(vt.left) and tonumber(vt.tot) then
+            T(x, BY + 15 * u, string.format('%d S', math.floor(vt.left + 0.5)), 13, RED)
+            local nt = 30
+            for i = 0, nt - 1 do
+                local on = i < math.floor(nt * vt.left / vt.tot + 0.5)
+                L(x + 50 * u + i * 6 * u, BY + 15 * u, x + 50 * u + i * 6 * u, BY + 31 * u, on and RED or RED_FAINT, 1.6)
+            end
+            local tx = W - M - 8 * u
+            for k = math.min(#(vt.tally or {}), 3), 1, -1 do
+                local row = vt.tally[k]
+                local s = string.format('%s %d', tostring(row[1]), tonumber(row[2]) or 0)
+                local wv = TW(s, 12 * u)
+                T(tx, BY + 16 * u, s, 12, k == 1 and RED or RED_MID, 'r')
+                for b = 0, math.min(8, (tonumber(row[2]) or 0)) - 1 do
+                    R(tx - wv - 14 * u - b * 9 * u, BY + 18 * u, tx - wv - 8 * u - b * 9 * u, BY + 28 * u, k == 1 and RED or RED_MID)
+                end
+                tx = tx - wv - 30 * u - math.min(8, tonumber(row[2]) or 0) * 9 * u - 18 * u
+            end
+            x = x + 50 * u + nt * 6 * u + 24 * u
+        else
+            x = x + 10 * u
+        end
+        local btxt = tostring(d.banner):gsub('^VOTE[^:]*:%s*', '')
+        T(x, BY + 16 * u, btxt:sub(1, 150), 12, RED_MID)
+        if not vt and d.banner_last and tonumber(d.banner_last_t) and now - tonumber(d.banner_last_t) < 20 then
+            T(W - M - 8 * u, BY + 16 * u, '> ' .. tostring(d.banner_last), 12, RED, 'r')
+        end
+    end
+
+    -- ===== reperes de registre et reference =====
+    for _, k in ipairs({ { 18 * u, 18 * u, 1, 1 }, { W - 18 * u, 18 * u, -1, 1 }, { 18 * u, H - 18 * u, 1, -1 }, { W - 18 * u, H - 18 * u, -1, -1 } }) do
+        L(k[1], k[2], k[1] + k[3] * 16 * u, k[2], RED_DIM, 1); L(k[1], k[2], k[1], k[2] + k[4] * 16 * u, RED_DIM, 1)
+    end
+    T(CX, H - 30 * u, 'V-800  /  ANATOMIE DU SIGNAL  /  HUD REV. 02', 9, RED_DIM, 'c')
+end
 -- 19/10 V COMMENTE (Olivier : « V commente sur son HUD en gros ») : phrase du narrateur Python en grand en haut de l ecran,
 -- machine a ecrire, 7 s, style T-800. Globale : pas d upvalue de plus.
 function AgentDrawSay(d)
@@ -4568,6 +4979,12 @@ local function drawHud()
     if not hudShow or not lastExport then return end
     hudRead()
     if lastExport.menu or ((lastExport.breach or {}).state == 1) then return end   -- menus plein ecran, Breach Protocol (clics)
+    if AgentHudStyle == 'v800' and not AgentV8Failed then   -- 19/10 : HUD « Anatomie du Signal » (repli auto sur l ancien)
+        local okV, errV = pcall(AgentDrawV800, lastExport, hudData, hudKills)
+        if okV then return end
+        AgentV8Failed = true
+        journal('HUD V-800 indisponible, retour a l ancien HUD : ' .. tostring(errV))
+    end
     local nA, hpA = 0, tonumber(lastExport.hp) or 100
     for _, en in ipairs(lastExport.enemies or {}) do if not en.dead and not en.police then nA = nA + 1 end end
     local pulse = (not lastExport.dead) and (hpA < 30 or nA >= 6) and (math.floor(os.clock() * 4) % 2 == 0)
@@ -4612,6 +5029,9 @@ local function drawHud()
     if not okL and tostring(errL) ~= hudLastErr then hudLastErr = tostring(errL); journal('HUD cadres : ' .. hudLastErr) end
 end
 registerHotkey('agent_hud_toggle', 'Afficher / masquer le HUD de V', function() hudShow = not hudShow end)
+registerHotkey('agent_hud_style', 'HUD de V : V-800 (nouveau) / classique', function()
+    AgentHudStyle = (AgentHudStyle == 'v800') and 'classique' or 'v800'; AgentV8Failed = false
+end)
 registerForEvent('onOverlayOpen', function() ui.open = true end)
 registerForEvent('onOverlayClose', function() ui.open = false end)
 registerForEvent('onDraw', function()

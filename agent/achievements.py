@@ -186,6 +186,17 @@ def publish() -> None:
                 continue
             val = (f" {p['cur']}/{p['tot']}" if p.get('cur') is not None and p.get('tot') else (f" {p['cur']}" if p.get('cur') is not None else ''))
             lines.append(hud.ascii_up(p['label'] + val + (f" - {p['note']}" if p.get('note') else ''))[:42])
-        hud.update(goals=lines[:6])
+        # 19/10 : HUD V-800 -- meme contenu, structure (grilles de cellules, barres, classement)
+        items = [{'label': hud.ascii_up(p['label']), 'cur': p.get('cur'), 'tot': p.get('tot'), 'note': hud.ascii_up(p.get('note') or '')}
+                 for p in (PROGRESS.get(a) for a in ORDER) if p]
+        top3 = []
+        try:
+            from . import youtube_chat as _yc2
+            from .narrator import clean as _cl
+            top3 = [[_cl(a, 12).upper() or '?', p] for a, p in _yc2.top(3)]
+        except Exception:
+            pass
+        hud.update(goals=lines[:6], goalsv={'steam': [len(u), len(names)] if u is not None else [0, len(names)],
+                                            'items': items[:5], 'top': top3})
     except Exception:
         pass

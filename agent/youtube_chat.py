@@ -226,7 +226,9 @@ def _banner_tally(v: 'Vote', now: float) -> None:
         t = v.tally()
         if t:
             hud.update(banner_last=hud.ascii_up(f"VOTE {v.remaining(now):.0f} S : " + ' . '.join(f'{c} {n}' for c, n in t[:4]))[:70],
-                       banner_last_t=int(time.time()))
+                       banner_last_t=int(time.time()),
+                       vote={'left': round(v.remaining(now), 1), 'tot': v.duration,          # 19/10 : HUD V-800
+                             'tally': [[hud.ascii_up(c.split()[-1] if c.startswith(('style ', 'courage ')) else c)[:12], n] for c, n in t[:3]]})
     except Exception:
         pass
 
@@ -485,6 +487,11 @@ def _loop(log, put) -> None:
                     _poll_banner()
                 res = vote.close_if_due(time.time())
                 if res:
+                    try:
+                        from . import hud as _h
+                        _h.update(vote=None)
+                    except Exception:
+                        pass
                     w, n, voters = res
                     award(getattr(vote, 'last_winners', []), 'vote')
                     STATUS['accepted'] += 1; STATUS['last'] = f'vote : {w} ({n}/{voters})'
