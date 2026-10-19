@@ -243,6 +243,11 @@ def _loop(log, put) -> None:
                     except Exception:
                         pass
                     _banner(True, f"{m['author'][:20]} -> {cmd}")
+                    try:
+                        from . import narrator
+                        narrator.thank(m['author'], cmd)
+                    except Exception:
+                        pass
                     put(cmd, m)
                 res = vote.close_if_due(time.time())
                 if res:
@@ -255,6 +260,11 @@ def _loop(log, put) -> None:
                     except Exception:
                         pass
                     _banner(True, f'LE CHAT A VOTE : {w} ({n} voix)')
+                    try:
+                        from . import narrator
+                        narrator.thank('le chat', w, votes=n)
+                    except Exception:
+                        pass
                     put(w, {'author': 'vote', 'mod': False})
                 elif vote.t0 is not None:
                     _banner_tally(vote, time.time())

@@ -4482,6 +4482,37 @@ local function hudRead()
         end
     end)
 end
+-- 19/10 V COMMENTE (Olivier : « V commente sur son HUD en gros ») : phrase du narrateur Python en grand en haut de l ecran,
+-- machine a ecrire, 7 s, style T-800. Globale : pas d upvalue de plus.
+function AgentDrawSay(d)
+    if type(d) ~= 'table' or not d.say or not d.say_t then return end
+    local age = os.time() - d.say_t
+    if age < 0 or age > 7 then return end
+    local okR, W, H = pcall(GetDisplayResolution)
+    if not (okR and W and H and W > 0) then return end
+    AgentSaySeen = AgentSaySeen or {}
+    if AgentSaySeen.t ~= d.say_t then AgentSaySeen.t, AgentSaySeen.c0 = d.say_t, os.clock() end
+    local txt = tostring(d.say)
+    local n = math.min(#txt, math.floor((os.clock() - AgentSaySeen.c0) * 45) + 1)   -- machine a ecrire
+    local shown = txt:sub(1, n) .. ((n < #txt and math.floor(os.clock() * 6) % 2 == 0) and '_' or '')
+    local flags = 0
+    for _, nm in ipairs({ 'NoTitleBar', 'NoResize', 'AlwaysAutoResize', 'NoCollapse', 'NoScrollbar', 'NoFocusOnAppearing', 'NoInputs', 'NoMove', 'NoSavedSettings' }) do
+        local f = ImGuiWindowFlags[nm]
+        if f then flags = (bit and bit.bor) and bit.bor(flags, f) or (flags + f) end
+    end
+    AgentSayW = AgentSayW or 700
+    ImGui.SetNextWindowPos(math.max(0, (W - AgentSayW) / 2), H * 0.12, ImGuiCond.Always)
+    ImGui.PushStyleColor(ImGuiCol.WindowBg, 0.04, 0.0, 0.0, 0.55)
+    ImGui.PushStyleColor(ImGuiCol.Border, 0.95, 0.12, 0.08, 0.9)
+    ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.17, 0.10, 1.0)
+    if ImGui.Begin('##agentsay', flags) then
+        pcall(function() ImGui.SetWindowFontScale(2.2) end)
+        ImGui.Text('> ' .. shown)
+        pcall(function() local ww = ImGui.GetWindowSize(); if ww and ww > 50 then AgentSayW = ww end end)
+    end
+    ImGui.End()
+    ImGui.PopStyleColor(3)
+end
 -- 18/10 BANDEAU DU CHAT YOUTUBE (Olivier : « ou alors en bandeau ») : commandes du chat en bas de l ecran, visibles dans le
 -- direct (le HUD est dessine dans l image du jeu) ; derniere commande acceptee 20 s. Globale : pas d upvalue de plus.
 function AgentDrawBanner(d)
@@ -4551,6 +4582,7 @@ local function drawHud()
     if nc > 0 then ImGui.PopStyleColor(nc) end
     local okL, errL = pcall(drawLocks)           -- apres les styles du HUD : les cadres ont les leurs
     pcall(AgentDrawBanner, hudData)              -- 18/10 : bandeau des commandes du chat YouTube
+    pcall(AgentDrawSay, hudData)                 -- 19/10 : V commente ses decisions en grand
     if not okL and tostring(errL) ~= hudLastErr then hudLastErr = tostring(errL); journal('HUD cadres : ' .. hudLastErr) end
 end
 registerHotkey('agent_hud_toggle', 'Afficher / masquer le HUD de V', function() hudShow = not hudShow end)

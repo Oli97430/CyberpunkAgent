@@ -139,6 +139,11 @@ def _log(msg: str) -> None:
     ne doit pas tuer la session (16/09 : l exe lance depuis le panneau ne laissait AUCUN journal)."""
     line = f"[{time.strftime('%H:%M:%S')}] {msg}"
     try:
+        from . import narrator                     # 19/10 : V commente ses decisions en grand sur le HUD
+        narrator.feed(str(msg).strip())
+    except Exception:
+        pass
+    try:
         print(line, flush=True)
     except Exception:
         try:
