@@ -180,6 +180,99 @@ PREFIX_V2 = {
     'drive': lambda: _echo(_seq(_mix(_tone(120, 340, 0.6, 'sine', 0.4, attack=0.1, trem=18.0), _sub(60, 90, 0.6, 0.4)),
                                 _fm(1600, 1600, 0.05, 2.0, 2.0, 0.3), _silence(0.03), _fm(2000, 2000, 0.05, 2.0, 2.0, 0.3)), 0.09, 0.25, 2),
 }
+# 19/10 (Olivier : « les sons ca fait machine de casino ») : v3 MECANIQUE -- plus aucune melodie ni cloche. Cliquetis de
+# relais (souffle filtre tres court), servomoteurs (souffle passe-bande qui glisse), bourdonnement electrique grave, bips
+# sourds (carre filtre), thumps. Rien au-dessus de ~2 kHz sauf les clics.
+def _noise(dur: float, amp: float = 0.5, seed: int = 7) -> list[float]:
+    r = random.Random(seed)
+    return [r.uniform(-1, 1) * amp for _ in range(int(dur * RATE))]
+
+
+def _lp(sig: list[float], fc: float, order: int = 3) -> list[float]:
+    """Passe-bas raide (3 etages : -18 dB/octave) : clics feutres, pas de brillance de borne d arcade."""
+    a = math.exp(-2 * math.pi * fc / RATE)
+    out = sig
+    for _ in range(order):
+        res, y = [], 0.0
+        for x in out:
+            y = (1 - a) * x + a * y
+            res.append(y)
+        out = res
+    return out
+
+
+def _bp_sweep(sig: list[float], f0: float, f1: float, q: float = 6.0) -> list[float]:
+    """Passe-bande (biquad) dont la frequence glisse de f0 a f1 : le moteur d un servo."""
+    out, x1, x2, y1, y2 = [], 0.0, 0.0, 0.0, 0.0
+    n = max(1, len(sig) - 1)
+    for i, x in enumerate(sig):
+        f = f0 + (f1 - f0) * i / n
+        w = 2 * math.pi * f / RATE
+        al = math.sin(w) / (2 * q)
+        b0, b2, a0, a1, a2 = al, -al, 1 + al, -2 * math.cos(w), 1 - al
+        y = (b0 * x + b2 * x2 - a1 * y1 - a2 * y2) / a0
+        x2, x1, y2, y1 = x1, x, y1, y
+        out.append(y)
+    return out
+
+
+def _env(sig: list[float], attack: float = 0.005, release: float = 0.05) -> list[float]:
+    n = len(sig)
+    dur = n / RATE
+    return [x * max(0.0, min(1.0, (i / RATE) / attack if attack else 1.0, (dur - i / RATE) / release if release else 1.0))
+            for i, x in enumerate(sig)]
+
+
+def _gain(sig: list[float], g: float) -> list[float]:
+    return [x * g for x in sig]
+
+
+def _relay(amp: float = 0.6, seed: int = 3) -> list[float]:
+    """Clac de relais : souffle tres court filtre + petit corps grave."""
+    return _mix(_gain(_env(_lp(_noise(0.012, 1.0, seed), 1400), 0.0005, 0.009), 2.2), _env(_tone(180, 120, 0.02, 'sine', 0.5), 0.0005, 0.015)) \
+        if amp >= 0 else []
+
+
+def _servo(dur: float, f0: float, f1: float, amp: float = 1.0, seed: int = 11) -> list[float]:
+    return _gain(_env(_bp_sweep(_noise(dur, 1.0, seed), f0, f1, 7.0), 0.03, dur * 0.35), 3.2 * amp)
+
+
+def _hum(dur: float, f0: float, f1: float, amp: float = 0.4) -> list[float]:
+    """Bourdonnement electrique : fondamentale grave + harmoniques impaires adoucies."""
+    return _mix(_tone(f0, f1, dur, 'sine', amp, attack=0.05, release=dur * 0.4),
+                _lp(_tone(f0 * 3, f1 * 3, dur, 'square', amp * 0.25, attack=0.05, release=dur * 0.4), 600))
+
+
+def _beep(f: float, dur: float, amp: float = 0.45) -> list[float]:
+    """Bip SOURD : carre filtre bas (pas de son de borne d arcade)."""
+    return _env(_lp(_tone(f, f, dur, 'square', amp, attack=0.002, release=0.01), f * 2.2), 0.002, 0.02)
+
+
+def _ticks_v3(n_chars: int) -> list[float]:
+    """Ecriture du HUD : clics de relais tres discrets, un par caractere."""
+    step = 1.0 / TYPE_CPS
+    out: list[float] = []
+    for i in range(n_chars):
+        c = _gain(_env(_lp(_noise(0.005, 1.0, 100 + i), 1100), 0.0003, 0.004), 0.35)
+        out += c + _silence(max(0.0, step - 0.005))
+    return out
+
+
+PREFIX_V3 = {
+    'say': lambda: _seq(_relay(), _silence(0.02), _beep(420, 0.05, 0.35)),
+    'lock': lambda: _seq(_servo(0.22, 500, 1400, 0.8), _beep(620, 0.07), _silence(0.05), _beep(620, 0.07), _silence(0.03), _relay()),
+    'scan': lambda: _mix(_servo(0.9, 300, 1800, 0.9, 21), _hum(0.9, 55, 55, 0.25)),
+    'alarm': lambda: _seq(*[_mix(_beep(392, 0.16, 0.5), _hum(0.16, 49, 49, 0.3)) + _silence(0.09) for _ in range(3)]),
+    'death': lambda: _mix(_hum(1.6, 110, 18, 0.5), _gain(_env(_lp(_noise(1.6, 1.0, 5), 450), 0.01, 1.2), 0.9)),
+    'success': lambda: _seq(_relay(), _silence(0.05), _mix(_hum(0.7, 55, 82, 0.35), _servo(0.7, 400, 900, 0.6, 31)),
+                            _beep(330, 0.12, 0.4)),
+    'boot': lambda: _seq(_mix(_hum(1.1, 30, 110, 0.45), _servo(1.1, 200, 1200, 0.7, 41)),
+                         _relay(0.6, 4), _silence(0.08), _relay(0.6, 5), _silence(0.08), _relay(0.6, 6), _beep(440, 0.1, 0.35)),
+    'hit': lambda: _mix(_env(_tone(95, 40, 0.2, 'sine', 0.8), 0.001, 0.15), _gain(_env(_lp(_noise(0.15, 1.0, 9), 600), 0.001, 0.1), 1.2)),
+    'kill': lambda: _seq(_relay(), _mix(_beep(196, 0.14, 0.45), _env(_tone(70, 40, 0.18, 'sine', 0.5), 0.002, 0.12))),
+    'hack': lambda: _mix(_seq(*[_relay(0.6, 50 + k) + _silence(0.03 + 0.012 * (k % 3)) for k in range(7)]), _hum(0.45, 60, 60, 0.2)),
+    'drive': lambda: _mix(_servo(0.8, 150, 600, 0.9, 61), _hum(0.8, 40, 75, 0.4)),
+}
 PRIO = {'death': 5, 'boot': 4, 'success': 4, 'alarm': 3, 'hit': 3, 'kill': 3, 'lock': 2, 'hack': 2, 'drive': 1, 'scan': 1, 'say': 1}
 _dur: dict[str, float] = {}
 FEED: list[tuple[str, str]] = [            # lignes INTERNES du journal -> son (debut de ligne, sans indentation)
@@ -217,10 +310,10 @@ def build(kind: str, n_chars: int = 0, volume: float = 0.5) -> str:
     if key in _cache:
         return _cache[key]
     SOUND_DIR.mkdir(parents=True, exist_ok=True)
-    samples = (PREFIX_V2.get(kind) or PREFIX_V2['say'])()
+    samples = (PREFIX_V3.get(kind) or PREFIX_V3['say'])()
     if bucket >= 0:
-        samples += _silence(0.05) + _ticks(bucket * 10 + 5)
-    path = SOUND_DIR / f"v2_{kind}_{'seul' if bucket < 0 else bucket}_{int(volume * 100)}.wav"
+        samples += _silence(0.05) + _ticks_v3(bucket * 10 + 5)
+    path = SOUND_DIR / f"v3_{kind}_{'seul' if bucket < 0 else bucket}_{int(volume * 100)}.wav"
     _write(path, samples, volume)
     _cache[key] = str(path)
     _dur[str(path)] = len(samples) / RATE
@@ -271,7 +364,7 @@ def prewarm() -> None:
     """Genere les sons courants en arriere-plan au demarrage (la premiere phrase ne doit pas attendre)."""
     def run():
         v = float(cfg().get('volume', 0.5))
-        for k in PREFIX_V2:
+        for k in PREFIX_V3:
             for n in ((0, 15, 25, 35, 45, 55) if k in ('say', 'lock', 'scan', 'success', 'alarm', 'death') else (0,)):
                 try:
                     with _lock:
