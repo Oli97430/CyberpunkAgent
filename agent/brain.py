@@ -286,7 +286,8 @@ def _session_report(stats: dict, t0: float, money_start, ach_start: int | None =
 def _alt(n: dict, text=None, hash_=None) -> dict:
     """12/10 : cible alternative, z TOUJOURS recopie (la zone d arrivee et la requete de chemin visent son etage)."""
     return {'x': n['x'], 'y': n['y'], 'z': n.get('z'), 'text': n.get('text') if text is None else text,
-            'hash': n.get('hash') if hash_ is None else hash_, 't0': time.perf_counter()}
+            'hash': n.get('hash') if hash_ is None else hash_, 't0': time.perf_counter(),
+            'jph': n.get('jph')}          # 19/10 : entree de journal du marqueur (destination de l autodrive)
 
 
 def _path_alt(t: dict):
@@ -1851,7 +1852,10 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 # vers une autre cible quand la quete suivie a un marqueur ailleurs (l autodrive irait vers lui) ;
                 # sinon voyage rapide d abord, puis a pied.
                 if dist is not None and dist > 500.0:
-                    route_ok = alt_target is None or not q.get('hasMappin')
+                    # 19/10 (Olivier : « V monte dans un vehicule, roule quelques metres et en sort ») : l autodrive ne va
+                    # que vers la quete SUIVIE par le jeu. Cible choisie par V -> seulement si son marqueur a une entree de
+                    # journal (on la fera suivre) ; point d exploration -> pas de voiture (roue libre garantie)
+                    route_ok = alt_target is None or bool(alt_target.get('jph'))
                     tx_t, ty_t = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
                     ft_key = (round(tx_t / 50.0), round(ty_t / 50.0)) if tx_t is not None and ty_t is not None else None
                     how, why_not = travel.choose(dist, route_ok, bool(kbm.ACTIONS.get('autodrive') and CFG.features.get('driving', True)),
@@ -1870,6 +1874,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         if _halted(ft):
                             plan.last_t = -99.0; continue             # 12/10 : F11/F12, pas un echec
                         ft_tried[ft_key] = time.perf_counter()     # echec seulement : pas de nouvel essai vers cette cible avant 10 min
+                    if how == 'drive' and alt_target is not None:
+                        if quests.track(int(alt_target['jph'])):
+                            _log(f"[conduite] quete du marqueur « {alt_target.get('text')} » suivie dans le jeu : destination de l autodrive")
+                            time.sleep(1.0)
+                        else:
+                            _log('[conduite] le jeu refuse de suivre cette quete : pas de voiture (l autodrive roulerait sans destination)')
+                            alt_target['jph'] = None
+                            how = 'walk'
                     if how == 'drive':
                         _log(f'objectif a {dist:.0f} m : V prend la voiture (autodrive)')
                         plan.note('a pris la voiture')

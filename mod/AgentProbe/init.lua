@@ -3974,6 +3974,9 @@ local function handleCommand(player, cmd)
                     end)
                     -- pseudo-hash stable : position arrondie (sert de cle de blocage cote Python)
                     if rec.x then rec.hash = math.floor(rec.x) * 100000 + math.floor(rec.y) end
+                    -- 19/10 : entree de journal du marqueur (comme la carte : worldMap.script:1613) -> V peut faire SUIVRE
+                    -- cette quete par le jeu, et l autodrive a enfin une destination (sinon roue libre, V redescend)
+                    pcall(function() local h = m:GetJournalPathHash(); if h and h ~= 0 then rec.jph = h end end)
                     -- niveau recommande : via l entree de journal du marqueur si une methode l expose
                     if rec.hash and questLvlCache[rec.hash] ~= nil then
                         rec.lvl = questLvlCache[rec.hash] or nil
