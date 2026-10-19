@@ -40,7 +40,10 @@ RULES: list[tuple[str, str]] = [
     (r'quete de course .* passe a autre chose', 'COURSE DE RUE ? NEGATIF.'),
     (r'^objectif : (.+?)\s+\(marqueur', 'NOUVELLE MISSION : {0}'),
 ]
-_RX = [(re.compile(p), s) for p, s in RULES]
+# 19/10 (revue de securite) : regles ANCREES en debut de ligne (etiquette interne facultative : [vente], [conduite]...)
+_PREFIX = r'^(?:\[(?:vente|conduite|armes|charcudoc|exploration|vol|gouts|succes|combat|quetes)\]\s*)?'
+_RX = [(re.compile(p if p.startswith(('^', r'\[')) else _PREFIX + p), s) for p, s in RULES]
+_RX = [(re.compile('^' + rx.pattern) if not rx.pattern.startswith('^') else rx, s) for rx, s in _RX]
 # 19/10 (revue de securite) : lignes dont le texte vient de l EXTERIEUR (chat YouTube, Telegram, SMS, dialogues, panneau,
 # directives) : jamais lues par le narrateur -- un pseudo ou un message pourrait imiter une regle et s afficher a l ecran
 EXTERNAL = ('[youtube]', '[telegram]', '[sms]', '[directive]', '[dialog]', 'directive', '"', 'DIRECTIVE')
