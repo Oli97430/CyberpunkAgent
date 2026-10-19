@@ -41,6 +41,15 @@ RULES: list[tuple[str, str]] = [
     (r'^objectif : (.+?)\s+\(marqueur', 'NOUVELLE MISSION : {0}'),
 ]
 _RX = [(re.compile(p), s) for p, s in RULES]
+# 19/10 (revue de securite) : lignes dont le texte vient de l EXTERIEUR (chat YouTube, Telegram, SMS, dialogues, panneau,
+# directives) : jamais lues par le narrateur -- un pseudo ou un message pourrait imiter une regle et s afficher a l ecran
+EXTERNAL = ('[youtube]', '[telegram]', '[sms]', '[directive]', '[dialog]', 'directive', '"', 'DIRECTIVE')
+_SAFE = re.compile(r"[^A-Za-z0-9 .,:!?'/&()-]")
+
+
+def clean(text: str, n: int = 40) -> str:
+    """Texte affiche a l ecran : lettres (accents translitteres), chiffres, ponctuation simple ; longueur bornee."""
+    return _SAFE.sub('', hud.ascii_plain(str(text)))[:n].strip()
 
 
 def say(text: str, key: str | None = None, force: bool = False) -> bool:
@@ -58,12 +67,14 @@ def say(text: str, key: str | None = None, force: bool = False) -> bool:
 
 
 def feed(line: str) -> None:
-    """Une ligne du journal de V -> eventuellement une phrase du narrateur."""
+    """Une ligne du journal de V -> eventuellement une phrase du narrateur (lignes internes seulement)."""
+    if any(tag in line for tag in EXTERNAL):
+        return
     for rx, tpl in _RX:
         m = rx.search(line)
         if m:
-            g = m.group(1).strip() if m.groups() else ''
-            say(tpl.format(g[:40]), key=tpl)
+            g = clean(m.group(1)) if m.groups() else ''
+            say(tpl.format(g), key=tpl)
             return
 
 
@@ -79,4 +90,5 @@ def thank(who: str, cmd: str, votes: int | None = None) -> None:
     if votes is not None:
         say(f'LE CHAT A VOTE ({votes} VOIX) : {act}', force=True)
     else:
-        say(f'MERCI {who[:20]}, {act}', force=True)
+        who_c = clean(who, 20) or 'LE CHAT'
+        say(f'MERCI {who_c}, {act}', force=True)
