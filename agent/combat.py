@@ -410,6 +410,7 @@ def dodge(side: str) -> None:
         kbm.tap(side, 0.07); time.sleep(0.07); kbm.tap(side, 0.07)
 
 
+KILLS = [0]            # 19/10 : ennemis neutralises dans la session (estimation, bilan de session)
 HAS_KEREN = False      # 19/10 : implant Kerenzikov pose (inventory.manage)
 KEREN_CD = 8.0
 
@@ -953,6 +954,9 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             hp = 100.0 if hp is None else float(hp)
             if hp <= 0.5:
                 log('  [combat] V EST MORT : arret du combat'); stats['mort'] = True; break
+            # 19/10 (bilan de session) : ennemis morts / a terre en vue -- estimation (le mod n identifie pas les ennemis)
+            stats['neutralises'] = max(stats.get('neutralises', 0), sum(1 for x in st.get('enemies') or []
+                                       if (x.get('dead') or x.get('down')) and not x.get('police') and float(x.get('d') or 999) < 50.0))
 
             # -- soin
             if hp < HEAL_BELOW and now - t_heal > HEAL_CD and charges(st, 'heal'):
@@ -1350,6 +1354,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
     finally:
         kbm.release_all()
     stats['seconds'] = time.perf_counter() - t0
+    KILLS[0] += int(stats.get('neutralises', 0))
     log(f'  [combat] bilan : {stats}')
     return stats
 

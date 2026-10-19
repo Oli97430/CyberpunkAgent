@@ -169,6 +169,14 @@ def publish() -> None:
         from . import hud
         u, names = _STATE.get('unlocked'), _STATE.get('names') or {}
         lines = [f'SUCCES STEAM {len(u)}/{len(names)}'] if u is not None else []
+        try:                                       # 19/10 : ordres du chat suivis + spectateur le plus actif (pseudo nettoye)
+            from . import youtube_chat as _yc
+            from .narrator import clean
+            if _yc.CHAT_STATS['orders']:
+                top = _yc.top_viewer()
+                lines.append(hud.ascii_up(f"CHAT : {_yc.CHAT_STATS['orders']} ORDRES" + (f' - TOP {clean(top, 14)}' if top and clean(top, 14) else '')))
+        except Exception:
+            pass
         for aid in ORDER:
             p = PROGRESS.get(aid)
             if not p:

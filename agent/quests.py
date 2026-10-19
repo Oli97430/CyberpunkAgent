@@ -33,10 +33,18 @@ def _load_danger() -> list:
 _danger: list = _load_danger()
 
 
-def mark_death(x: float, y: float) -> None:
-    if near_danger(x, y, 10.0):
-        return                                  # deja connu : pas de doublon
-    _danger.append({'x': x, 'y': y, 'kind': 'mort'})
+DEATH_AVOID_S = 3600.0          # 19/10 (Olivier : « V apprend de ses morts ») : lieu de mort evite 1 h, puis revanche
+
+
+def mark_death(x: float, y: float, cause: str = '', level: int | None = None) -> None:
+    for d in _danger:
+        if d.get('kind') == 'mort' and math.hypot(x - d['x'], y - d['y']) < 10.0:
+            d['t'], d['n'] = time.time(), int(d.get('n') or 1) + 1      # meme lieu : on remet le compteur a zero
+            if cause:
+                d['cause'] = cause[:60]
+            break
+    else:
+        _danger.append({'x': x, 'y': y, 'kind': 'mort', 't': time.time(), 'n': 1, 'cause': cause[:60], 'lvl': level})
     del _danger[:-200]
     try:
         _DEATHS.write_text(json.dumps(_danger), encoding='utf-8')
@@ -48,8 +56,19 @@ def mark_danger(x: float, y: float) -> None:
     _danger.append({'x': x, 'y': y, 'kind': 'groupe'})
 
 
+def _active(d: dict) -> bool:
+    """Lieu a eviter : groupe dangereux (session) ou mort de moins d 1 h (avant le 19/10 : evite pour toujours)."""
+    return d.get('kind') != 'mort' or time.time() - float(d.get('t') or 0.0) < DEATH_AVOID_S
+
+
 def near_danger(x: float, y: float, r: float = 80.0) -> bool:
-    return any(math.hypot(x - d['x'], y - d['y']) < r for d in _danger)
+    return any(_active(d) and math.hypot(x - d['x'], y - d['y']) < r for d in _danger)
+
+
+def death_near(x: float, y: float, r: float = 150.0) -> dict | None:
+    """Lieu de mort (evite ou non) a moins de r m : V y retourne pour une revanche, soigne et prepare."""
+    ds = [d for d in _danger if d.get('kind') == 'mort' and math.hypot(x - d['x'], y - d['y']) < r]
+    return max(ds, key=lambda d: float(d.get('t') or 0.0)) if ds else None
 
 
 _visited: dict[int, float] = {}  # hash -> heure d arrivee sur ce marqueur (exclu 15 min : il ne se re-choisit pas en boucle)
@@ -223,6 +242,11 @@ def pick_next(quests: list[dict], current_hash: int | None = None, player_level:
              and not _is_banned(q['x'], q['y']) and not is_race(q.get('text'))]                  # 12/10 : courses
     if not cands:
         return None
+    return ranked(cands, player_level, prefer_givers)[0]
+
+
+def ranked(cands: list[dict], player_level: int | None = None, prefer_givers: bool = False) -> list[dict]:
+    """Candidats tries (de son niveau, donneurs, niveau connu, a pied, distance)."""
     def over(q):                 # 0 = de son niveau (ou inconnu), 1 = trop haute
         lv = q.get('lvl')
         return 1 if (lv and player_level and lv > player_level + LEVEL_MARGIN) else 0
@@ -231,7 +255,23 @@ def pick_next(quests: list[dict], current_hash: int | None = None, player_level:
     # a pied, une quete a < 400 m est realiste ; au-dela, on n y va qu a defaut
     def giver(q):                # 0 = donneur de quete (on lui parle pour lancer une quete), 1 = autre marqueur
         return 0 if (prefer_givers and 'QuestGiver' in str(q.get('text') or '')) else 1
-    return min(cands, key=lambda q: (over(q), giver(q), known(q), q['dist'] >= 400, q['dist']))
+    return sorted(cands, key=lambda q: (over(q), giver(q), known(q), q['dist'] >= 400, q['dist']))
+
+
+def options(n: int = 3, current_hash: int | None = None, player_level: int | None = None) -> list[dict]:
+    """19/10 (vote du chat) : les n meilleures quetes avec marqueur, une par quete (pas 2 objectifs du meme marqueur)."""
+    qs = [q for q in list_active() if q.get('hasMappin') and q.get('dist') is not None and q.get('x') is not None
+          and q['hash'] != current_hash and not near_danger(q['x'], q['y']) and not is_race(q.get('text'))
+          and time.perf_counter() - _blocked.get(int(q['hash']), -1e9) > BLOCKED_S]
+    out, seen = [], set()
+    for q in ranked(qs, player_level):
+        k = str(q.get('text') or '')
+        if k in seen:
+            continue
+        seen.add(k); out.append(q)
+        if len(out) >= n:
+            break
+    return out
 
 
 def _avoids(avoid) -> list:

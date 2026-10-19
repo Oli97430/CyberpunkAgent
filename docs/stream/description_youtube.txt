@@ -4,6 +4,7 @@
 !attaque — attaquer les ennemis en vue
 !objectif — reprendre la quête en cours
 !changer_quete (ou !skip) — passer à une autre quête
+!mission — le chat choisit la prochaine mission parmi 3 (votez ensuite !1, !2 ou !3)
 !explore — partir explorer un nouveau quartier
 !marchand (ou !shop) — aller vendre son butin
 !charcudoc — aller se faire poser des implants
@@ -11,3 +12,5 @@
 
 🗳️ C'EST UN VOTE : toutes les 30 secondes, V exécute la commande la plus demandée par le chat. Une voix par personne (tu peux changer d'avis pendant le tour).
 📺 Le décompte s'affiche en direct dans le bandeau en bas de l'écran (« VOTE 18 S : EXPLORE 4 . ATTAQUE 2 »).
+🎯 Toutes les 15 minutes, V vous laisse choisir sa prochaine mission : tapez !1, !2 ou !3 (45 secondes pour voter).
+🏆 En haut à droite : ses succès Steam en cours et le nombre d'ordres du chat suivis.

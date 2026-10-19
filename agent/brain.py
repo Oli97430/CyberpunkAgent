@@ -32,9 +32,9 @@ _DIRECTIVE_KEYWORDS = frozenset({
     'attaque', 'attaquer', 'combat', 'objectif', 'quete', 'marchand', 'vendre', 'boutique',
     'charcudoc', 'ripperdoc', 'implant', 'explore', 'explorer', 'balade', 'changer_quete', 'autre_quete',
     'status', 'etat', 'etat?', 'photo', 'screenshot', 'capture', 'niveau', 'soigne', 'stats',
-    'modeles', 'liste_modeles', 'modele_liste', 'hud', 'config', 'reglages',
+    'modeles', 'liste_modeles', 'modele_liste', 'hud', 'config', 'reglages', 'mission', 'missions', 'bilan',
 })
-_DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ', 'modele ')
+_DIRECTIVE_PREFIXES = ('va_a ', 'va a ', 'courage ', 'style ', 'aggro ', 'modele ', 'mission_choix ')
 _STOP_WORDS = ('stop', 'arret', 'arrete-toi', 'arrete toi')
 _RESUME_WORDS = ('reprendre', 'resume', 'continue')
 
@@ -141,6 +141,8 @@ def _log(msg: str) -> None:
     try:
         from . import narrator                     # 19/10 : V commente ses decisions en grand sur le HUD
         narrator.feed(str(msg).strip())
+        from . import clips                        # 19/10 : moments forts -> clip OBS (tampon de rediffusion)
+        clips.feed(str(msg).strip(), log=_log)
     except Exception:
         pass
     try:
@@ -227,6 +229,26 @@ def _tid(alt_target, q) -> tuple:
     if alt_target is not None:
         return ('alt', alt_target.get('hash'), str(alt_target.get('text') or ''))
     return ('q', (q or {}).get('hash'), str((q or {}).get('text') or ''))
+
+
+def _session_report(stats: dict, t0: float, money_start, ach_start: int | None = None) -> str:
+    """19/10 (Olivier : « tout » -> 3) : bilan de session lisible (Telegram + journal)."""
+    from . import clips, youtube_chat
+    mins = (time.perf_counter() - t0) / 60.0
+    eddies = (inventory.MONEY - money_start) if money_start is not None else None
+    ach = achievements._STATE.get('unlocked')
+    lines = [f'BILAN DE SESSION ({mins:.0f} min)',
+             f"- combats : {stats.get('combats', 0)} ; ennemis neutralises : ~{combat.KILLS[0]}",
+             f"- morts : {stats.get('morts', 0)}" + (f" ; revanches : {stats['revanches']}" if stats.get('revanches') else ''),
+             f"- objets lootes : {stats.get('loot', 0)}" + (f' ; eddies gagnes : {eddies:+}' if eddies is not None else ''),
+             f"- distance parcourue : {stats.get('km', 0.0):.1f} km",
+             (f"- succes Steam : {len(ach)}" + (f' (+{len(ach) - ach_start} cette session)' if ach_start is not None else ''))
+             if ach is not None else '- succes Steam : inconnus']
+    if youtube_chat.CHAT_STATS['orders'] or stats.get('missions_du_chat'):
+        lines.append(f"- chat : {youtube_chat.CHAT_STATS['orders']} ordre(s) suivi(s), {stats.get('missions_du_chat', 0)} mission(s) choisie(s)")
+    if clips.STATUS['clips']:
+        lines.append(f"- clips enregistres : {clips.STATUS['clips']}")
+    return '\n'.join(lines)
 
 
 def _alt(n: dict, text=None, hash_=None) -> dict:
@@ -420,6 +442,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     last_ripper_t = -999.0
     ripper_forced = False           # directive « charcudoc » : passe outre la suspension et le delai
     money_start = None
+    last_poll_t = time.time()       # 19/10 : dernier sondage de mission du chat (le premier 15 min apres le depart)
+    km_last = None                  # 19/10 : derniere position (distance parcourue, bilan de session)
+    revenge_done: set = set()       # 19/10 : lieux de mort deja « prepares » (soin + annonce) pour la revanche
+    combat.KILLS[0] = 0
+    ach_start = len(achievements._STATE.get('unlocked') or ())
     vendor_fail_streak = 0
     last_drive_t = -999.0
     ft_tried: dict = {}             # cible (cellule de 50 m) -> heure du dernier voyage rapide tente vers elle
@@ -657,6 +684,20 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                              _why or ('reparti sans resultat' if _dm > 30.0 else 'rien en 60 s'), z=_mw.get('z'), log=_log)
                         marker_watch = None
 
+                # 19/10 : distance parcourue (sauts > 300 m = voyage rapide / rechargement, non comptes)
+                if st.get('x') is not None:
+                    if km_last is not None:
+                        _dd = math.hypot(st['x'] - km_last[0], st['y'] - km_last[1])
+                        if _dd < 300.0:
+                            stats['km'] = stats.get('km', 0.0) + _dd / 1000.0
+                    km_last = (st['x'], st['y'])
+                # 19/10 : en direct, le chat choisit la prochaine mission toutes les 15 min (hors combat)
+                if youtube_chat.live() and time.time() - last_poll_t > 900.0 and not st.get('combat') and not youtube_chat.POLL['t0']:
+                    last_poll_t = time.time()
+                    _opts = quests.options(3, (alt_target or st.get('quest') or {}).get('hash'), st.get('level'))
+                    if youtube_chat.open_poll(_opts):
+                        _log('[youtube] sondage de mission ouvert : ' + ' / '.join(str(o.get('text')) for o in _opts))
+
                 # 0a0. DIRECTIVE recue (jeu ou Telegram) : V est redirige en direct, sans attendre qu il ait fini
                 # (ordres notes pendant la pause / hors premier plan d abord : deja compris)
                 dtv, low = deferred.pop(0) if deferred else (remote.poll(log=_log), None)
@@ -709,6 +750,31 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                             alt_target = _alt(nxd)
                             stats['explorations'] = stats.get('explorations', 0) + 1
                         remote.notify('V part explorer' + (' : ' + nxd['text'] if nxd else ' (aucun point connu)'))
+                    elif low in ('mission', 'missions'):
+                        # 19/10 : le chat choisit la mission parmi 3 (!1 !2 !3, 45 s) ; hors direct -> liste sur Telegram
+                        opts = quests.options(3, (alt_target or st.get('quest') or {}).get('hash'), st.get('level'))
+                        if youtube_chat.live() and youtube_chat.open_poll(opts):
+                            last_poll_t = time.time()
+                            _log('[youtube] sondage de mission ouvert : ' + ' / '.join(str(o.get('text')) for o in opts))
+                        else:
+                            remote.notify('Missions possibles :\n' + '\n'.join(f"- {o.get('text')} ({o['dist']:.0f} m)" for o in opts)
+                                          if opts else 'Aucune autre mission avec marqueur.')
+                    elif low.startswith('mission_choix '):
+                        try:
+                            h_m = int(low.split()[1])
+                        except (ValueError, IndexError):
+                            h_m = None
+                        q_m = next((q for q in quests.list_active() if h_m is not None and int(q.get('hash') or -1) == h_m
+                                    and q.get('x') is not None), None)
+                        if q_m:
+                            alt_target = _alt(q_m)
+                            plan.last_t = -99.0; plan.action = 'objectif'
+                            stats['missions_du_chat'] = stats.get('missions_du_chat', 0) + 1
+                            _log(f"[quetes] mission choisie par le chat : « {q_m.get('text')} » a {q_m.get('dist') or 0:.0f} m")
+                        else:
+                            _log('[quetes] mission choisie par le chat introuvable (terminee entre-temps ?)')
+                    elif low == 'bilan':
+                        remote.notify(_session_report(stats, t0, money_start, ach_start))
                     elif low in ('changer_quete', 'autre_quete'):
                         nxd = quests.switch(alt_target.get('hash') if alt_target else (st.get('quest') or {}).get('hash'), log=_log)
                         if nxd:
@@ -865,8 +931,11 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                 if (hp_now is not None and hp_now <= 0.5) or st.get('dead'):      # NB : `hp or 100` transformait 0 en 100 -> boucle de mort
                     dead_since = dead_since or time.perf_counter()
                     if time.perf_counter() - dead_since > 4.0:  # 4 s a 0 sur un etat vivant (pas un chargement)
-                        quests.mark_death(st['x'], st['y'])
-                        _log('V EST MORT : lieu memorise (objectifs a < 80 m evites) ; rechargement de la derniere sauvegarde')
+                        _foes = sorted({str(e.get('name') or '?') for e in (st.get('enemies') or [])
+                                        if not e.get('dead') and float(e.get('d') or 999) < 60.0})
+                        _cause = (f"{len(_foes)} type(s) d ennemis : " + ', '.join(_foes[:3])) if _foes else 'cause inconnue (aucun ennemi en vue)'
+                        quests.mark_death(st['x'], st['y'], cause=_cause, level=st.get('level'))
+                        _log(f'V EST MORT ({_cause}) : lieu evite 1 h puis revanche ; rechargement de la derniere sauvegarde')
                         if _reload_last_save(_log, stop=stop):
                             navp.displaced()                             # 12/10 : rechargement = deplacement
                             stats['morts'] = stats.get('morts', 0) + 1
@@ -1629,6 +1698,18 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                     time.sleep(1.0); continue
 
                 # 5. aller vers l objectif (action == 'objectif')
+                # 19/10 (Olivier : « V apprend de ses morts ») : objectif pres d un lieu ou V est deja mort -> a 200 m,
+                # il se soigne a fond et l annonce (revanche), une fois par lieu et par session
+                _tx, _ty = (alt_target['x'], alt_target['y']) if alt_target is not None else (q.get('mx'), q.get('my'))
+                if _tx is not None and dist is not None and dist < 200.0 and not st.get('combat'):
+                    _dn = quests.death_near(_tx, _ty)
+                    if _dn is not None and (_dn['x'], _dn['y']) not in revenge_done:
+                        revenge_done.add((_dn['x'], _dn['y']))
+                        _log(f"[revanche] retour la ou V est mort ({_dn.get('n') or 1} fois ; {_dn.get('cause') or 'cause inconnue'}) :"
+                             f" soin a fond avant d y aller (vie {st.get('hp', 0):.0f} %)")
+                        stats['revanches'] = stats.get('revanches', 0) + 1
+                        if (st.get('hp') or 100) < 95 and kbm.ACTIONS.get('consumable'):
+                            kbm.act('consumable', 0.1)
                 if inter and inter.get('choices') and dist is not None and dist < ARRIVE_M + 2.0:
                     # arrive au marqueur et une interaction est proposee : c est l objectif lui-meme... sauf les invites
                     # de vehicule (« Prendre le controle » = piratage d une voiture, « Enfourcher ») et les invites PERIMEES
@@ -2033,7 +2114,14 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
         _log(f'=== fin : {stats} ===')
         hud.update(ended=True, paused=False, mode='SESSION TERMINEE')
         hud.flush()
-        remote.notify(f"Session terminee ({stats['seconds'] / 60:.0f} min) : {stats.get('combats', 0)} combat(s), "
-                      f"{stats.get('morts', 0)} mort(s), {stats.get('loot', 0)} objet(s) loote(s), "
-                      f"{stats.get('trajets', 0)} trajet(s), {stats.get('eddies_gagnes', 0)} eddies gagnes.")
+        _rep = _session_report(stats, t0, money_start, ach_start)
+        _log(_rep.replace('\n', ' | '))
+        try:
+            from . import narrator
+            narrator.say(f"BILAN : {stats.get('combats', 0)} COMBATS, ~{combat.KILLS[0]} NEUTRALISES, {stats.get('morts', 0)} MORTS, "
+                         f"{stats.get('km', 0.0):.1f} KM. I'LL BE BACK.", force=True)
+            hud.flush()
+        except Exception:
+            pass
+        remote.notify(_rep)
     return stats

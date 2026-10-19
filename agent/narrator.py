@@ -41,10 +41,13 @@ RULES: list[tuple[str, str]] = [
     (r'\[cyberpsycho\] contact', 'CYBERPSYCHO LOCALISE. NEUTRALISATION.'),
     (r'\[succes\] Tu es deja mort', 'KERENZIKOV ACTIVE. LE TEMPS RALENTIT.'),
     (r'quete de course .* passe a autre chose', 'COURSE DE RUE ? NEGATIF.'),
+    (r'\[revanche\] retour', 'REVANCHE. J AI DEJA PERDU ICI. PAS CETTE FOIS.'),
+    (r'\[quetes\] mission choisie par le chat : « (.+?) »', 'ORDRE DU CHAT : {0}. EN ROUTE.'),
+    (r'\[clips\] clip', 'MOMENT ENREGISTRE.'),
     (r'^objectif : (.+?)\s+\(marqueur', 'NOUVELLE MISSION : {0}'),
 ]
 # 19/10 (revue de securite) : regles ANCREES en debut de ligne (etiquette interne facultative : [vente], [conduite]...)
-_PREFIX = r'^(?:\[(?:vente|conduite|armes|charcudoc|exploration|vol|gouts|succes|combat|quetes|cyberpsycho)\]\s*)?'
+_PREFIX = r'^(?:\[(?:vente|conduite|armes|charcudoc|exploration|vol|gouts|succes|combat|quetes|cyberpsycho|revanche|clips)\]\s*)?'
 _RX = [(re.compile(p if p.startswith(('^', r'\[')) else _PREFIX + p), s) for p, s in RULES]
 _RX = [(re.compile('^' + rx.pattern) if not rx.pattern.startswith('^') else rx, s) for rx, s in _RX]
 # 19/10 (revue de securite) : lignes dont le texte vient de l EXTERIEUR (chat YouTube, Telegram, SMS, dialogues, panneau,
@@ -87,7 +90,7 @@ def feed(line: str) -> None:
 CHAT_PHRASES = {'attaque': 'J ATTAQUE !', 'objectif': 'RETOUR A LA MISSION.', 'explore': 'JE PARS EXPLORER.',
                 'marchand': 'JE VAIS VENDRE MON BUTIN.', 'charcudoc': 'DIRECTION LE CHARCUDOC.', 'soigne': 'JE ME SOIGNE.',
                 'changer_quete': 'JE CHANGE DE MISSION.', 'stop': 'ARRET DEMANDE. TERMINE.', 'pause': 'PAUSE.',
-                'reprendre': 'JE REPRENDS.'}
+                'reprendre': 'JE REPRENDS.', 'mission': 'A VOUS DE CHOISIR MA MISSION.'}
 
 
 def thank(who: str, cmd: str, votes: int | None = None) -> None:

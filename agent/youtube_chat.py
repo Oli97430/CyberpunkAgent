@@ -24,13 +24,96 @@ from .config import DATA_DIR
 
 YOUTUBE_FILE = DATA_DIR / 'youtube.json'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
-VIEWER_CMDS = {'attaque', 'objectif', 'explore', 'marchand', 'charcudoc', 'soigne', 'changer_quete'}
+VIEWER_CMDS = {'attaque', 'objectif', 'explore', 'marchand', 'charcudoc', 'soigne', 'changer_quete', 'mission'}
 MOD_CMDS = VIEWER_CMDS | {'stop', 'pause', 'reprendre', 'courage', 'style', 'aggro', 'photo', 'hud'}   # photo -> Telegram d Olivier
 ALIASES = {'attack': 'attaque', 'fight': 'attaque', 'quest': 'objectif', 'quete': 'objectif', 'explorer': 'explore',
            'vendre': 'marchand', 'shop': 'marchand', 'heal': 'soigne', 'soin': 'soigne', 'ripperdoc': 'charcudoc',
-           'autrequete': 'changer_quete', 'skip': 'changer_quete', 'change': 'changer_quete'}
+           'autrequete': 'changer_quete', 'skip': 'changer_quete', 'change': 'changer_quete', 'missions': 'mission',
+           'quetes': 'mission', 'choix': 'mission'}
 VOTE_S = 30.0          # 19/10 : vote du chat -- la commande la plus demandee en 30 s est executee
-BANNER = 'VOTE DU CHAT : !ATTAQUE  !OBJECTIF  !SKIP  !EXPLORE  !SHOP  !CHARCUDOC  !HEAL   (1 VOTE / PERSONNE, 30 S)'
+BANNER = 'VOTE DU CHAT : !ATTAQUE  !OBJECTIF  !SKIP  !MISSION  !EXPLORE  !SHOP  !CHARCUDOC  !HEAL   (1 VOTE / PERSONNE, 30 S)'
+POLL_S = 45.0          # 19/10 : le chat choisit la mission parmi 3 (!1 !2 !3)
+POLL: dict = {'options': [], 't0': None, 'voices': {}}
+CHAT_STATS: dict = {'orders': 0, 'by': {}}      # 19/10 : ordres du chat suivis (tableau des succes) et spectateur le plus actif
+
+
+def live() -> bool:
+    return bool(STATUS.get('video_id'))
+
+
+def open_poll(opts: list[dict]) -> bool:
+    """Sondage de mission : opts = [{'hash', 'text', 'dist'}] (2 ou 3). Faux si deja ouvert ou rien a proposer."""
+    if POLL['t0'] is not None or len(opts) < 2:
+        return False
+    from .narrator import clean
+    POLL.update(options=[(o['hash'], clean(o.get('text') or '?', 22).upper()) for o in opts[:3]], t0=time.time(), voices={})
+    _poll_banner()
+    try:
+        from . import narrator
+        narrator.say('LE CHAT CHOISIT MA MISSION : ' + '  '.join(f'!{i + 1} {lab}' for i, (_, lab) in enumerate(POLL['options'])), force=True)
+    except Exception:
+        pass
+    return True
+
+
+def poll_vote(author: str, text: str) -> bool:
+    """« !2 » pendant un sondage -> voix (modifiable) ; vrai si c etait une voix."""
+    t = text.strip()
+    if POLL['t0'] is None or not re.fullmatch(r'!\s*[1-3]', t):
+        return False
+    i = int(t[-1]) - 1
+    if i >= len(POLL['options']):
+        return False
+    POLL['voices'][author] = i
+    _poll_banner()
+    return True
+
+
+def poll_tally() -> list[int]:
+    cnt = [0] * len(POLL['options'])
+    for i in POLL['voices'].values():
+        cnt[i] += 1
+    return cnt
+
+
+def poll_close_if_due(now: float) -> tuple[int, str, int, int] | None:
+    """(hash, libelle, voix, votants) quand le sondage se termine (egalite -> la mieux classee par V) ; None sinon.
+    Personne n a vote -> (hash de l option 1, ..., 0, 0) : V garde son propre choix."""
+    if POLL['t0'] is None or now - POLL['t0'] < POLL_S:
+        return None
+    cnt = poll_tally()
+    best = max(range(len(cnt)), key=lambda i: (cnt[i], -i))
+    h, lab = POLL['options'][best]
+    res = (h, lab, cnt[best], len(POLL['voices']))
+    POLL.update(options=[], t0=None, voices={})
+    _banner(True)
+    return res
+
+
+def _poll_banner() -> None:
+    try:
+        from . import hud
+        cnt = poll_tally()
+        left = max(0, POLL_S - (time.time() - (POLL['t0'] or time.time())))
+        hud.update(banner=hud.ascii_up(f'MISSION ? {left:.0f} S : ' + '   '.join(f'!{i + 1} {lab} ({cnt[i]})' for i, (_, lab) in enumerate(POLL['options'])))[:110],
+                   banner_last=None)
+    except Exception:
+        pass
+
+
+def count_order(author: str) -> None:
+    CHAT_STATS['orders'] += 1
+    CHAT_STATS['by'][author] = CHAT_STATS['by'].get(author, 0) + 1
+    try:
+        from . import achievements
+        achievements.publish()
+    except Exception:
+        pass
+
+
+def top_viewer() -> str | None:
+    by = {a: n for a, n in CHAT_STATS['by'].items() if a not in ('vote', 'le chat')}
+    return max(by, key=lambda a: by[a]) if by else None
 
 
 class Vote:
@@ -227,10 +310,14 @@ def _loop(log, put) -> None:
                         continue
                     seen.add(m['id'])
                     STATUS['messages'] += 1
+                    if poll_vote(m['author'], m['text']):           # 19/10 : !1 !2 !3 pendant un sondage de mission
+                        log(f"  [youtube] voix de mission de {m['author']} : {m['text'].strip()}")
+                        continue
                     cmd = to_command(m['text'], m['mod'])
                     if not cmd:
                         continue
                     if not m['mod']:
+                        CHAT_STATS['by'][m['author']] = CHAT_STATS['by'].get(m['author'], 0) + 1   # participation
                         vote.add(m['author'], cmd, now)          # spectateur : une voix (modifiable) pour ce tour de vote
                         log(f"  [youtube] vote de {m['author']} : « {cmd} »")
                         _banner_tally(vote, now)
@@ -248,7 +335,24 @@ def _loop(log, put) -> None:
                         narrator.thank(m['author'], cmd)
                     except Exception:
                         pass
+                    count_order(m['author'])
                     put(cmd, m)
+                pres = poll_close_if_due(time.time())
+                if pres:
+                    h, lab, n, voters = pres
+                    if voters:
+                        log(f"  [youtube] SONDAGE : mission « {lab} » ({n} voix sur {voters} votant(s))")
+                        try:
+                            from . import narrator
+                            narrator.say(f'LE CHAT A CHOISI ({n} VOIX) : {lab}.', force=True)
+                        except Exception:
+                            pass
+                        count_order('vote')
+                        put(f'mission_choix {h}', {'author': 'vote', 'mod': False})
+                    else:
+                        log('  [youtube] sondage de mission sans voix : V garde son choix')
+                elif POLL['t0'] is not None:
+                    _poll_banner()
                 res = vote.close_if_due(time.time())
                 if res:
                     w, n, voters = res
@@ -265,6 +369,7 @@ def _loop(log, put) -> None:
                         narrator.thank('le chat', w, votes=n)
                     except Exception:
                         pass
+                    count_order('vote')
                     put(w, {'author': 'vote', 'mod': False})
                 elif vote.t0 is not None:
                     _banner_tally(vote, time.time())
