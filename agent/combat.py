@@ -965,8 +965,15 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             if hp <= 0.5:
                 log('  [combat] V EST MORT : arret du combat'); stats['mort'] = True; break
             # 19/10 (bilan de session) : ennemis morts / a terre en vue -- estimation (le mod n identifie pas les ennemis)
-            stats['neutralises'] = max(stats.get('neutralises', 0), sum(1 for x in st.get('enemies') or []
-                                       if (x.get('dead') or x.get('down')) and not x.get('police') and float(x.get('d') or 999) < 50.0))
+            _nk = sum(1 for x in st.get('enemies') or []
+                      if (x.get('dead') or x.get('down')) and not x.get('police') and float(x.get('d') or 999) < 50.0)
+            if _nk > stats.get('neutralises', 0):
+                try:
+                    from . import sounds                   # 19/10 : son d elimination
+                    sounds.play('kill')
+                except Exception:
+                    pass
+            stats['neutralises'] = max(stats.get('neutralises', 0), _nk)
 
             # -- soin
             if hp < HEAL_BELOW and now - t_heal > HEAL_CD and charges(st, 'heal'):

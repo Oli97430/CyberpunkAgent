@@ -4629,9 +4629,37 @@ function AgentV8Body(dl, W, H, e, d, kills)
     end
     table.sort(foes, function(a, b) return (a.d or 999) < (b.d or 999) end)
     local alert = (not e.dead) and (hp < 30 or #foes >= 6)
+    -- 19/10 (Olivier : « ameliore le HUD ») : etat d animation (demarrage, degats, eliminations, verrou)
+    if AgentV8.sess ~= d.t0 then AgentV8.sess = d.t0; AgentV8.bootT = clk end
+    local boot = math.min(1, (clk - (AgentV8.bootT or -99)) / 2.5)
+    if AgentV8.lastHp and hp < AgentV8.lastHp - 4 and not e.dead then AgentV8.hitT = clk end
+    AgentV8.lastHp = hp
+    if AgentV8.kills and (tonumber(kills) or 0) > AgentV8.kills then AgentV8.killT = clk end
+    AgentV8.kills = tonumber(kills) or 0
+    local function wrapd(a) return ((a + 180) % 360) - 180 end
+    local function bearing(x1, y1) return math.deg(math.atan2(-(x1 - e.x), y1 - e.y)) end
+    local CX, CY = W / 2, H / 2
+    local hitAge = clk - (AgentV8.hitT or -99)
+    if hitAge < 0.45 then                              -- flash rouge sur les bords quand V encaisse
+        local k = 1 - hitAge / 0.45
+        for i = 0, 3 do
+            local th = (6 + i * 12) * u
+            local c = AgentV8Col(1, 0.1, 0.05, 0.24 * k * (1 - i / 4))
+            R(0, 0, W, th, c); R(0, H - th, W, H, c); R(0, 0, th, H, c); R(W - th, 0, W, H, c)
+        end
+    end
+    if boot < 1 then                                   -- sequence de demarrage (2,5 s a chaque session)
+        T(CX, CY - 44 * u, 'V-800  //  INITIALISATION', 22, RED, 'c')
+        for i = 0, 59 do
+            local x = CX - 240 * u + i * 8 * u
+            L(x, CY, x, CY + 14 * u, (i / 60) < boot and RED or RED_FAINT, 2)
+        end
+        local stages = { 'NOYAU', 'VITAUX', 'REGISTRE', 'OPTIQUE', 'NAVIGATION' }
+        T(CX, CY + 30 * u, 'CHARGEMENT : ' .. stages[math.min(5, math.floor(boot * 5) + 1)], 11, RED_MID, 'c')
+    end
 
     -- ===== centre : reticule (complet en combat, anneau seul sinon) =====
-    local CX, CY = W / 2, H / 2
+    if boot >= 0.55 then
     local inCombat = e.combat or #foes > 0
     local ringCol = inCombat and RED or RED_DIM
     for deg = 0, 355, 5 do
@@ -4647,6 +4675,19 @@ function AgentV8Body(dl, W, H, e, d, kills)
         for a0 = 0, 354, 6 do arc(CX, CY, 118 * u, a0, a0 + 3, RED_MID, 1, 2) end
     end
 
+    -- anneau des menaces : chaque hostile (meme hors champ, derriere V) = un chevron a son cap autour du reticule
+    if tonumber(e.x) and tonumber(e.y) and tonumber(e.yaw) then
+        for _, t in ipairs(foes) do
+            if tonumber(t.x) and tonumber(t.y) then
+                local rel = wrapd(bearing(t.x, t.y) - e.yaw)
+                local a, hw = math.rad(-90 - rel), math.rad(2.4)
+                local r0, r1 = 178 * u, 194 * u
+                local col = (t.d or 99) < 20 and RED or RED_MID
+                ImGui.ImDrawListAddTriangleFilled(dl, CX + r0 * math.cos(a), CY + r0 * math.sin(a),
+                    CX + r1 * math.cos(a - hw), CY + r1 * math.sin(a - hw), CX + r1 * math.cos(a + hw), CY + r1 * math.sin(a + hw), col)
+            end
+        end
+    end
     -- ===== cibles : verrou sur la plus proche, crochets fins sur les autres =====
     local locked = nil
     for i, t in ipairs(foes) do
@@ -4659,6 +4700,13 @@ function AgentV8Body(dl, W, H, e, d, kills)
             local x0, y0, x1, y1 = px - w / 2, py - h / 2, px + w / 2, py + h / 2
             local cl = math.min(22 * u, w * 0.3)
             local first = locked == nil
+            if first then                              -- verrouillage anime : les crochets se referment sur la cible
+                local key = tostring(t.id or t.name or '?')
+                if AgentV8.lockKey ~= key then AgentV8.lockKey, AgentV8.lockT = key, clk end
+                local g = 1 + 0.7 * math.max(0, 1 - (clk - AgentV8.lockT) / 0.35)
+                local mx_, my_ = (x0 + x1) / 2, (y0 + y1) / 2
+                x0, x1, y0, y1 = mx_ - (mx_ - x0) * g, mx_ + (x1 - mx_) * g, my_ - (my_ - y0) * g, my_ + (y1 - my_) * g
+            end
             local col, th = first and RED or RED_MID, first and 2 or 1.2
             for _, k in ipairs({ { x0, y0, 1, 1 }, { x1, y0, -1, 1 }, { x0, y1, 1, -1 }, { x1, y1, -1, -1 } }) do
                 L(k[1], k[2], k[1] + k[3] * cl, k[2], col, th); L(k[1], k[2], k[1], k[2] + k[4] * cl, col, th)
@@ -4673,7 +4721,8 @@ function AgentV8Body(dl, W, H, e, d, kills)
                     L(CX + 166 * u * math.cos(ang), CY + 166 * u * math.sin(ang), x0 - 12 * u, my, RED_MID, 1)
                 end
                 T(x0, y0 - 46 * u, 'CIBLE 01', 18, RED)
-                T(x0, y0 - 22 * u, 'VERROUILLEE', 11, RED_DIM)
+                local acq = clk - (AgentV8.lockT or -99) < 0.6
+                T(x0, y0 - 22 * u, acq and 'ACQUISITION...' or 'VERROUILLEE', 11, acq and BONE or RED_DIM)
                 local rows = { { 'DIST', string.format('%d M', math.floor((t.d or 0) + 0.5)) } }
                 if t.name and t.name ~= '' then rows[#rows + 1] = { 'CLASSE', string.upper(tostring(t.name)):sub(1, 22) } end
                 for k, rw in ipairs(rows) do
@@ -4701,6 +4750,8 @@ function AgentV8Body(dl, W, H, e, d, kills)
             T(px - h / 4, py - h / 2 - 18 * u, 'POLICE : NON-CIBLE', 10, AMBER)
         end
     end
+    if not locked then AgentV8.lockKey = nil end
+    end   -- boot >= 0.55
 
     -- ===== haut centre : narrateur (ou directive en veille) =====
     local NY = 92 * u
@@ -4741,6 +4792,7 @@ function AgentV8Body(dl, W, H, e, d, kills)
     end
 
     -- ===== gauche : colonne vitale =====
+    if boot >= 0.15 then
     local LX = M + 8 * u
     R(M - 10 * u, 80 * u, M + 262 * u, 966 * u, PLATE)
     T(LX, 92 * u, (stale and 'LIAISON PERDUE') or (d.paused and 'EN PAUSE') or 'SYS.ONLINE', 10, stale and AMBER or RED_DIM)
@@ -4791,11 +4843,14 @@ function AgentV8Body(dl, W, H, e, d, kills)
     kv(ry + 132 * u, 'MODE', mode:sub(1, 22), RED)
     kv(ry + 156 * u, 'HOSTILES', tostring(#foes) .. (police > 0 and (' +' .. police .. ' POLICE') or ''), #foes > 0 and RED or BONE)
     kv(ry + 180 * u, 'ELIMINES', tostring(kills or 0))
+    if clk - (AgentV8.killT or -99) < 1.5 then T(LX + 170 * u, ry + 180 * u, '+1', 13, BONE) end
     if alert then
         T(LX, ry + 212 * u, hp < 30 and 'INTEGRITE CRITIQUE' or 'MENACE CRITIQUE', 13, blink and BONE or RED)
     end
 
+    end   -- boot >= 0.15
     -- ===== droite : registre des succes =====
+    if boot >= 0.35 then
     local gv = type(d.goalsv) == 'table' and d.goalsv or nil
     local RX1 = W - M - 8 * u
     local RX0 = RX1 - 418 * u
@@ -4864,13 +4919,15 @@ function AgentV8Body(dl, W, H, e, d, kills)
         for i, line in ipairs(d.goals) do T(RX1, 92 * u + (i - 1) * 22 * u, tostring(line), 13, i == 1 and RED or RED_MID, 'r') end
     end
 
-    -- ===== bas centre : cap =====
+    end   -- boot >= 0.35
+    -- ===== bas centre : cap (+ objectif) =====
+    if boot >= 0.75 then
     local yaw = tonumber(e.yaw)
     if yaw then
         local heading = (-yaw) % 360
         local CYc = 922 * u
         local half = 400 * u
-        R(CX - half - 14 * u, CYc - 40 * u, CX + half + 14 * u, CYc + 40 * u, PLATE)
+        R(CX - half - 14 * u, CYc - 40 * u, CX + half + 14 * u, CYc + 58 * u, PLATE)
         L(CX - half, CYc, CX + half, CYc, RED_DIM, 1)
         local base = math.floor(heading)
         for deg = base - 60, base + 61 do
@@ -4888,7 +4945,28 @@ function AgentV8Body(dl, W, H, e, d, kills)
         end
         ImGui.ImDrawListAddTriangleFilled(dl, CX, CYc + 3 * u, CX - 6 * u, CYc + 13 * u, CX + 6 * u, CYc + 13 * u, RED)
         T(CX, CYc + 20 * u, string.format('%03d', math.floor(heading + 0.5) % 360), 12, BONE, 'c')
+        -- objectif sur le cap : losange a son cap (fleche au bord s il est hors de la bande) + nom et distance
+        local tg = type(d.target) == 'table' and d.target or nil
+        local tx, ty, tl
+        if tg and tonumber(tg.x) and tonumber(tg.y) then tx, ty, tl = tonumber(tg.x), tonumber(tg.y), tg.label
+        elseif type(e.quest) == 'table' and tonumber(e.quest.mx) and tonumber(e.quest.my) then tx, ty, tl = tonumber(e.quest.mx), tonumber(e.quest.my), 'QUETE SUIVIE' end
+        if tx and tonumber(e.x) and tonumber(e.y) then
+            local dd = wrapd(((-bearing(tx, ty)) % 360) - heading)
+            local dist = math.sqrt((tx - e.x) ^ 2 + (ty - e.y) ^ 2)
+            local s = 2 * half / 120
+            if math.abs(dd) <= 60 then
+                local xm, ym = CX + dd * s, CYc - 6 * u
+                ImGui.ImDrawListAddTriangleFilled(dl, xm, ym - 7 * u, xm - 6 * u, ym, xm + 6 * u, ym, BONE)
+                ImGui.ImDrawListAddTriangleFilled(dl, xm - 6 * u, ym, xm + 6 * u, ym, xm, ym + 7 * u, BONE)
+            else
+                local sg = dd > 0 and 1 or -1
+                local xe = CX + sg * (half + 4 * u)
+                ImGui.ImDrawListAddTriangleFilled(dl, xe + sg * 10 * u, CYc - 6 * u, xe, CYc - 12 * u, xe, CYc, BONE)
+            end
+            T(CX, CYc + 38 * u, '> ' .. string.upper(tostring(tl or 'OBJECTIF')):sub(1, 30) .. string.format('   %d M', math.floor(dist + 0.5)), 11, RED_MID, 'c')
+        end
     end
+    end   -- boot >= 0.75
 
     -- ===== bas : bandeau du chat (seulement en direct) =====
     if d.banner then

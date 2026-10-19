@@ -145,6 +145,8 @@ def _log(msg: str) -> None:
         from . import clips, features              # 19/10 : moments forts -> clip OBS ; fonctions vues en jeu
         clips.feed(str(msg).strip(), log=_log)
         features.feed(str(msg).strip())
+        from . import sounds as _snd                # 19/10 : sons du HUD (quickhack, voiture)
+        _snd.feed(str(msg).strip())
     except Exception:
         pass
     try:
@@ -585,6 +587,8 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
     except Exception:
         pass
     hp_alarm_t = -99.0
+    hp_prev, hit_snd_t = None, -99.0      # 19/10 : son de degat
+    hud_tgt_t = -99.0                     # 19/10 : cible de V sur le cap du HUD
     crash_check_t, game_gone = -99.0, 0     # 19/10 : relance automatique apres un crash du jeu
     _vr = CFG.vr_mode()
     if _vr:
@@ -744,6 +748,17 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                                              _why or ('reparti sans resultat' if _dm > 30.0 else 'rien en 60 s'), z=_mw.get('z'), log=_log)
                         marker_watch = None
 
+                # 19/10 : son de degat quand V encaisse (6 points de vie ou plus d un coup), 1 fois / 1,2 s
+                _hp_now2 = st.get('hp')
+                if _hp_now2 is not None and hp_prev is not None and _hp_now2 < hp_prev - 6 and _hp_now2 > 0.5 \
+                        and time.time() - hit_snd_t > 1.2:
+                    hit_snd_t = time.time()
+                    try:
+                        from . import sounds
+                        sounds.play('hit')
+                    except Exception:
+                        pass
+                hp_prev = _hp_now2
                 # 19/10 : alarme du HUD T-800 quand la vie passe sous 25 % (toutes les 15 s au plus)
                 if (st.get('hp') or 100) < 25 and (st.get('hp') or 0) > 0.5 and time.time() - hp_alarm_t > 15.0:
                     hp_alarm_t = time.time()
@@ -752,6 +767,16 @@ def run(duration_s: float = 300.0, stop=None, pause=None) -> dict:
                         sounds.play('alarm')
                     except Exception:
                         pass
+                # 19/10 : cible choisie par V -> losange sur le cap du HUD V-800 (sinon le mod montre la quete suivie)
+                if time.time() - hud_tgt_t > 1.0:
+                    hud_tgt_t = time.time()
+                    if alt_target is not None:
+                        _tl = str(alt_target.get('text') or 'cible')
+                        _tl = {'HuntForPsychoVariant': 'CYBERPSYCHO', 'QuestGiverVariant': 'DONNEUR DE QUETE'}.get(
+                            _tl, 'MARQUEUR DE QUETE' if _tl.endswith('Variant') else _tl)
+                        hud.update(target={'x': alt_target['x'], 'y': alt_target['y'], 'label': hud.ascii_up(_tl)[:30]})
+                    else:
+                        hud.update(target=None)
                 # 19/10 : distance parcourue (sauts > 300 m = voyage rapide / rechargement, non comptes)
                 if st.get('x') is not None:
                     if km_last is not None:
