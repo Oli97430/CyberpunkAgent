@@ -3824,6 +3824,17 @@ local function handleCommand(player, cmd)
         resp.ok = resp.lifepath ~= nil or resp.gender ~= nil
         journal('OK   char_id : ' .. tostring(resp.lifepath) .. ' / ' .. tostring(resp.gender))
         return resp
+    elseif cmd.cmd == 'lift_info' then
+        local r = AgentLiftInfo(player)
+        for k, v in pairs(r) do resp[k] = v end
+        journal(string.format('OK   lift_info : cabine %s, etage actif %s, dedans %s, %d etage(s), %d terminal(aux)',
+            r.cabin and string.format('%.0f m', r.cabin.d) or 'non', tostring(r.active), tostring(r.inside), #(r.floors or {}), #(r.terms or {})))
+        return resp
+    elseif cmd.cmd == 'lift_go' then
+        local r = AgentLiftGo(player, tonumber(cmd.x) or 0, cmd.y == 1)
+        for k, v in pairs(r) do resp[k] = v end
+        journal('OK   lift_go : etage ' .. tostring(cmd.x) .. ' par ' .. tostring(r.how) .. ' -> ' .. tostring(r.ok) .. ' ' .. tostring(r.reason or ''))
+        return resp
     elseif cmd.cmd == 'lifts' then
         -- 19/10 ASCENSEURS (Olivier : « 3 ») : terminaux d etage (ElevatorFloorTerminal) et cabines (LiftDevice) a < 40 m
         journal('RUN  lifts')
@@ -4605,6 +4616,88 @@ function AgentLootAll(player, radius)
         end
     end
     return out
+end
+-- 19/10 ASCENSEURS PAR SCRIPT (session 16:49 : 4 elements trouves mais jamais d invite « Appeler » sous le regard de V) :
+-- la cabine (LiftDevice -> LiftControllerPS) et ses etages ; chaque terminal d etage (ElevatorFloorTerminal) donne
+-- l ALTITUDE de son etage -> V choisit l etage le plus proche de l objectif. Appel / envoi = actions du jeu lui-meme
+-- (CallElevator, GoToFloor : liftController.script:579/591) executees sur le DevicePS. Globales (limite d upvalues).
+function AgentLiftScan(player)
+    local q = Game['TSQ_ALL;']()
+    q.maxDistance = 45.0
+    q.filterObjectByDistance = true
+    pcall(function() q.testedSet = TargetingSet.Complete end)
+    local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
+    local pos = player:GetWorldPosition()
+    local lift, liftD, terms, seen = nil, 1e9, {}, {}
+    if okT and parts then
+        for i = 1, #parts do
+            local comp = TS_TargetPartInfo.GetComponent(parts[i])
+            local ent = comp and comp:GetEntity() or nil
+            if ent then
+                local okH, h = pcall(function() return ent:GetEntityID().hash end)
+                local key = okH and tostring(h) or tostring(ent)
+                if not seen[key] then
+                    seen[key] = true
+                    local wp = ent:GetWorldPosition()
+                    local d = math.sqrt((wp.x - pos.x) ^ 2 + (wp.y - pos.y) ^ 2)
+                    local okL, isL = pcall(function() return ent:IsA('LiftDevice') end)
+                    local okF, isF = pcall(function() return ent:IsA('ElevatorFloorTerminal') end)
+                    if okL and isL and d < liftD then lift, liftD = ent, d end
+                    if okF and isF then
+                        local t = { x = wp.x, y = wp.y, z = wp.z, d = d }
+                        pcall(function() t.name = ElevatorFloorSetup.GetFloorName(ent:GetDevicePS():GetElevatorFloorSetup()) end)
+                        terms[#terms + 1] = t
+                    end
+                end
+            end
+        end
+    end
+    return lift, liftD, terms
+end
+function AgentLiftInfo(player)
+    local lift, liftD, terms = AgentLiftScan(player)
+    local out = { ok = true, terms = terms }
+    if not lift then out.reason = 'aucune cabine a 45 m'; return out end
+    AgentLiftEnt = lift
+    local wp = lift:GetWorldPosition()
+    out.cabin = { x = wp.x, y = wp.y, z = wp.z, d = liftD }
+    local ps = nil
+    pcall(function() ps = lift:GetDevicePS() end)
+    if not ps then out.reason = 'cabine sans DevicePS'; return out end
+    pcall(function() out.active = ps:GetActiveFloor() end)
+    pcall(function() out.inside = ps:IsPlayerInsideLift() end)
+    local floors = {}
+    pcall(function()
+        local fl = ps:GetFloors()
+        for i = 1, #fl do
+            local nm = nil
+            pcall(function() nm = ElevatorFloorSetup.GetFloorName(fl[i]) end)
+            floors[#floors + 1] = { i = i - 1, name = nm }
+        end
+    end)
+    out.floors = floors
+    return out
+end
+function AgentLiftGo(player, floor, call)
+    local lift = AgentLiftEnt
+    if not lift then lift = AgentLiftScan(player) end
+    if not lift then return { ok = false, reason = 'aucune cabine' } end
+    local ps = lift:GetDevicePS()
+    local act, how = nil, nil
+    if call then
+        pcall(function() act = ps:ActionCallElevator(false, floor); how = 'CallElevator' end)
+    end
+    if not act then
+        local n, cur, nm = 0, 0, ''
+        pcall(function() n = #ps:GetFloors() end)
+        pcall(function() cur = ps:GetActiveFloor() end)
+        pcall(function() nm = ElevatorFloorSetup.GetFloorName(ps:GetFloors()[floor + 1]) end)
+        pcall(function() act = ps:ActionGoToFloor(n, cur, floor, nm, true); how = 'GoToFloor' end)
+    end
+    if not act then return { ok = false, reason = 'action d ascenseur introuvable' } end
+    local ok1 = pcall(function() ps:ExecutePSAction(act, player) end)
+    if not ok1 then ok1 = pcall(function() ps:ExecutePSAction(act) end) end
+    return { ok = ok1, how = how, floor = floor }
 end
 -- 19/10 HUD V-800 « ANATOMIE DU SIGNAL » (Olivier : « redesign le hud du v800 » puis « applique-le en jeu ») : tout est
 -- dessine en primitives (lignes, cases, chiffres 7 segments nets a toute taille) sur la liste de dessin d arriere-plan

@@ -58,8 +58,8 @@ def _choose(idx: int) -> None:
     kbm.act('interact', 0.3)
 
 
-def try_reach(tz: float, stop=None, log=print) -> bool:
-    """Vrai si V a change d etage vers l objectif (altitude rapprochee d au moins 3 m)."""
+def _try_prompts(tz: float, stop=None, log=print) -> bool:
+    """Secours (1re version, par les invites a l ecran) : vrai si V a change d etage vers l objectif."""
     t0 = time.perf_counter()
     st = motion.read_state() or {}
     if st.get('z') is None:
@@ -121,4 +121,92 @@ def try_reach(tz: float, stop=None, log=print) -> bool:
         kbm.look(150, 0); time.sleep(0.6)               # chercher l invite (panneau a cote de V)
     s = motion.read_state() or {}
     log(f"[ascenseur] echec en {MAX_S:.0f} s (altitude {z0:.0f} -> {float(s.get('z') or z0):.0f} m, objectif {tz:.0f} m)")
+    return False
+
+
+# ---- 19/10 v2 : par SCRIPT (session 16:49 : 4 elements trouves, jamais d invite « Appeler » sous le regard de V) ---------------
+def info() -> dict:
+    return nav._wait(nav._send({'cmd': 'lift_info'}), timeout=4.0) or {}
+
+
+def go(floor: int, call: bool = False) -> dict:
+    return nav._wait(nav._send({'cmd': 'lift_go', 'x': int(floor), 'y': 1 if call else 0}), timeout=4.0) or {}
+
+
+def floor_heights(inf: dict) -> dict[int, float]:
+    """Etage -> altitude, par le nom du terminal de chaque etage ; a defaut, terminaux tries par altitude."""
+    floors = inf.get('floors') or []
+    terms = [t for t in (inf.get('terms') or []) if t.get('z') is not None]
+    out: dict[int, float] = {}
+    for f in floors:
+        nm = f.get('name')
+        same = [t for t in terms if nm and t.get('name') == nm]
+        if same:
+            out[int(f['i'])] = float(min(same, key=lambda t: t.get('d') or 999)['z'])
+    if len(out) < 2 and floors and len({round(float(t['z'])) for t in terms}) == len(floors):
+        zs = sorted({round(float(t['z']), 1) for t in terms})
+        out = {int(f['i']): zs[k] for k, f in enumerate(sorted(floors, key=lambda f: f['i']))}
+    return out
+
+
+def try_reach(tz: float, stop=None, log=print) -> bool:
+    """Vrai si V a change d etage vers l objectif. Par script d abord (appel de la cabine, entree, envoi a l etage dont
+    l altitude est la plus proche de l objectif), sinon par les invites a l ecran."""
+    t0 = time.perf_counter()
+    st = motion.read_state() or {}
+    if st.get('z') is None:
+        return False
+    z0 = float(st['z'])
+    inf = info()
+    if not inf.get('cabin'):
+        log(f"[ascenseur] objectif {abs(tz - z0):.0f} m plus {'haut' if tz > z0 else 'bas'} : {inf.get('reason') or 'aucune cabine a 45 m'}")
+        return False
+    heights = floor_heights(inf)
+    log(f"[ascenseur] cabine a {inf['cabin'].get('d', 0):.0f} m, {len(inf.get('floors') or [])} etage(s), altitudes connues "
+        f"{', '.join(f'{k}:{v:.0f} m' for k, v in sorted(heights.items())) or 'aucune'} (etage actif {inf.get('active')})")
+    if len(heights) < 2:
+        return _try_prompts(tz, stop=stop, log=log)
+    mine = min(heights, key=lambda k: abs(heights[k] - z0))
+    dest = min(heights, key=lambda k: abs(heights[k] - tz))
+    if mine == dest:
+        log(f'[ascenseur] l objectif est a l etage de V ({mine}) : rien a faire ici')
+        return False
+    if inf.get('active') != mine:                      # 1. la cabine vient a l etage de V
+        r = go(mine, call=True)
+        log(f"[ascenseur] appel de la cabine a l etage {mine} ({r.get('how')}, {'ok' if r.get('ok') else r.get('reason')})")
+        while time.perf_counter() - t0 < 25.0:
+            if stop is not None and stop.is_set():
+                return False
+            time.sleep(1.0)
+            if info().get('active') == mine:
+                break
+        time.sleep(2.0)                                # portes
+    inside = False                                     # 2. entrer dans la cabine
+    for _ in range(2):
+        cab = info().get('cabin') or inf['cabin']
+        old = motion.ARRIVE_M; motion.ARRIVE_M = 0.8
+        try:
+            motion.walk_to(cab['x'], cab['y'], timeout=8.0, stop=stop)
+        finally:
+            motion.ARRIVE_M = old
+        time.sleep(0.6)
+        inside = bool(info().get('inside'))
+        if inside:
+            break
+    log(f"[ascenseur] V {'est dans la cabine' if inside else 'n arrive pas a entrer dans la cabine'}")
+    if not inside:
+        return False
+    r = go(dest)                                       # 3. envoi a l etage de l objectif
+    log(f"[ascenseur] envoi a l etage {dest} ({heights[dest]:.0f} m) : {r.get('how')} {'ok' if r.get('ok') else r.get('reason')}")
+    t1 = time.perf_counter()
+    while time.perf_counter() - t1 < 30.0:
+        if stop is not None and stop.is_set():
+            return False
+        time.sleep(0.5)
+        s2 = motion.read_state() or {}
+        if s2.get('z') is not None and abs(tz - float(s2['z'])) < abs(tz - z0) - 3.0:
+            time.sleep(2.0)                            # arret et portes
+            log(f"[ascenseur] etage atteint : altitude {z0:.0f} -> {float(s2['z']):.0f} m (objectif {tz:.0f} m)")
+            return True
+    log(f"[ascenseur] la cabine n a pas bouge en 30 s (altitude {z0:.0f} m)")
     return False

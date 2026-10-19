@@ -188,7 +188,9 @@ def vendor_stock() -> dict | None:
         name = str(r.get('vendor') or '').strip()
         n_items = len(r.get('items') or [])
         inv = inventory.fetch() or {}
-        if name in ('V', '') or n_items == len(inv.get('items') or []):
+        # 19/10 : un charcudoc PNJ (Rony Lafleur) n a pas de nom de marchand -> nom vide accepte si son stock n est pas
+        # l inventaire de V (409 articles contre 138)
+        if name == 'V' or n_items == len(inv.get('items') or []) or (name == '' and n_items == 0):
             return {'ok': False, 'reason': f'le « marchand » est V lui-meme ({name or "?"}, {n_items} articles) : recharge le mod'}
     return r
 
@@ -453,7 +455,12 @@ def _open_by_dialogue(stop=None, log=print, wait_s: float = 12.0) -> dict | None
             t1 = time.perf_counter()
             while time.perf_counter() - t1 < 4.0 and not (motion.read_state() or {}).get('menu'):
                 time.sleep(0.2)
-            probe = vendor_stock()
+            probe, t2 = None, time.perf_counter()
+            while time.perf_counter() - t2 < 8.0:          # 19/10 (17:09) : le stock arrive APRES l ouverture (0 puis 409)
+                probe = vendor_stock()
+                if probe and probe.get('ok') and (probe.get('items') or []):
+                    break
+                time.sleep(1.0)
             n = len((probe or {}).get('items') or [])
             log(f"  [vente] ecran ouvert par le dialogue : {'stock lu (' + str(n) + ' articles)' if probe and probe.get('ok') else 'stock illisible'}")
             if (motion.read_state() or {}).get('menu'):
