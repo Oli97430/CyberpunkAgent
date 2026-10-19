@@ -4490,6 +4490,7 @@ end
 -- d ImGui, sans fenetre ni entree captee. Un seul rouge de signal en 3 intensites, blanc os pour les valeurs.
 -- Globales seulement (limite d upvalues du fichier). Erreur -> retour automatique a l ancien HUD (drawHud).
 AgentHudStyle = AgentHudStyle or 'v800'
+AgentHudColor = AgentHudColor or 'bleu'          -- 19/10 : Olivier prefere le bleu
 AgentV8 = AgentV8 or { textSized = nil, ramMax = nil, money = nil, slowT = -99 }
 function AgentV8Col(r, g, b, a)
     local function c(v) return math.max(0, math.min(255, math.floor(v * 255 + 0.5))) end
@@ -4549,11 +4550,21 @@ function AgentV8Body(dl, W, H, e, d, kills)
     local blink = math.floor(clk * 2) % 2 == 0
     -- couleurs
     -- 19/10 : intensites relevees pour une vraie scene de jeu (claire) ; plaques sombres derriere les colonnes
-    local RED, RED_MID, RED_DIM, RED_FAINT = AgentV8Col(1, 0.17, 0.10, 1), AgentV8Col(0.86, 0.16, 0.10, 1),
-                                             AgentV8Col(0.62, 0.13, 0.09, 1), AgentV8Col(0.34, 0.08, 0.06, 0.9)
-    local BONE, AMBER = AgentV8Col(0.91, 0.86, 0.82, 0.92), AgentV8Col(1.0, 0.72, 0.15, 1)
-    local SHADE = AgentV8Col(0.03, 0.0, 0.0, 0.55)
-    local PLATE = AgentV8Col(0.04, 0.01, 0.01, 0.42)
+    -- 19/10 (Olivier : « je prefere le bleu au rouge ») : palette BLEUE par defaut (touche CET pour revenir au rouge) ;
+    -- les noms RED* restent ceux des 3 intensites du signal. Le flash de degat reste rouge, la police ambre.
+    local RED, RED_MID, RED_DIM, RED_FAINT, BONE, SHADE, PLATE
+    if AgentHudColor == 'rouge' then
+        RED, RED_MID = AgentV8Col(1, 0.17, 0.10, 1), AgentV8Col(0.86, 0.16, 0.10, 1)
+        RED_DIM, RED_FAINT = AgentV8Col(0.62, 0.13, 0.09, 1), AgentV8Col(0.34, 0.08, 0.06, 0.9)
+        BONE = AgentV8Col(0.91, 0.86, 0.82, 0.92)
+        SHADE, PLATE = AgentV8Col(0.03, 0.0, 0.0, 0.55), AgentV8Col(0.04, 0.01, 0.01, 0.42)
+    else
+        RED, RED_MID = AgentV8Col(0.24, 0.76, 1.0, 1), AgentV8Col(0.16, 0.56, 0.88, 1)
+        RED_DIM, RED_FAINT = AgentV8Col(0.12, 0.40, 0.66, 1), AgentV8Col(0.06, 0.18, 0.32, 0.9)
+        BONE = AgentV8Col(0.86, 0.94, 1.0, 0.94)
+        SHADE, PLATE = AgentV8Col(0.0, 0.01, 0.03, 0.55), AgentV8Col(0.01, 0.02, 0.05, 0.42)
+    end
+    local AMBER = AgentV8Col(1.0, 0.72, 0.15, 1)
     local SHADOW = AgentV8Col(0, 0, 0, 0.8)
     local function L(x1, y1, x2, y2, col, th) ImGui.ImDrawListAddLine(dl, x1, y1, x2, y2, col, (th or 1) * u) end
     local function R(x1, y1, x2, y2, col) ImGui.ImDrawListAddRectFilled(dl, x1, y1, x2, y2, col) end
@@ -5148,6 +5159,9 @@ local function drawHud()
     if not okL and tostring(errL) ~= hudLastErr then hudLastErr = tostring(errL); journal('HUD cadres : ' .. hudLastErr) end
 end
 registerHotkey('agent_hud_toggle', 'Afficher / masquer le HUD de V', function() hudShow = not hudShow end)
+registerHotkey('agent_hud_color', 'HUD de V-800 : bleu / rouge', function()
+    AgentHudColor = (AgentHudColor == 'rouge') and 'bleu' or 'rouge'
+end)
 registerHotkey('agent_hud_style', 'HUD de V : V-800 (nouveau) / classique', function()
     AgentHudStyle = (AgentHudStyle == 'v800') and 'classique' or 'v800'; AgentV8Failed = false
 end)
