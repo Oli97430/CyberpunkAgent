@@ -39,7 +39,9 @@ def due() -> bool:
 def nearest_apartment(log=print) -> dict | None:
     """Marqueur d appartement de V (variante contenant « Apartment ») a moins de 150 m."""
     r = nav._wait(nav._send({'cmd': 'list_vendors'}), timeout=4.0)          # meme liste de marqueurs de service
-    cands = [v for v in ((r or {}).get('vendors') or []) if 'apartment' in str(v.get('variant') or '').lower() and v.get('dist', 1e9) < 150]
+    # 20/11 (10:41:02 : « Zzz05_ApartmentToPurchaseVariant » pris pour chez lui -> V y a loue l appartement) : un logement A VENDRE n est pas le sien
+    cands = [v for v in ((r or {}).get('vendors') or [])
+             if 'apartment' in str(v.get('variant') or '').lower() and 'purchase' not in str(v.get('variant') or '').lower() and v.get('dist', 1e9) < 150]
     return min(cands, key=lambda v: v['dist']) if cands else None
 
 

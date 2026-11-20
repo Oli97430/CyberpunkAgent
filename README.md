@@ -8,7 +8,7 @@ V suit les quêtes et les activités de rue. Il se déplace, conduit, prend les 
 
 Un **HUD « V-800 »** bleu façon Terminator s'affiche par-dessus le jeu, avec des **sons mécaniques** synthétisés. Un narrateur annonce en grand ce que V décide.
 
-> **État : version 0.1.2, expérimentale.** V joue réellement des heures d'affilée.
+> **État : version 0.1.3, expérimentale.** V joue réellement des heures d'affilée.
 > - S'il meurt, il recharge lui-même la dernière sauvegarde.
 > - Si le jeu plante, il le relance.
 > - Il reste imparfait : certains intérieurs le piègent encore et il ne fait pas les courses de compétition.
@@ -38,6 +38,29 @@ Un **HUD « V-800 »** bleu façon Terminator s'affiche par-dessus le jeu, avec 
 17. [Construire la release](#construire-la-release)
 18. [FAQ](#faq)
 19. [Licence et crédits](#licence-et-crédits)
+
+Voir aussi : [Nouveautés de la 0.1.3](#nouveautés-de-la-013).
+
+---
+
+## Nouveautés de la 0.1.3
+
+Version du 20 novembre 2026. Le détail, daté et sourcé par les journaux de session, est dans [CHANGELOG.md](CHANGELOG.md).
+
+| Nouveauté | Ce que ça fait | Vu en jeu ? |
+|---|---|---|
+| **V parle** | Chaque phrase du narrateur est dite à voix haute par une voix locale (Piper), avec un effet « cyborg ». Réglages dans `voice.json`. | Oui |
+| **Le chat contrôle le monde** | `!pluie` `!soleil` `!brouillard` `!tempete` `!nuit` `!jour` `!police`, votés comme les ordres donnés à V. | Pas encore |
+| **Carnet de route** | À la fin de chaque session de 5 minutes ou plus : une page HTML avec les chiffres, la carte du trajet et les moments forts (dossier de données, sous-dossier `carnet`). | Oui |
+| **Scanner** | V scanne les indices : cibles sans ligne de vue écartées, scan tenu jusqu'à 12 s tant qu'il progresse, recul de quelques pas quand V est collé à la cible. | Premier scan réussi le 20/11 ; les deux derniers réglages pas encore |
+| **Garde-fou des dépenses** | V n'achète ni ne loue rien dont le prix n'est pas écrit dans le choix de dialogue. Toute grosse baisse d'argent inexpliquée est signalée dans le journal (« ALERTE ARGENT ») et sur Telegram. | Pas encore |
+| **Cible à un autre étage** | Le calcul de chemin vise aussi des points au niveau de la cible, sur des couronnes autour d'elle, jusqu'à 250 m. | Pas encore déclenché |
+| **Bords et eau** | V ne pousse plus vers un vide de plus de 5 m quand il cherche une sortie. | Pas encore déclenché |
+| **Coincé à bord d'un véhicule** | Après 5 minutes sans pouvoir descendre, V rejoue une séquence de sortie toutes les 2 minutes et prévient sur Telegram. | Pas encore déclenché |
+| **Piratages rapides** | En combat, plus de tentative quand aucun ennemi n'est en vue : le panneau ne s'ouvre pas à travers un mur. | Pas encore |
+| **HUD en VR** | Le HUD V-800 se masque quand le mod VR est actif. | Non vérifié |
+
+Pourquoi le garde-fou : le 20/11, V a loué un appartement pour environ 110 000 eddies en validant un choix de dialogue sans prix. L'alerte signale la dépense, elle ne l'annule pas : elle arrive au plus 5 minutes après, le temps de recharger une sauvegarde récente.
 
 ---
 

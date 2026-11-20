@@ -27,6 +27,7 @@ UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 VIEWER_CMDS = {'attaque', 'objectif', 'explore', 'marchand', 'charcudoc', 'soigne', 'changer_quete', 'mission',
                'vole', 'voiture', 'fete', 'loot', 'radio', 'cyberpsycho', 'etat', 'melee', 'distance', 'mixte', 'prudent',
                'temeraire'}     # 19/10 (Olivier : « rajoute plus d ordres »)
+VIEWER_CMDS |= {'pluie', 'soleil', 'brouillard', 'tempete', 'nuit', 'jour', 'police'}   # 30/10 : le chat controle le monde (world.py)
 MOD_CMDS = VIEWER_CMDS | {'style', 'stop', 'pause', 'reprendre', 'courage', 'style', 'aggro', 'photo', 'hud'}   # photo -> Telegram d Olivier
 ALIASES = {'attack': 'attaque', 'fight': 'attaque', 'quest': 'objectif', 'quete': 'objectif', 'explorer': 'explore',
            'vendre': 'marchand', 'shop': 'marchand', 'heal': 'soigne', 'soin': 'soigne', 'ripperdoc': 'charcudoc',
@@ -35,12 +36,23 @@ ALIASES = {'attack': 'attaque', 'fight': 'attaque', 'quest': 'objectif', 'quete'
            'steal': 'vole', 'voler': 'vole', 'car': 'voiture', 'caisse': 'voiture', 'party': 'fete', 'danse': 'fete',
            'gg': 'fete', 'fouille': 'loot', 'musique': 'radio', 'psycho': 'cyberpsycho', 'status': 'etat', 'vie': 'etat',
            'corps': 'melee', 'sabre': 'melee', 'katana': 'melee', 'tir': 'distance', 'gun': 'distance', 'calme': 'prudent',
-           'yolo': 'temeraire', 'berserk': 'temeraire'}
+           'yolo': 'temeraire', 'berserk': 'temeraire',
+           'rain': 'pluie', 'orage': 'pluie', 'sun': 'soleil', 'beau': 'soleil', 'fog': 'brouillard', 'brume': 'brouillard',
+           'storm': 'tempete', 'sable': 'tempete', 'night': 'nuit', 'day': 'jour', 'midi': 'jour', 'ncpd': 'police',
+           'flics': 'police', 'wanted': 'police', 'cops': 'police'}
 MACROS = {'melee': 'style melee', 'distance': 'style distance', 'mixte': 'style mixte', 'prudent': 'courage prudent',
           'temeraire': 'courage temeraire'}     # commande de spectateur -> reglage de V
-VOTE_S = 30.0          # 19/10 : vote du chat -- la commande la plus demandee en 30 s est executee
+VOTE_S = 60.0          # 20/10 (Olivier : « plus long ») : vote du chat -- la commande la plus demandee en 60 s est executee
 BANNER = ('VOTE : !ATTAQUE !OBJECTIF !SKIP !MISSION !EXPLORE !SHOP !CHARCUDOC !HEAL !VOLE !VOITURE !LOOT !FETE !RADIO '
-          '!PSYCHO !ETAT !MELEE !DISTANCE !PRUDENT !YOLO  (1 VOTE / 30 S)')
+          '!PSYCHO !ETAT !MELEE !DISTANCE !PRUDENT !YOLO !PLUIE !SOLEIL !BROUILLARD !TEMPETE !NUIT !JOUR !POLICE  (1 VOTE / 60 S)')
+CMDS = [w for w in BANNER.split() if w.startswith('!')]   # 20/10 : liste pour le HUD V-800 (2 lignes en grand)
+# 20/10 (revue) : commande interne -> nom tape par le chat (sinon « !yolo » s affichait « !TEMERAIRE » / « !COURAGE TEMERAIRE »)
+DISPLAY = {'courage temeraire': 'yolo', 'courage prudent': 'prudent', 'style melee': 'melee', 'style distance': 'distance',
+           'style mixte': 'mixte'}
+
+
+def _label(cmd: str) -> str:
+    return DISPLAY.get(cmd, cmd)
 POLL_S = 45.0          # 19/10 : le chat choisit la mission parmi 3 (!1 !2 !3)
 POLL: dict = {'options': [], 't0': None, 'voices': {}}
 CHAT_STATS: dict = {'orders': 0, 'by': {}}      # 19/10 : ordres du chat suivis (tableau des succes) et spectateur le plus actif
@@ -197,6 +209,18 @@ class Vote:
     def add(self, author: str, cmd: str, now: float) -> None:
         if self.t0 is None:
             self.t0 = now
+            # 20/10 (Olivier : « 3 ») : bips 10 s avant la fin du tour (minuterie : la boucle du chat ne tourne que toutes les 4 s)
+            t0 = now
+            def _beep10(t0=t0):
+                if self.t0 == t0:                        # meme tour de vote, toujours ouvert
+                    try:
+                        from . import sounds
+                        sounds.play('vote10')
+                    except Exception:
+                        pass
+            tm = threading.Timer(max(0.0, self.duration - 10.0), _beep10)
+            tm.daemon = True
+            tm.start()
         self.voices[author] = cmd
         self.first.setdefault(cmd, now)
 
@@ -225,10 +249,12 @@ def _banner_tally(v: 'Vote', now: float) -> None:
         from . import hud
         t = v.tally()
         if t:
-            hud.update(banner_last=hud.ascii_up(f"VOTE {v.remaining(now):.0f} S : " + ' . '.join(f'{c} {n}' for c, n in t[:4]))[:70],
+            hud.update(banner_last=hud.ascii_up(f"VOTE {v.remaining(now):.0f} S : " + ' . '.join(f'{_label(c)} {n}' for c, n in t[:4]))[:70],
                        banner_last_t=int(time.time()),
                        vote={'left': round(v.remaining(now), 1), 'tot': v.duration,          # 19/10 : HUD V-800
-                             'tally': [[hud.ascii_up(c.split()[-1] if c.startswith(('style ', 'courage ')) else c)[:12], n] for c, n in t[:3]]})
+                             'endt': int((v.t0 or now) + v.duration),                       # 20/10 : fin FIXE du tour (le mod decompte)
+                             'voters': len(v.voices),
+                             'tally': [[hud.ascii_up(_label(c))[:12], n] for c, n in t[:3]]})
     except Exception:
         pass
 
@@ -239,7 +265,7 @@ def _banner(on: bool, last: str | None = None) -> None:
         from . import hud
         if not on:
             hud.update(banner=None); return
-        kw = {'banner': BANNER}
+        kw = {'banner': BANNER, 'cmds': CMDS}
         if last:
             kw.update(banner_last=hud.ascii_up(last)[:60], banner_last_t=int(time.time()))
         hud.update(**kw)
@@ -489,7 +515,10 @@ def _loop(log, put) -> None:
                 if res:
                     try:
                         from . import hud as _h
-                        _h.update(vote=None)
+                        _h.update(vote=None, vote_win={'cmd': _h.ascii_up(_label(res[0]))[:20], 'n': res[1], 'voters': res[2]},
+                                  vote_win_t=int(time.time()))           # 20/10 : resultat en grand 8 s
+                        from . import sounds as _snd
+                        _snd.play('votewin')                     # 20/10 : le gagnant tamponne l ecran (son)
                     except Exception:
                         pass
                     w, n, voters = res

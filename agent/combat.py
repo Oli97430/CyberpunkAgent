@@ -998,7 +998,8 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             # injoignables (vitre, autre etage, tourelle hors portee) : on arrete de taper dans le vide
             if len(alive) != sterile_n or abs(hp - sterile_hp) > 5.0:   # nombre d ennemis change, ou vie a vraiment bouge (pas un flicker de regen)
                 sterile_n, sterile_hp, sterile_t = len(alive), hp, now
-            elif (sterile_hp >= 90 or stats['coups'] + stats.get('tirs', 0) == 0) and alive and sterile_charges < 2 and now - sterile_t > 40.0:
+            elif (sterile_hp >= 90 or stats['coups'] + stats.get('tirs', 0) == 0) and alive and sterile_charges < 2 and now - sterile_t > 40.0 \
+                    and any(_kind(x) != 'turret' for x in alive):   # 21/10 : on ne charge pas une tourelle fixee au mur
                 # rien ne bouge depuis 40 s : la cible est hors de portee (distance, etage, vitre). V n est pas un
                 # couard : il CHARGE (sprint droit dessus, saut sur les obstacles) avant de conclure quoi que ce soit
                 sterile_charges += 1; sterile_t = now
@@ -1013,7 +1014,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                         break
                     aim_at(a_ch[0], s_ch); kbm.hold('W'); kbm.act_hold('sprint')
                     if time.perf_counter() - t_j > 2.0:
-                        kbm.act('jump', 0.1); t_j = time.perf_counter()
+                        motion.big_jump(forward=False); t_j = time.perf_counter()   # 22/10 : saut charge (W deja maintenu)
                     time.sleep(0.15)
                 kbm.release('W'); kbm.act_release('sprint')
                 seq = None; continue
@@ -1029,6 +1030,11 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             no_target_logged = False
 
             e = alive[0]
+            # 21/10 (Olivier : « 5 ») : TOURELLES en dernier (fixes, souvent sur un mur ou au plafond) : V traite d abord les
+            # ennemis mobiles ; contre des tourelles seules, jamais de corps a corps ni de charge (voir want_ranged / sterile)
+            non_t = [x for x in alive if _kind(x) != 'turret']
+            if non_t and _kind(e) == 'turret':
+                e = non_t[0]
             if mode == 'ranged' and e.get('los') is False:
                 vis = [x for x in alive if x.get('los') is True]       # 12/10 : l ennemi VISIBLE le plus proche d abord
                 if vis:
@@ -1149,7 +1155,7 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                         gunfu_until = now + 8.0
                         log(f"  [succes] Gun Fu : {sum(1 for x in alive if x['d'] < 7.0)} ennemis a < 7 m -> « {(ARSENAL.get(gf_key) or {}).get('name')} » 8 s")
             gunfu = now < gunfu_until
-            want_ranged = RANGED_SLOT is not None and now >= dry_until and (gunfu or high or rmin < e['d'] < RANGED_MAX_M)
+            want_ranged = RANGED_SLOT is not None and now >= dry_until and (gunfu or high or rmin < e['d'] < RANGED_MAX_M or _kind(e) == 'turret')
             if want_ranged and mode != 'ranged':
                 if not gunfu:
                     prepare_ranged(alive, st, log)                 # 12/10 : arme adaptee aux ennemis, avant de degainer
@@ -1186,7 +1192,10 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
             if mode == 'ranged':
                 kbm.release('W'); kbm.act_release('sprint')
                 # hacks A DISTANCE entre deux rafales : cible alternee (hack_i) pour ne pas empiler sur le meme
-                if e['d'] > 3.0 and gap < 8 and pressure < 2 and now - t_hack > 2 * QUICKHACK_CD and (blind_hacks < 3 or now - blind_hacks_t > 20.0):   # vise d abord ; 8 s entre deux hacks
+                # 20/11 (journal : 6 « panneau jamais ouvert » en un combat, tous pendant que la cible etait derriere un mur) :
+                # sans aucun hostile en vue, pas de hack -- le panneau ne s ouvre pas a travers un mur, V perdait 2,4 s a chaque essai
+                if e['d'] > 3.0 and gap < 8 and pressure < 2 and now - t_hack > 2 * QUICKHACK_CD and (blind_hacks < 3 or now - blind_hacks_t > 20.0) \
+                        and any(x.get('los') is not False for x in alive):   # vise d abord ; 8 s entre deux hacks
                     cands = [x for x in alive if x.get('los') is not False] or [e]   # 12/10 : cibles VISIBLES
                     tgt = cands[hack_i % len(cands)]; hack_i += 1
                     ok_aim, st, why_aim = _aim_lock(tgt, st)
@@ -1288,7 +1297,8 @@ def fight(stop=None, log=print, max_s: float = 180.0) -> dict:
                 time.sleep(0.15); continue
 
             # -- quickhack a distance
-            if e['d'] > 3.0 and gap < 8 and pressure < 2 and now - t_hack > QUICKHACK_CD and (blind_hacks < 3 or now - blind_hacks_t > 20.0):
+            if e['d'] > 3.0 and gap < 8 and pressure < 2 and now - t_hack > QUICKHACK_CD and (blind_hacks < 3 or now - blind_hacks_t > 20.0) \
+                    and any(x.get('los') is not False for x in alive):   # 20/11 : aucun hostile en vue -> pas de hack (voir plus haut)
                 cands = [x for x in alive if x.get('los') is not False] or [e]   # 12/10 : cibles VISIBLES
                 tgt = cands[hack_i % len(cands)]; hack_i += 1
                 ok_aim, st, why_aim = _aim_lock(tgt, st)
@@ -1432,6 +1442,9 @@ def _look_smooth(dx: float, dy: float, step: int = 60, dt: float = 0.012) -> Non
         kbm.look(dx / n, dy / n); time.sleep(dt)
 
 
+_LOOT_LOCKED: dict = {}          # 21/10 : objet (x,y arrondis) -> heure jusqu a laquelle il est ecarte (porte verrouillee)
+
+
 def loot_around(stop=None, log=print, radius_m: float = 20.0, max_items: int = 8, seen: set | None = None) -> dict:
     """Ramasse TOUT ce qui est lootable autour (conteneurs, objets au sol, corps).
     Pour chaque objet : marche jusqu a 1.3 m, se tourne vers lui, puis BALAIE la vue de haut en
@@ -1470,7 +1483,7 @@ def loot_around(stop=None, log=print, radius_m: float = 20.0, max_items: int = 8
             objs = [o for o in objs if o['d'] > 5.8]
     for o in objs:
         key = (round(o['x']), round(o['y']))
-        if key in seen:
+        if key in seen or _LOOT_LOCKED.get(key, 0.0) > time.perf_counter():   # 21/10 : derriere une porte verrouillee
             continue
         if (stop is not None and stop.is_set()) or tried >= max_items:
             break
@@ -1478,16 +1491,33 @@ def loot_around(stop=None, log=print, radius_m: float = 20.0, max_items: int = 8
         seen.add(key)
         # 19/10 (session 15:14 : ~45 marches « bloque » vers des objets derriere un comptoir / un grillage) : a moins de
         # 5,5 m on tente d abord le loot par script (sans marcher) ; on ne marche que s il echoue
-        if o['d'] <= 5.5 and o.get('cls') != 'corps':
+        if o['d'] <= 7.5 and o.get('cls') != 'corps':     # 21/10 : 5,5 -> 7,5 m (le mod va jusqu a 8 m)
             from . import nav
             rl0 = nav._wait(nav._send({'cmd': 'loot', 'x': o['x'], 'y': o['y'], 'z': o.get('z')}), timeout=4.0)
             if rl0 and rl0.get('ok') and rl0.get('transferes'):
                 done += 1
                 log(f"  [loot]   script d abord (a {o['d']:.1f} m) : {rl0.get('cls')} -> {rl0.get('transferes')} objet(s) {rl0.get('noms') or ''}")
                 continue
+            if rl0 and 'aucun objet' in str(rl0.get('reason') or '') and o.get('cls') in ('gameLootContainerBase', 'gameContainerObject', 'gameLootBag'):
+                # 21/10 : conteneur vide pour le script = vide (jamais rien trouve a l ouverture dans tout le journal) : on n y marche pas
+                log(f"  [loot]   {o.get('cls')} a {o['d']:.1f} m : vide, on n y va pas")
+                continue
         old = motion.ARRIVE_M; motion.ARRIVE_M = 1.3
         try:
-            r = motion.walk_to(o['x'], o['y'], timeout=12.0, stop=stop)
+            # 19/10 (journal : ~1650 « [loot] … marche bloque » sur 9565 echecs) : la ligne droite butait sur comptoirs, caisses,
+            # grillages. D abord le CHEMIN du navmesh (+ deblocage adapte a l obstacle) ; la ligne droite seulement en repli.
+            from . import nav
+            # arrive_m 2,0 (session de test : « trop de troncons / timeout » a 1,6 m -- le point du navmesh est decale
+            # de l objet pose sur une table ; a 2 m l invite de fouille est deja la)
+            r = nav.goto(lambda: nav.request_path_to(o['x'], o['y'], o.get('z')), arrive_m=2.0, max_legs=2,
+                         timeout=15.0, stop=stop, log=lambda *a, **k: None)
+            # 20/10 (revue) : repli en ligne droite sur TOUT echec du chemin (depart hors navmesh, mod muet, timeout...),
+            # comme l ancien code -- sauf arret d urgence / menace
+            if r.get('reason') == 'porte verrouillee':
+                _LOOT_LOCKED[key] = time.perf_counter() + 600.0      # 21/10 : objet ecarte 10 min (pas de ligne droite)
+                log(f"  [loot]   {o.get('cls', '?')} derriere une porte verrouillee : ecarte 10 min")
+            elif not r.get('ok') and r.get('reason') not in ('arret d urgence', 'interrompu') and not (stop is not None and stop.is_set()):
+                r = motion.walk_to(o['x'], o['y'], timeout=12.0, stop=stop)
         finally:
             motion.ARRIVE_M = old
         s1 = motion.read_state() or {}
@@ -1495,7 +1525,7 @@ def loot_around(stop=None, log=print, radius_m: float = 20.0, max_items: int = 8
         log(f"  [loot] {o.get('cls', '?')} : marche {'ok' if r.get('ok') else r.get('reason')}{(' (bouge ' + format(r.get('moved_m', 0), '.2f') + ' m)') if r.get('reason') == 'bloque' else ''}, a {dnow:.1f} m"
             f" | porte un corps={s1.get('carrying')} locomotion={s1.get('locomotion')} upperBody={s1.get('upperBody')} vehicule={s1.get('vehicle')}")
         if not r.get('ok') and dnow > 3.0:
-            if dnow <= 5.5:                       # trop loin pour l interface, assez pres pour le loot par script (6 m)
+            if dnow <= 7.5:                       # trop loin pour l interface, assez pres pour le loot par script (8 m)
                 from . import nav
                 rl = nav._wait(nav._send({'cmd': 'loot', 'x': o['x'], 'y': o['y'], 'z': o.get('z')}), timeout=4.0)
                 if rl and rl.get('ok') and rl.get('transferes'):

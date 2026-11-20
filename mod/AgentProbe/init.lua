@@ -316,6 +316,7 @@ function AgentVehOcc(ent, player, key)
     return o
 end
 -- contexte de conduite : etoiles, autodrive, vehicule monte (la vitesse d un vehicule vole n est pas dans summon)
+AGENT_EXIT_TAGS = { 'VehicleBlockExit', 'VehicleCombatBlockExit', 'VehicleScene', 'NoExit' }
 function AgentDriveCtx(inVeh)
     local o, bbs, defs, pl = {}, Game.GetBlackboardSystem(), GetAllBlackboardDefs(), Game.GetPlayer()
     pcall(function() local w = bbs:Get(defs.UI_WantedBar):GetInt(defs.UI_WantedBar.CurrentWantedLevel)
@@ -334,6 +335,12 @@ function AgentDriveCtx(inVeh)
             o.rid = (TDBID.ToStringDEBUG(v:GetRecordID()):gsub('^Vehicle%.', ''))
             o.pv = v:IsPlayerVehicle()
             o.spd = math.floor(math.abs(v:GetCurrentSpeed()) * 10 + 0.5) / 10 end)
+        -- 19/10 soir : sortie VERROUILLEE par le jeu (tags lus dans l exe / final.redscripts : IsExitVehicleBlocked,
+        -- VehicleBlockExit, VehicleCombatBlockExit, VehicleScene, NoExit) ; avant, l agent appuyait en boucle
+        for _, tag in ipairs(AGENT_EXIT_TAGS) do
+            local ok, v = pcall(function() return StatusEffectSystem.ObjectHasStatusEffectWithTag(pl, CName.new(tag)) end)
+            if ok and v == true then o.xl = o.xl or {}; o.xl[#o.xl + 1] = tag end
+        end
     end
     return o
 end
@@ -538,7 +545,8 @@ local function questLevelOf(jm, e, hash)
     local lvl, raw = nil, nil
     local cur = e
     for depth = 1, 4 do
-        if not cur then break end
+        local tc = type(cur)
+        if not cur or tc == 'number' or tc == 'string' or tc == 'boolean' then break end   -- 25/10 : un hash n est pas une entree de journal
         local cls = '?'
         pcall(function() cls = tostring(cur:GetClassName()) end)
         -- on ESSAIE les methodes (une methode absente leve une erreur Lua, attrapee par pcall ; pas de plantage natif)
@@ -1811,6 +1819,35 @@ registerForEvent('onUpdate', function(dt)
                             -- un dispositif (porte, terminal) n est pas du loot ; un objet mort ou un puppet mort, oui
                             if cls == 'gameDevice' and not isLoot then dead = false end
                             if cls == 'gameObject' and not isLoot and not dead then dead = false end
+                            -- 21/10 : conteneur VIDE (hors objets de quete) = pas du loot. Journal complet : 186 marches vers un
+                            -- conteneur que le script trouvait vide, et jamais un conteneur vide pour le script qui donnait
+                            -- quelque chose a l ouverture (pas de contenu genere a l ouverture). Objets au sol et corps : inchanges.
+                            if isLoot and cls ~= 'gameItemDropObject' then
+                                AgentLootN = AgentLootN or {}
+                                AgentLootNc = AgentLootNc or 0
+                                if AgentLootNc > 400 then AgentLootN, AgentLootNc = {}, 0 end   -- borne la memoire
+                                local okK, kh = pcall(function() return tostring(ent:GetEntityID().hash) end)
+                                local ck = okK and kh or nil
+                                local cached = ck and AgentLootN[ck]
+                                local n = nil
+                                if cached and attachedFor >= cached.t and attachedFor - cached.t < 5.0 then n = cached.n   -- (attachedFor repart de 0 au chargement)
+                                else
+                                    pcall(function()
+                                        local okL, items = Game.GetTransactionSystem():GetItemList(ent)
+                                        if type(okL) == 'table' then items = okL end
+                                        if type(items) == 'table' then
+                                            n = 0
+                                            for k = 1, #items do
+                                                local q = false
+                                                pcall(function() q = items[k]:HasTag('Quest') end)
+                                                if not q then n = n + 1 end
+                                            end
+                                        end
+                                    end)
+                                    if ck then if not AgentLootN[ck] then AgentLootNc = AgentLootNc + 1 end; AgentLootN[ck] = { n = n, t = attachedFor } end
+                                end
+                                if n == 0 then isLoot = false end           -- inconnu (nil) : garde, comme avant
+                            end
                             if isLoot or dead then
                                 local ep = ent:GetWorldPosition()
                                 local rec = { x = ep.x, y = ep.y, z = ep.z, cls = cls:sub(1, 24),
@@ -2358,6 +2395,148 @@ function AgentNavAvoid(avoid, z)
     end
     return nil
 end
+function AgentNavClearNear(x, y, r)
+    -- 19/10 soir : retire les obstacles dynamiques poses a moins de r metres de (x, y) ; renvoie le nombre retire
+    local n, keep = 0, {}
+    for _, key in ipairs(AgentNav.order or {}) do
+        local e = AgentNav.obstacles[key]
+        local kx, ky = key:match('^(-?%d+),(-?%d+)$')
+        local cx, cy = (tonumber(kx) or 0) * 3 + 1.5, (tonumber(ky) or 0) * 3 + 1.5
+        if e and ((cx - x) ^ 2 + (cy - y) ^ 2) < r * r then
+            pcall(function() Game.GetNavigationSystem():RemoveObstacle(e.o) end)
+            AgentNav.obstacles[key] = nil
+            n = n + 1
+        else
+            keep[#keep + 1] = key
+        end
+    end
+    AgentNav.order = keep
+    return n
+end
+-- 25/10 EQUIPEMENT (patch 2.5) : es:GetPlayerData(player) renvoie nil. Voies essayees, la premiere qui marche est
+-- journalisee : ScriptableSystemsContainer('EquipmentSystem'):GetPlayerData, EquipmentSystem.GetData (statique),
+-- EquipmentSystem.GetInstance(player):GetPlayerData. Noms verifies dans final.redscripts du patch 2.5.
+lastEquipId = nil
+function AgentEquipData(player)
+    local es = nil
+    pcall(function() es = Game.GetScriptableSystemsContainer():Get('EquipmentSystem') end)
+    if not es then pcall(function() es = EquipmentSystem.GetInstance(player) end) end
+    local d, how = nil, nil
+    if es then pcall(function() d = es:GetPlayerData(player) end); if d then how = 'GetPlayerData' end end
+    if not d then pcall(function() d = EquipmentSystem.GetData(player) end); if d then how = 'EquipmentSystem.GetData' end end
+    if not d then pcall(function() d = EquipmentSystem.GetInstance(player):GetPlayerData(player) end); if d then how = 'GetInstance.GetPlayerData' end end
+    if AgentEquipHow ~= how then
+        AgentEquipHow = how
+        pcall(journal, 'EQUIP donnees du joueur : ' .. tostring(how or 'INTROUVABLES (toutes les voies ont echoue)'))
+    end
+    return es, d, how
+end
+function AgentIsWorn(player, id, es, d)
+    local w = false
+    if d then pcall(function() w = d:IsEquipped(id) == true end) end
+    if not w and es then pcall(function() w = es:IsEquipped(player, id) == true end) end
+    if not w then pcall(function() w = EquipmentSystem.IsEquipped(player, id) == true end) end
+    return w
+end
+-- 23/10 SCANNER HORS COMBAT (Olivier : « meme hors combat V doit pouvoir scanner son environnement pour progresser ») :
+-- indice (clue) / objet de quete pas encore scanne. Methodes lues dans final.redscripts (patch 2.5) : IsClue, IsAnyClueEnabled,
+-- HasAnyClue, IsQuest, IsScanned ; chacune essayee sous pcall (selon la classe de l entite, certaines n existent pas).
+function AgentScanInfo(ent)
+    local clue, quest, scanned = false, false, nil
+    for _, m in ipairs({ 'IsClue', 'IsAnyClueEnabled', 'HasAnyClue' }) do
+        local ok, v = pcall(function() return ent[m](ent) end)
+        if ok and v == true then clue = true; break end
+    end
+    pcall(function() quest = ent:IsQuest() == true end)
+    local okS, s = pcall(function() return ent:IsScanned() end)
+    if okS and type(s) == 'boolean' then scanned = s
+    else pcall(function() scanned = ent:GetScanningComponent():IsScanned() end) end
+    -- 01/11 (journal : 0 scan reussi sur 28) : IsScanned seul n a jamais repondu vrai ; on lit aussi l etat du composant
+    pcall(function()
+        local sc = ent:GetScanningComponent()
+        if tostring(sc:GetScanningState()):find('Complete') or sc:IsClueInspected() == true then scanned = true end
+    end)
+    return clue, quest, scanned
+end
+-- 01/11 : rayon des yeux de V vers la cible, arrete 0,8 m avant elle (la cible elle-meme ne doit pas compter comme un mur)
+function AgentScanLOS(player, ep)
+    local pos = player:GetWorldPosition()
+    local ax, ay, az = pos.x, pos.y, pos.z + 1.6
+    local dx, dy, dz = ep.x - ax, ep.y - ay, ep.z + 0.15 - az
+    local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if d < 1.5 then return true end
+    local k0, k1 = 0.4 / d, (d - 0.8) / d
+    return not AgentRay(Vector4.new(ax + dx * k0, ay + dy * k0, az + dz * k0, 1.0), Vector4.new(ax + dx * k1, ay + dy * k1, az + dz * k1, 1.0))
+end
+-- 01/11 : ce que voit le jeu pendant le scan (diagnostic du journal) : objet sous le reticule, etat, progression du scanner
+function AgentScanState(ent, player, resp)
+    local id = nil
+    pcall(function() id = tostring(ent:GetEntityID().hash) end)
+    pcall(function()
+        local o = Game.GetTargetingSystem():GetLookAtObject(player, false, false)
+        resp.vise = o ~= nil and tostring(o:GetEntityID().hash) == id
+    end)
+    pcall(function() resp.etat = tostring(ent:GetScanningComponent():GetScanningState()) end)
+    pcall(function()
+        local d = GetAllBlackboardDefs().UI_Scanner
+        local bb = Game.GetBlackboardSystem():Get(d)
+        resp.prog = bb:GetFloat(d.CurrentProgress)
+    end)
+end
+-- 01/11 (journal : V pousse 6 s droit devant et tombe a l eau, 2 fois sur 2) : premier vide devant V (plus de 5 m de chute).
+-- Sous V lui-meme le rayon doit toucher : sinon le decor n est pas charge et la reponse ne vaut rien (edge reste nil).
+function AgentEdgeAhead(player, maxDist, resp)
+    local pos, f = player:GetWorldPosition(), player:GetWorldForward()
+    local n = math.max(math.sqrt(f.x * f.x + f.y * f.y), 1e-3)
+    local ux, uy = f.x / n, f.y / n
+    local function ground(dist)
+        local x, y = pos.x + ux * dist, pos.y + uy * dist
+        return (AgentRay(Vector4.new(x, y, pos.z + 1.5, 1.0), Vector4.new(x, y, pos.z - 5.0, 1.0)))
+    end
+    resp.ok = true
+    if not ground(0.0) then return resp end
+    for dist = 2, maxDist, 2 do
+        if not ground(dist) then resp.edge = dist; return resp end
+    end
+    return resp
+end
+function AgentScanTargets(player, radius, resp)
+    local q = Game['TSQ_ALL;']()
+    q.maxDistance = radius
+    q.filterObjectByDistance = true
+    pcall(function() q.testedSet = TargetingSet.Complete end)
+    local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
+    local pos, cam = player:GetWorldPosition(), Game.GetCameraSystem()
+    local out, seen = {}, {}
+    AgentScanEnts = {}
+    if okT and parts then
+        for i = 1, #parts do
+            local comp = TS_TargetPartInfo.GetComponent(parts[i])
+            local ent = comp and comp:GetEntity() or nil
+            local key = nil
+            if ent then pcall(function() key = tostring(ent:GetEntityID().hash) end) end
+            if ent and key and not seen[key] then
+                seen[key] = true
+                local clue, quest, scanned = AgentScanInfo(ent)
+                if (clue or quest) and scanned ~= true then
+                    local ep = ent:GetWorldPosition()
+                    AgentScanEnts[#AgentScanEnts + 1] = ent
+                    local rec = { i = #AgentScanEnts, x = ep.x, y = ep.y, z = ep.z, clue = clue, quest = quest, scanned = scanned,
+                                  d = math.sqrt((ep.x - pos.x) ^ 2 + (ep.y - pos.y) ^ 2) }
+                    pcall(function() rec.cls = NameToString(ent:GetClassName()) end)
+                    pcall(function() rec.name = GetLocalizedText(ent:GetDisplayName()) end)
+                    pcall(function() local sc = cam:ProjectPoint(Vector4.new(ep.x, ep.y, ep.z + 0.15, 1.0)); rec.sx, rec.sy = sc.x, sc.y end)
+                    pcall(function() rec.los = AgentScanLOS(player, ep) end)
+                    out[#out + 1] = rec
+                end
+            end
+        end
+    end
+    table.sort(out, function(a, b) return a.d < b.d end)
+    while #out > 8 do table.remove(out) end
+    resp.ok, resp.targets = true, out
+    return resp
+end
 function AgentNavPath(ai, a, b, player, circle)
     -- CalculatePathForCharacter avec cercle de cout si dispo, sinon sans
     if circle then
@@ -2367,34 +2546,170 @@ function AgentNavPath(ai, a, b, player, circle)
     return ai:CalculatePathForCharacter(a, b, 2.0, player)
 end
 
-local function computePath(player, target, avoid)
+-- 19/10 DEBLOCAGE (reference PATHFINDING_CP2077 §4.3) : V bloque en marchant vers (tx,ty) -> QU EST-CE qui bloque ?
+-- Rayons physiques (genou 0,35 m / poitrine 1,2 m, sur 1,6 m devant) + diagonales gauche/droite + mur du navmesh.
+-- kind : 'bas' (sauter), 'porte', 'vehicule', 'pnj', 'dispositif', 'objet', 'mur', 'mur_navmesh', 'rien' (coince sur
+-- la geometrie : reculer). side : 'A' / 'D' = cote libre pour contourner. back : point du navmesh derriere V.
+-- Les noms des groupes de collision ne sont pas confirmes : on en essaie plusieurs, le premier qui touche est journalise.
+AgentRayGroups = { 'Static', 'Dynamic', 'Vehicle', 'PlayerBlocker', 'Terrain', 'Water' }
+function AgentRay(a, b)
+    local sq = Game.GetSpatialQueriesSystem()
+    for _, g in ipairs(AgentRayGroups) do
+        local ok, hit, res = pcall(function() return sq:SyncRaycastByCollisionGroup(a, b, g, false, false) end)
+        if ok and hit then return true, res, g end
+    end
+    return false, nil, nil
+end
+function AgentEntKind(res)
+    if not res then return nil, nil end
+    local ent = nil
+    pcall(function() ent = res:GetHitEntity() end)
+    if not ent then pcall(function() ent = physicsTraceResult.GetHitEntity(res) end) end
+    if not ent then return nil, nil end
+    local cls = '?'
+    pcall(function() cls = NameToString(ent:GetClassName()) end)
+    for _, k in ipairs({ { 'Door', 'porte' }, { 'vehicleBaseObject', 'vehicule' }, { 'NPCPuppet', 'pnj' }, { 'gameDevice', 'dispositif' } }) do
+        local okI, isIt = pcall(function() return ent:IsA(k[1]) end)
+        if okI and isIt then return k[2], cls end
+    end
+    return 'objet', cls
+end
+function AgentProbeBlock(player, tx, ty, resp)
+    local pos = player:GetWorldPosition()
+    local dx, dy = (tx or pos.x) - pos.x, (ty or pos.y) - pos.y
+    local d = math.sqrt(dx * dx + dy * dy)
+    if d < 0.05 then local f = player:GetWorldForward(); dx, dy, d = f.x, f.y, math.max(math.sqrt(f.x * f.x + f.y * f.y), 1e-3) end
+    local ux, uy = dx / d, dy / d
+    -- point a `dist` m devant, decale de `lat` m sur la gauche (perpendiculaire gauche = (-uy, ux)), a `h` m du sol
+    local function at(h, dist, lat) return Vector4.new(pos.x + ux * dist - uy * lat, pos.y + uy * dist + ux * lat, pos.z + h, 1.0) end
+    local lowHit, lowRes, g1 = AgentRay(at(0.35, 0.35, 0), at(0.35, 1.6, 0))
+    local midHit, midRes, g2 = AgentRay(at(1.2, 0.35, 0), at(1.2, 1.6, 0))
+    local kind, cls = nil, nil
+    if midHit then kind, cls = AgentEntKind(midRes) elseif lowHit then kind, cls = AgentEntKind(lowRes) end
+    -- (session de test 19/10 : un capot de voiture touche seulement au genou etait classe « bas » -> V sautait dessus)
+    if lowHit and not midHit and kind ~= 'porte' and kind ~= 'vehicule' and kind ~= 'pnj' then kind = 'bas' end
+    if not lowHit and not midHit then
+        local okW, w = pcall(function()
+            return Game.GetAINavigationSystem():FindWallInLineForCharacter(pos, Vector4.new(pos.x + ux * 2.0, pos.y + uy * 2.0, pos.z, 1.0), 0.5, player)
+        end)
+        kind = (okW and w and w.isHit) and 'mur_navmesh' or 'rien'
+    elseif not kind then
+        kind = 'mur'
+    end
+    local leftHit = AgentRay(at(1.0, 0.35, 0.3), at(1.0, 1.4, 1.4))
+    local rightHit = AgentRay(at(1.0, 0.35, -0.3), at(1.0, 1.4, -1.4))
+    local side = nil
+    if not leftHit and rightHit then side = 'A' elseif leftHit and not rightHit then side = 'D' elseif not leftHit then side = 'A' end
+    local back = nil
+    pcall(function()
+        local okB, pt = Game.GetAINavigationSystem():GetNearestNavmeshPointBehind(player, 2.0, 3, true)
+        if okB and pt then back = { x = pt.x, y = pt.y, z = pt.z } end
+    end)
+    resp.ok, resp.kind, resp.cls, resp.side, resp.back = true, kind, cls, side, back
+    resp.low, resp.mid, resp.group = lowHit, midHit, g2 or g1
+    if (g2 or g1) and not AgentNav.rayGroupLogged then
+        AgentNav.rayGroupLogged = true
+        pcall(journal, 'NAV raycast : groupe de collision qui touche = ' .. tostring(g2 or g1))
+    end
+    pcall(journal, string.format('NAV bloque -> %s (%s) bas=%s poitrine=%s cote=%s recul=%s', tostring(kind), tostring(cls),
+        tostring(lowHit), tostring(midHit), tostring(side), back and 'oui' or 'non'))
+    return resp
+end
+
+-- 19/10 : CIBLE accrochee au navmesh par une chaine de secours (journal du 19/10 : 778 des 1157 echecs « aucun chemin »
+-- etaient a MOINS de 60 m de la cible -> la cible elle-meme hors navmesh : marqueur flottant, etage, toit).
+function AgentSnapTarget(player, target)
+    local ai = Game.GetAINavigationSystem()
+    local r = ai:FindPointInSphereForCharacter(target, 6.0, player)
+    if r and r.point and tostring(r.status):find('OK') then return r.point, 'sphere6' end
+    -- marqueur en l air (au-dessus d une porte, d un comptoir) : on cherche SOUS lui
+    local okB, below = pcall(function() return ai:GetNearestNavmeshPointBelow(player, Vector4.new(target.x, target.y, target.z + 1.0, 1.0), 2.0, 6) end)
+    if okB and below and (below.x ~= 0 or below.y ~= 0) and math.abs(below.z - target.z) < 12 then return below, 'dessous' end
+    -- boite haute : etage proche ou palier (XY 10 m, Z 6 m)
+    local okX, bx = pcall(function() return ai:FindPointInBoxForCharacter(target, Vector4.new(10, 10, 6, 0), player) end)
+    if okX and bx and bx.point and tostring(bx.status):find('OK') then return bx.point, 'boite' end
+    local okW, wide = pcall(function() return ai:FindPointInSphereForCharacter(target, 15.0, player) end)
+    if okW and wide and wide.point and tostring(wide.status):find('OK') then return wide.point, 'sphere15' end
+    return nil, 'cible hors navmesh'
+end
+
+-- 19/10 : distances d echantillonnage RELATIVES a la distance a la cible (avant : 80/60/45/30/20 m seulement, avec
+-- step < d - 5 -> sous 25 m de la cible AUCUN essai : 881 echecs « 0 essais » dans le journal du 19/10)
+function AgentSampleSteps(d)
+    local out, seen = {}, {}
+    for _, s in ipairs({ 80, 60, 45, 30, 20, d * 0.75, d * 0.5, d * 0.3, 10, 6, 4 }) do
+        local k = math.floor(s + 0.5)
+        if k >= 3 and k < d - 1.5 and not seen[k] then seen[k] = true; out[#out + 1] = k end
+    end
+    table.sort(out, function(p, q) return p > q end)
+    return out
+end
+
+-- 01/11 : couronnes autour de la cible (8 directions, 24 essais au plus), points a +/- 2,5 m de son altitude : le 1er
+-- chemin trouve mene V au bon etage. Cible lointaine : couronnes plus larges. Globale (limite d upvalues du fichier).
+function AgentFloorPath(ai, startPt, target, player, circle, avoid, d)
+    local tries = 0
+    for _, r in ipairs(d >= 60 and { 16, 32, 56 } or { 8, 16, 28 }) do
+        for i = 0, 7 do
+            local ang = i * math.pi / 4
+            local mid = Vector4.new(target.x + r * math.cos(ang), target.y + r * math.sin(ang), target.z, 1.0)
+            local c = ai:FindPointInSphereForCharacter(mid, 5.0, player)
+            if c and c.point and tostring(c.status):find('OK') and math.abs(c.point.z - target.z) < 2.5
+                and not (avoid and ((c.point.x - avoid.x) ^ 2 + (c.point.y - avoid.y) ^ 2) < 25 * 25) then
+                tries = tries + 1
+                local cand = AgentNavPath(ai, startPt, c.point, player, circle)
+                if cand then
+                    pcall(journal, string.format('NAV etage de la cible : point a %d m d elle, %d essai(s)', r, tries))
+                    return cand
+                end
+            end
+        end
+    end
+    pcall(journal, string.format('NAV etage de la cible : rien (%d essais)', tries))
+    return nil
+end
+
+local function computePath(player, target, avoid, pre)
     local ai = Game.GetAINavigationSystem()
     local pos = player:GetWorldPosition()
     if avoid and ((pos.x - avoid.x) ^ 2 + (pos.y - avoid.y) ^ 2) < 64 then avoid = nil end   -- 12/10 : zone posee sur V lui-meme
-    local aPt, whyA = AgentSnapStart(player)           -- 19/10 : chaine de secours (reference PATHFINDING_CP2077 §4.1)
+    if avoid and AgentNav.lifted then
+        -- 19/10 soir : zone deja levee (seul passage) : on ne la remet pas -- 20/10 (revue) : pendant 10 min seulement
+        -- (un vrai blocage plus tard au meme endroit doit pouvoir etre evite de nouveau)
+        local lt = AgentNav.lifted[string.format('%d,%d', math.floor(avoid.x / 3), math.floor(avoid.y / 3))]
+        if lt and os.time() - lt < 600 then avoid = nil end
+    end
+    -- 20/10 (revue) : au recalcul sans zone evitee, depart et cible deja accroches sont repris (pas 2 fois ces requetes
+    -- dans la meme image)
+    local aPt, whyA
+    if pre then aPt = pre.a else aPt, whyA = AgentSnapStart(player) end   -- 19/10 : chaine de secours (§4.1)
     if not aPt then return nil, whyA, false end
     local a = { point = aPt }
     local circle = AgentNavAvoid(avoid, pos.z)          -- 19/10 : obstacle dynamique + cercle de cout (§4.2)
-    local b = ai:FindPointInSphereForCharacter(target, 6.0, player)
+    local bPt, howB
+    if pre then bPt, howB = pre.b, pre.how else bPt, howB = AgentSnapTarget(player, target) end   -- 19/10 : cible accrochee
     local partial = false
     local path = nil
-    if b and b.point and tostring(b.status):find('OK') then
-        path = AgentNavPath(ai, a.point, b.point, player, circle)
+    if bPt then
+        path = AgentNavPath(ai, a.point, bPt, player, circle)
+        if howB ~= 'sphere6' then pcall(journal, 'NAV cible accrochee par : ' .. howB .. (path and ' -> chemin OK' or ' -> pas de chemin')) end
     end
     if not path then
         -- point intermediaire vers la cible : on ECHANTILLONNE (distances decroissantes,
         -- decalages lateraux) car en ville le point "tout droit" tombe souvent dans un mur.
         local dx, dy = target.x - pos.x, target.y - pos.y
-        local d = math.sqrt(dx * dx + dy * dy)
+        local d = math.max(math.sqrt(dx * dx + dy * dy), 0.01)
         local ux, uy = dx / d, dy / d          -- direction
         local px, py = -uy, ux                 -- perpendiculaire
         local best, bestLen = nil, -1
         local tries = 0
-        for _, step in ipairs({ 80, 60, 45, 30, 20 }) do
-            if step < d - 5 then
-                for _, lat in ipairs({ 0, 15, -15, 30, -30 }) do
+        local l1, l2 = math.min(15, d * 0.4), math.min(30, d * 0.8)   -- 19/10 : decalages lateraux a l echelle de la distance
+        for _, step in ipairs(AgentSampleSteps(d)) do
+            do
+                for _, lat in ipairs({ 0, l1, -l1, l2, -l2 }) do
                     tries = tries + 1
-                    local mid = Vector4.new(pos.x + ux * step + px * lat, pos.y + uy * step + py * lat, pos.z, 1.0)
+                    local zMid = pos.z + (target.z - pos.z) * (step / d)    -- 19/10 : altitude interpolee (etages, pentes)
+                    local mid = Vector4.new(pos.x + ux * step + px * lat, pos.y + uy * step + py * lat, zMid, 1.0)
                     local c = ai:FindPointInSphereForCharacter(mid, 20.0, player)
                     local nearAvoid = false
                     if avoid and c and c.point then
@@ -2421,7 +2736,34 @@ local function computePath(player, target, avoid)
             end
         end
         journal(string.format('PATH partiel : %d essais, gain=%.0f m', tries, bestLen))
-        if not best or bestLen < 5 then return nil, 'aucun chemin, meme partiel (' .. tries .. ' essais)', false end
+        -- 01/11 (journal 25/10 : cibles a 10-30 m mais 8-10 m plus haut ; pas de cabine 24 fois sur 27, ligne droite bloquee
+        -- 32 fois sur 33) : le chemin partiel ne cherchait que vers la cible, a altitude interpolee, et jamais plus loin
+        -- qu elle -> l escalier n etait jamais trouve. Autre etage : on vise un point DU NIVEAU DE LA CIBLE tout autour d elle.
+        -- 01/11 (session du matin : 30 echecs sur 44 entre 60 et 250 m, hors de portee du test d < 60) : sans aucun chemin
+        -- utile, on essaie les couronnes jusqu a 250 m, meme a altitude egale.
+        local bestEnd = best and best.path[#best.path] or nil
+        local noWay = not best or bestLen < math.min(5, d * 0.3)
+        local otherFloor = math.abs(target.z - pos.z) >= 3 and not (bestEnd and math.abs(bestEnd.z - target.z) < 2.5)
+        if d < 250 and (noWay or (d < 60 and otherFloor)) then
+            local floorPath = AgentFloorPath(ai, a.point, target, player, circle, avoid, d)
+            if floorPath then return floorPath, nil, true end
+        end
+        if (not best or bestLen < math.min(5, d * 0.3)) and avoid then
+            -- 19/10 soir (session 20:11 : 35 « aucun chemin » juste apres « zone bloquante memorisee ») : la zone evitee
+            -- etait le SEUL passage (porte, couloir) -> V s enfermait lui-meme. On leve les obstacles proches et on
+            -- recalcule sans eviter : mieux vaut repasser par la zone que rester sur place.
+            -- 20/10 (revue) : aussi l obstacle de la zone elle-meme (elle peut etre a plus de 30 m de V : AgentNavAvoid
+            -- vient de la reposer, et elle restait alors dans le navmesh malgre la levee)
+            local n = AgentNavClearNear(pos.x, pos.y, 30.0) + AgentNavClearNear(avoid.x, avoid.y, 6.0)
+            AgentNav.lifted = AgentNav.lifted or {}
+            AgentNav.lifted[string.format('%d,%d', math.floor(avoid.x / 3), math.floor(avoid.y / 3))] = os.time()
+            pcall(journal, string.format('NAV zone evitee levee (%d obstacle(s) retire(s)) : aucun chemin en l evitant', n))
+            return computePath(player, target, nil, { a = aPt, b = bPt, how = howB })
+        end
+        if not best or bestLen < math.min(5, d * 0.3) then       -- 19/10 : de pres, un gain de quelques metres compte
+            -- 19/10 : cause precisee (la cible elle-meme hors navmesh n appelle pas la meme reaction qu un ilot ferme)
+            return nil, 'aucun chemin, meme partiel (' .. tries .. ' essais' .. (bPt and '' or ', cible hors navmesh') .. ')', false
+        end
         path, partial = best, true
     end
     return path, nil, partial
@@ -2629,17 +2971,17 @@ local function handleCommand(player, cmd)
         local id = lastInventory[cmd.x or -1]
         if not id then resp.reason = 'index inconnu (refaire inventory)'; return resp end
         journal(string.format('RUN  equip idx=%d slot=%d', cmd.x, cmd.y or 0))
-        local es = Game.GetScriptableSystemsContainer():Get('EquipmentSystem')
-        local edata = es:GetPlayerData(player)
+        -- 25/10 (patch 2.5 : es:GetPlayerData(player) renvoie nil -> plus aucune pose, 204 500 eddies d implants le 23/10) :
+        -- donnees d equipement par 2 voies, verification par 3, puis requete EquipRequest comme l inventaire du jeu
+        local es, edata, how = AgentEquipData(player)
         local isClo = false
         pcall(function()
             local tt = tostring(TweakDBInterface.GetItemRecord(ItemID.GetTDBID(id)):ItemType():Type())
             isClo = tt:find('Clo_') ~= nil or tt:find('Cyb') ~= nil or tt:find('Cyberware') ~= nil
         end)
         local function isWorn()
-            local w = false
-            pcall(function() w = edata:IsEquipped(id) end)
-            if not w then
+            local w = AgentIsWorn(player, id, es, edata)
+            if not w and edata then
                 pcall(function()
                     local areas = { 'Head', 'Face', 'OuterChest', 'InnerChest', 'Legs', 'Feet', 'Outfit',
                                     'SystemReplacementCW', 'ArmsCW', 'LegsCW', 'HandsCW', 'EyesCW', 'MusculoskeletalSystemCW',
@@ -2654,18 +2996,42 @@ local function handleCommand(player, cmd)
             end
             return w
         end
-        local used = 'EquipItem(id, slot)'
-        pcall(function() edata:EquipItem(id, cmd.y or 0) end)
-        if isClo and not isWorn() then
-            used = 'EquipItem(id)'
-            pcall(function() edata:EquipItem(id) end)
+        local used = 'aucune donnee d equipement'
+        if edata then
+            used = 'EquipItem(id, slot)'
+            pcall(function() edata:EquipItem(id, cmd.y or 0) end)
+            if isClo and not isWorn() then
+                used = 'EquipItem(id)'
+                pcall(function() edata:EquipItem(id) end)
+            end
+            if isClo and not isWorn() then
+                used = 'EquipItem(id, false, false, false)'
+                pcall(function() edata:EquipItem(id, false, false, false) end)
+            end
         end
-        if isClo and not isWorn() then
-            used = 'EquipItem(id, false, false, false)'
-            pcall(function() edata:EquipItem(id, false, false, false) end)
+        if not isWorn() and es then
+            -- requete du systeme d equipement (comme l inventaire du jeu) : traitee plus tard -> l agent revérifie (equip_check)
+            local okQ, eQ = pcall(function()
+                local req = EquipRequest.new()
+                req.owner = player
+                req.itemID = id
+                req.addToInventory = false
+                req.slotIndex = isClo and -1 or (cmd.y or 0)
+                es:QueueRequest(req)
+            end)
+            if okQ then used = used .. ' + EquipRequest'; resp.queued = true
+            else used = used .. ' + EquipRequest refuse (' .. tostring(eQ):sub(1, 60) .. ')' end
         end
-        resp.ok, resp.worn, resp.method = true, isWorn(), used
-        journal(string.format('OK   equip : %s -> porte=%s', used, tostring(resp.worn)))
+        lastEquipId = id
+        resp.ok, resp.worn, resp.method, resp.data = true, isWorn(), used, how
+        journal(string.format('OK   equip : %s -> porte=%s (donnees : %s)', used, tostring(resp.worn), tostring(how)))
+        return resp
+    elseif cmd.cmd == 'equip_check' then
+        -- 25/10 : l objet du dernier equip (ou x = index d inventaire) est-il porte ? (EquipRequest traitee en differe)
+        local id = (cmd.x and cmd.x >= 0 and lastInventory[cmd.x]) or lastEquipId
+        if not id then resp.reason = 'aucun objet'; return resp end
+        local es, edata = AgentEquipData(player)
+        resp.ok, resp.worn = true, AgentIsWorn(player, id, es, edata)
         return resp
     elseif cmd.cmd == 'disassemble' then
         local id = lastInventory[cmd.x or -1]
@@ -2989,10 +3355,11 @@ local function handleCommand(player, cmd)
     elseif cmd.cmd == 'loot' then
         -- LOOT PAR SCRIPT : l interface de loot (tooltip + E) est capricieuse ; on transfere directement
         -- le contenu de l objet vise (conteneur, sac, objet au sol, corps) vers V, comme le ferait
-        -- « tout prendre ». Cible = entite lootable la plus proche du point (x,y) a < 2 m, a < 6 m de V.
+        -- « tout prendre ». Cible = entite lootable la plus proche du point (x,y) a < 2 m, a < 8 m de V (21/10 : 6 -> 8 m,
+        -- objets derriere un comptoir / une porte verrouillee a 7 m : 40 s de marche perdues pour rien).
         journal(string.format('RUN  loot (%.1f,%.1f)', cmd.x or 0, cmd.y or 0))
         local q = Game['TSQ_ALL;']()
-        q.maxDistance = 6.0
+        q.maxDistance = 8.0
         q.filterObjectByDistance = true
         pcall(function() q.testedSet = TargetingSet.Complete end)
         local okT, parts = Game.GetTargetingSystem():GetTargetParts(player, q)
@@ -3190,11 +3557,38 @@ local function handleCommand(player, cmd)
         if not e then resp.reason = 'choix inconnu (refaire sms_read)'; return resp end
         journal(string.format('RUN  sms_reply idx=%d', cmd.x))
         local jm = Game.GetJournalManager()
-        local okC = pcall(function() jm:ChangeEntryState(e, gameJournalEntryState.Active, JournalNotifyOption.Notify) end)
-        if not okC then okC = pcall(function() jm:ChangeEntryState(e, gameJournalEntryState.Active, JournalNotifyOption.DoNotNotify) end) end
-        resp.ok = okC
-        if not okC then resp.reason = 'ChangeEntryState refuse' end
-        journal('OK   sms_reply : ' .. tostring(okC))
+        -- 19/10 : ChangeEntryState attend un CHEMIN (texte) + classe, pas l entree : l ancien appel echouait a chaque fois
+        -- (~1500 « ChangeEntryState refuse » dans le journal). Le moteur expose ChangeEntryStateByHash + GetEntryHash ;
+        -- un choix affiche est deja Active, la quete attend donc vraisemblablement Succeeded (hypothese : verifiee ci-dessous
+        -- en relisant l etat, et journalisee).
+        local function stateOf() local s = '?'; pcall(function() s = tostring(jm:GetEntryState(e)) end); return s end
+        local before = stateOf()
+        local how = nil
+        -- 19/10 soir (session de test) : un choix DEJA Succeeded = reponse deja faite (souvent par le joueur). L ancienne
+        -- boucle essayait alors Active et DEFAISAIT la reponse (etats qui basculaient Succeeded <-> Active toutes les 3 min).
+        -- Desormais : jamais Active, et un choix deja Succeeded n est pas touche.
+        local sibling = false                                -- un AUTRE choix du meme fil deja choisi = deja repondu
+        for _, ce in pairs(lastChoices) do
+            if ce ~= e then
+                pcall(function() if tostring(jm:GetEntryState(ce)):find('Succeeded') then sibling = true end end)
+            end
+        end
+        if before:find('Succeeded') or sibling then
+            resp.ok, resp.already, resp.how, resp.state_before, resp.state_after = false, true, nil, before, before
+            resp.reason = 'deja repondu (choix Succeeded)'
+            journal('OK   sms_reply : deja repondu, rien change')
+            return resp
+        end
+        local okH, h = pcall(function() return jm:GetEntryHash(e) end)
+        if okH and h then
+            if h < 0 then h = h + 4294967296 end
+            local okB = pcall(function() jm:ChangeEntryStateByHash(h, gameJournalEntryState.Succeeded, JournalNotifyOption.Notify) end)
+            if okB and stateOf():find('Succeeded') then how = 'ByHash Succeeded' end
+        end
+        resp.ok = how ~= nil
+        resp.how, resp.state_before, resp.state_after = how, before, stateOf()
+        if not how then resp.reason = 'ChangeEntryState refuse (etat ' .. before .. ' inchange)' end
+        journal('OK   sms_reply : ' .. tostring(how) .. ' | etat ' .. before .. ' -> ' .. resp.state_after)
         return resp
     elseif cmd.cmd == 'fast_travel_points' then
         -- POINTS DE VOYAGE RAPIDE connus (FastTravelSystem est un ScriptableSystem, pas un membre de GameInstance)
@@ -3514,6 +3908,33 @@ local function handleCommand(player, cmd)
         pcall(function() pts = pdd:GetDevPoints(gamedataDevelopmentPointType.Primary) end)
         resp.ok, resp.achetes, resp.restants = true, bought, pts
         journal(string.format('OK   perks : %d achete(s) [%s], restants %s', #bought, table.concat(bought, ','), tostring(pts)))
+        return resp
+    elseif cmd.cmd == 'world' then
+        -- 30/10 (Olivier : « le chat controle le monde ») : evenement vote par le chat. x = pluie / soleil / brouillard /
+        -- tempete (meteo forcee, rendue au jeu par l agent apres 3 min : x = meteo_reset), nuit / jour (heure), police
+        -- (recherche NCPD niveau 2). Pas de ralenti : SetTimeDilation fait planter le jeu depuis CET (voir plus haut).
+        local x = tostring(cmd.x or '')
+        journal('RUN  world ' .. x)
+        local WEATHER = { pluie = '24h_weather_rain', soleil = '24h_weather_sunny', brouillard = '24h_weather_fog',
+                          tempete = '24h_weather_sandstorm' }
+        local ok, err = false, nil
+        if WEATHER[x] then
+            ok, err = pcall(function() Game.GetWeatherSystem():SetWeather(WEATHER[x], 8.0, 9) end)
+        elseif x == 'meteo_reset' then
+            ok, err = pcall(function() Game.GetWeatherSystem():ResetWeather(true) end)
+            if not ok then ok, err = pcall(function() Game.GetWeatherSystem():ResetWeather(false, 8.0) end) end
+        elseif x == 'nuit' or x == 'jour' then
+            ok, err = pcall(function() Game.GetTimeSystem():SetGameTimeByHMS(x == 'nuit' and 23 or 12, 0, 0) end)
+        elseif x == 'police' then
+            ok, err = pcall(function()
+                Game.GetScriptableSystemsContainer():Get('PreventionSystem'):ChangeHeatStage(EPreventionHeatStage.Heat_2, 'agent_chat')
+            end)
+        else
+            err = 'evenement inconnu'
+        end
+        resp.ok, resp.x = ok, x
+        if not ok then resp.reason = tostring(err):sub(1, 160) end
+        journal((ok and 'OK   world ' or 'FAIL world ') .. x .. (ok and '' or (' : ' .. resp.reason)))
         return resp
     elseif cmd.cmd == 'radio' then
         -- RADIO (radioport) : x = 1 allumer, 0 eteindre, 2 station suivante. API PocketRadio (2.x), en pcall + journal.
@@ -4038,6 +4459,36 @@ local function handleCommand(player, cmd)
         if not resp.ok then resp.reason = 'aucune methode acceptee' end
         journal('OK   jack_in : ' .. table.concat(did, ','))
         return resp
+    elseif cmd.cmd == 'scan_targets' then
+        -- 23/10 : indices / objets de quete pas encore scannes a < x m (30 par defaut)
+        local okS, r = pcall(AgentScanTargets, player, tonumber(cmd.x) or 30.0, resp)
+        if not okS then resp.ok, resp.reason = false, 'scan_targets : ' .. tostring(r) end
+        journal(string.format('OK   scan_targets : %s cible(s)%s', tostring(resp.targets and #resp.targets or 0), resp.reason and (' ' .. resp.reason) or ''))
+        return resp
+    elseif cmd.cmd == 'scan_check' then
+        -- 23/10 : cible x (index du dernier scan_targets) : scannee ? position a l ecran (pour garder le reticule dessus)
+        local ent = (AgentScanEnts or {})[tonumber(cmd.x) or -1]
+        if not ent then resp.reason = 'cible inconnue (refaire scan_targets)'; return resp end
+        local _, _, scanned = AgentScanInfo(ent)
+        resp.ok, resp.scanned = true, scanned
+        pcall(function()
+            -- 01/11 : +0,15 m et non +0,5 : ces objets sont petits et poses (un medikit au sol etait vise 35 cm trop haut)
+            local ep = ent:GetWorldPosition()
+            local sc = Game.GetCameraSystem():ProjectPoint(Vector4.new(ep.x, ep.y, ep.z + 0.15, 1.0))
+            resp.sx, resp.sy, resp.x, resp.y = sc.x, sc.y, ep.x, ep.y
+        end)
+        pcall(AgentScanState, ent, player, resp)
+        return resp
+    elseif cmd.cmd == 'edge_ahead' then
+        -- 01/11 : premier vide devant V, a x m au plus (voir AgentEdgeAhead)
+        local okE, r = pcall(AgentEdgeAhead, player, tonumber(cmd.x) or 8, resp)
+        if not okE then resp.ok, resp.reason = false, 'edge_ahead : ' .. tostring(r) end
+        return resp
+    elseif cmd.cmd == 'probe_block' then
+        -- 19/10 : diagnostic de blocage (voir AgentProbeBlock) ; x,y = waypoint vise
+        local okP, r = pcall(AgentProbeBlock, player, tonumber(cmd.x), tonumber(cmd.y), resp)
+        if not okP then resp.reason = 'probe_block : ' .. tostring(r) end
+        return resp
     elseif cmd.cmd == 'doors' then
         -- PORTES / DISPOSITIFS proches (< 15 m) : pour sortir d un ilot de maillage ferme (piece, local)
         journal('RUN  doors')
@@ -4142,6 +4593,44 @@ local function handleCommand(player, cmd)
         resp.ok, resp.vendors = true, out
         journal('OK   list_vendors : ' .. #out)
         return resp
+    elseif cmd.cmd == 'portals' then
+        -- 25/10 ENTREES DE BATIMENT du GPS (variante GPSPortalVariant : le GPS du jeu fait passer ses trajets par elles pour
+        -- entrer dans un interieur) autour du point (x, y), rayon z (80 m par defaut) ; triees par distance a ce point
+        local cx, cy, rad = tonumber(cmd.x), tonumber(cmd.y), tonumber(cmd.z) or 80.0
+        local pos = player:GetWorldPosition()
+        cx, cy = cx or pos.x, cy or pos.y
+        local out, seenV = {}, {}
+        local mappins = Game.GetMappinSystem():GetMappins(gamemappinsMappinTargetType.Minimap)
+        if type(mappins) == 'table' then
+            for i = 1, #mappins do
+                local m = mappins[i]
+                local v = ''
+                pcall(function() v = tostring(m:GetVariant()):gsub('gamedataMappinVariant : ', ''):gsub(' %(%d+%)', '') end)
+                local lv = v:lower()
+                seenV[v] = true
+                if lv:find('portal') or lv:find('entrance') then
+                    local rec = { variant = v }
+                    pcall(function()
+                        local w = m:GetWorldPosition()
+                        rec.x, rec.y, rec.z = w.x, w.y, w.z
+                        rec.d_target = math.sqrt((w.x - cx) ^ 2 + (w.y - cy) ^ 2)
+                        rec.d_v = math.sqrt((w.x - pos.x) ^ 2 + (w.y - pos.y) ^ 2)
+                    end)
+                    if rec.d_target and rec.d_target <= rad then out[#out + 1] = rec end
+                end
+            end
+        end
+        table.sort(out, function(a, b) return a.d_target < b.d_target end)
+        while #out > 6 do table.remove(out) end
+        resp.ok, resp.portals = true, out
+        if not AgentPortalsLogged then                 -- une fois : les variantes vues (pour regler le filtre en jeu)
+            AgentPortalsLogged = true
+            local vs = {}
+            for k in pairs(seenV) do vs[#vs + 1] = k end
+            pcall(journal, 'OK   portals : variantes de la minimap = ' .. table.concat(vs, ', '):sub(1, 400))
+        end
+        journal('OK   portals : ' .. #out .. ' entree(s) a moins de ' .. rad .. ' m de la cible')
+        return resp
     elseif cmd.cmd == 'list_quests' then
         -- liste des quetes ACTIVES avec, pour chaque objectif, position du marqueur et distance
         -- CRASH NATIF le 2026-09-11 07:05 dans cette commande (derniere ligne : RUN list_quests).
@@ -4185,7 +4674,7 @@ local function handleCommand(player, cmd)
                                 journal('RUN  list_quests.mappin.' .. mn)
                                 local okE, en = pcall(function() return m[mn](m) end)
                                 journal('OK   list_quests.mappin.' .. mn .. ' -> ' .. tostring(okE and en ~= nil))
-                                if okE and en then entry = en; break end
+                                if okE and en and type(en) ~= 'number' then entry = en; break end   -- 25/10 : un hash (nombre) n est pas une entree (patch 2.5)
                             end
                         end
                         mappinProbeDone = true
@@ -4929,7 +5418,7 @@ function AgentV8Radar(P, e, d, cx, cy, r, clk)
     for _, n in ipairs(e.npcs or {}) do
         if tonumber(n.x) and tonumber(n.y) then
             local x, y, _, out = place(n.x, n.y)
-            if not out then R(x - 1.5 * u, y - 1.5 * u, x + 1.5 * u, y + 1.5 * u, P.DIM) end
+            if not out then R(x - 1.8 * u, y - 1.8 * u, x + 1.8 * u, y + 1.8 * u, P.GREY or P.DIM) end   -- 20/10 : PNJ neutres en gris
         end
     end
     local ownCar = false
@@ -4937,15 +5426,15 @@ function AgentV8Radar(P, e, d, cx, cy, r, clk)
         if tonumber(v.x) and tonumber(v.y) then
             local x, y, _, out = place(v.x, v.y)
             if not out then
-                if v.player then ownCar = true; P.RO(x - 4 * u, y - 6 * u, x + 4 * u, y + 6 * u, P.BONE, 1.4)
-                else P.RO(x - 2.5 * u, y - 4 * u, x + 2.5 * u, y + 4 * u, P.FAINT, 1) end
+                if v.player then ownCar = true; R(x - 4 * u, y - 6 * u, x + 4 * u, y + 6 * u, P.CYAN or P.BONE)   -- 20/10 : voiture de V pleine, cyan
+                else P.RO(x - 2.5 * u, y - 4 * u, x + 2.5 * u, y + 4 * u, P.CYAN_DIM or P.FAINT, 1) end
             end
         end
     end
     local sm = e.summon
     if not ownCar and type(sm) == 'table' and tonumber(sm.x) and tonumber(sm.y) then
         local x, y, _, out = place(sm.x, sm.y)
-        if not out then P.RO(x - 4 * u, y - 6 * u, x + 4 * u, y + 6 * u, P.BONE, 1.4) end
+        if not out then P.RO(x - 4 * u, y - 6 * u, x + 4 * u, y + 6 * u, P.CYAN or P.BONE, 1.6) end
     end
     -- objectif : losange (au bord du radar s il est hors de portee)
     local tg = type(d.target) == 'table' and d.target or nil
@@ -4954,8 +5443,8 @@ function AgentV8Radar(P, e, d, cx, cy, r, clk)
     elseif type(e.quest) == 'table' and tonumber(e.quest.mx) and tonumber(e.quest.my) then tx, ty = tonumber(e.quest.mx), tonumber(e.quest.my) end
     if tx then
         local x, y = place(tx, ty)
-        ImGui.ImDrawListAddTriangleFilled(P.dl, x, y - 6 * u, x - 5 * u, y, x + 5 * u, y, P.BONE)
-        ImGui.ImDrawListAddTriangleFilled(P.dl, x - 5 * u, y, x + 5 * u, y, x, y + 6 * u, P.BONE)
+        ImGui.ImDrawListAddTriangleFilled(P.dl, x, y - 7 * u, x - 6 * u, y, x + 6 * u, y, P.GOLD or P.BONE)   -- 20/10 : objectif en or
+        ImGui.ImDrawListAddTriangleFilled(P.dl, x - 6 * u, y, x + 6 * u, y, x, y + 7 * u, P.GOLD or P.BONE)
     end
     -- hostiles (rouge = danger) et police (ambre) ; le plus proche cerne
     local nH, nearest, nd = 0, nil, 1e9
@@ -4966,7 +5455,11 @@ function AgentV8Radar(P, e, d, cx, cy, r, clk)
             if out then
                 L(x, y, cx + (x - cx) * 0.92, cy + (y - cy) * 0.92, col, 2.5)
             else
-                R(x - 3.5 * u, y - 3.5 * u, x + 3.5 * u, y + 3.5 * u, col)
+                -- 20/10 : hostile a moins de 20 m = plus gros, clignotant, anneau qui pulse
+                local near_ = (not en.police) and dist < 20
+                local s_ = near_ and 5 * u or 3.5 * u
+                if not (near_ and P.blink) then R(x - s_, y - s_, x + s_, y + s_, col) end
+                if near_ then arc(x, y, (8 + 6 * ((clk * 2) % 1)) * u, 0, 360, col, 1, 16) end
             end
             if not en.police then
                 nH = nH + 1
@@ -4986,6 +5479,11 @@ function AgentV8Radar(P, e, d, cx, cy, r, clk)
     T(cx - r, cy + r + 8 * u, nH > 0 and string.format('%d HOSTILE%s', nH, nH > 1 and 'S' or '') or 'ZONE CALME', 10,
       nH > 0 and P.HOSTILE or P.DIM)
     if nearest then T(cx + r, cy + r + 8 * u, string.format('%d M', math.floor(nd + 0.5)), 10, P.HOSTILE, 'r') end
+    -- 20/10 : legende des couleurs (sous le radar)
+    local lx, ly = cx - r, cy + r + 24 * u
+    for _, it in ipairs({ { 'HOSTILE', P.HOSTILE }, { 'POLICE', P.AMBER }, { 'PNJ', P.GREY or P.DIM }, { 'VEHICULE', P.CYAN or P.BONE }, { 'OBJECTIF', P.GOLD or P.BONE } }) do
+        R(lx, ly + 3 * u, lx + 6 * u, ly + 9 * u, it[2]); T(lx + 9 * u, ly, it[1], 8, it[2]); lx = lx + (#it[1] * 5.2 + 22) * u
+    end
 end
 function AgentV8Body(dl, W, H, e, d, kills)
     local u = H / 1080
@@ -5010,6 +5508,22 @@ function AgentV8Body(dl, W, H, e, d, kills)
     end
     local AMBER = AgentV8Col(1.0, 0.72, 0.15, 1)
     local SHADOW = AgentV8Col(0, 0, 0, 0.8)
+    -- 20/10 (Olivier : « plus de couleurs dans le HUD c est top ») : couleurs qui ont un SENS, en plus du signal bleu
+    local HOST, HOST_DIM = AgentV8Col(1.0, 0.24, 0.2, 1), AgentV8Col(0.72, 0.15, 0.13, 1)   -- menaces (rouge vrai)
+    local GREEN, GOLD = AgentV8Col(0.35, 1.0, 0.55, 1), AgentV8Col(1.0, 0.83, 0.28, 1)      -- sante haute, argent / succes
+    local VIOLET, CYAN = AgentV8Col(0.78, 0.52, 1.0, 1), AgentV8Col(0.32, 1.0, 0.94, 1)     -- RAM / ambiance, deplacement
+    local SILVER, BRONZE = AgentV8Col(0.82, 0.87, 0.93, 1), AgentV8Col(0.86, 0.56, 0.32, 1)
+    local function hpCol(v) return v >= 60 and GREEN or (v >= 30 and AMBER or HOST) end
+    AgentV8.cmdCol = AgentV8.cmdCol or {
+        ATTAQUE = 'H', MELEE = 'H', DISTANCE = 'H', YOLO = 'H', TEMERAIRE = 'H', PSYCHO = 'H', KATANA = 'H', GUN = 'H',
+        OBJECTIF = 'C', SKIP = 'C', MISSION = 'C', EXPLORE = 'C', VOITURE = 'C', VOLE = 'C',
+        SHOP = 'G', CHARCUDOC = 'G', HEAL = 'G', LOOT = 'G',
+        FETE = 'V', RADIO = 'V', ETAT = 'V', PRUDENT = 'V', GG = 'V', MIXTE = 'V',
+        PLUIE = 'W', SOLEIL = 'W', BROUILLARD = 'W', TEMPETE = 'W', NUIT = 'W', JOUR = 'W', POLICE = 'W' }   -- 30/10 : le chat controle le monde
+    local function cmdCol(name)   -- couleur de famille d une commande du chat (« !ATTAQUE », « attaque », « style melee »)
+        local k = AgentV8.cmdCol[(tostring(name):upper():gsub('^!', ''):match('(%S+)$') or '')]
+        return (k == 'H' and HOST) or (k == 'C' and CYAN) or (k == 'G' and GOLD) or (k == 'V' and VIOLET) or (k == 'W' and GREEN) or RED
+    end
     local function L(x1, y1, x2, y2, col, th) ImGui.ImDrawListAddLine(dl, x1, y1, x2, y2, col, (th or 1) * u) end
     local function R(x1, y1, x2, y2, col) ImGui.ImDrawListAddRectFilled(dl, x1, y1, x2, y2, col) end
     local function RO(x1, y1, x2, y2, col, th) ImGui.ImDrawListAddRect(dl, x1, y1, x2, y2, col, 0, 0, (th or 1) * u) end
@@ -5137,7 +5651,7 @@ function AgentV8Body(dl, W, H, e, d, kills)
                 local rel = wrapd(bearing(t.x, t.y) - e.yaw)
                 local a, hw = math.rad(-90 - rel), math.rad(2.4)
                 local r0, r1 = 178 * u, 194 * u
-                local col = (t.d or 99) < 20 and RED or RED_MID
+                local col = (t.d or 99) < 20 and HOST or HOST_DIM
                 ImGui.ImDrawListAddTriangleFilled(dl, CX + r0 * math.cos(a), CY + r0 * math.sin(a),
                     CX + r1 * math.cos(a - hw), CY + r1 * math.sin(a - hw), CX + r1 * math.cos(a + hw), CY + r1 * math.sin(a + hw), col)
             end
@@ -5162,7 +5676,7 @@ function AgentV8Body(dl, W, H, e, d, kills)
                 local mx_, my_ = (x0 + x1) / 2, (y0 + y1) / 2
                 x0, x1, y0, y1 = mx_ - (mx_ - x0) * g, mx_ + (x1 - mx_) * g, my_ - (my_ - y0) * g, my_ + (y1 - my_) * g
             end
-            local col, th = first and RED or RED_MID, first and 2 or 1.2
+            local col, th = first and HOST or HOST_DIM, first and 2 or 1.2
             for _, k in ipairs({ { x0, y0, 1, 1 }, { x1, y0, -1, 1 }, { x0, y1, 1, -1 }, { x1, y1, -1, -1 } }) do
                 L(k[1], k[2], k[1] + k[3] * cl, k[2], col, th); L(k[1], k[2], k[1], k[2] + k[4] * cl, col, th)
             end
@@ -5173,9 +5687,9 @@ function AgentV8Body(dl, W, H, e, d, kills)
                 local my = (y0 + y1) / 2
                 local ang = math.atan2(my - CY, x0 - CX)
                 if px > CX + 170 * u or px < CX - 170 * u then
-                    L(CX + 166 * u * math.cos(ang), CY + 166 * u * math.sin(ang), x0 - 12 * u, my, RED_MID, 1)
+                    L(CX + 166 * u * math.cos(ang), CY + 166 * u * math.sin(ang), x0 - 12 * u, my, HOST_DIM, 1)
                 end
-                T(x0, y0 - 46 * u, 'CIBLE 01', 18, RED)
+                T(x0, y0 - 46 * u, 'CIBLE 01', 18, HOST)
                 local acq = clk - (AgentV8.lockT or -99) < 0.6
                 T(x0, y0 - 22 * u, acq and 'ACQUISITION...' or 'VERROUILLEE', 11, acq and BONE or RED_DIM)
                 local rows = { { 'DIST', string.format('%d M', math.floor((t.d or 0) + 0.5)) } }
@@ -5189,11 +5703,11 @@ function AgentV8Body(dl, W, H, e, d, kills)
                 local lvl = (#foes >= 6 or hp < 35) and 5 or (#foes >= 3 and 3 or 1)
                 for k = 0, 4 do
                     local tx = x0 + 64 * u + k * 13 * u
-                    if k < lvl then ImGui.ImDrawListAddTriangleFilled(dl, tx, ty + 11 * u, tx + 4.5 * u, ty + 2 * u, tx + 9 * u, ty + 11 * u, RED)
+                    if k < lvl then ImGui.ImDrawListAddTriangleFilled(dl, tx, ty + 11 * u, tx + 4.5 * u, ty + 2 * u, tx + 9 * u, ty + 11 * u, k < 2 and AMBER or HOST)
                     else L(tx, ty + 11 * u, tx + 4.5 * u, ty + 2 * u, RED_DIM, 1); L(tx + 4.5 * u, ty + 2 * u, tx + 9 * u, ty + 11 * u, RED_DIM, 1); L(tx, ty + 11 * u, tx + 9 * u, ty + 11 * u, RED_DIM, 1) end
                 end
             else
-                T(x0, y1 + 6 * u, string.format('%d M', math.floor((t.d or 0) + 0.5)), 10, RED_DIM)
+                T(x0, y1 + 6 * u, string.format('%d M', math.floor((t.d or 0) + 0.5)), 10, HOST_DIM)
             end
         end
     end
@@ -5217,17 +5731,26 @@ function AgentV8Body(dl, W, H, e, d, kills)
         local txt = '> ' .. tostring(d.say)
         local n = math.min(#txt, math.floor((clk - AgentSaySeen.c0) * 45) + 1)
         local size = 34
+        -- 21/10 (Olivier : « 4 ») : couleur selon le TON de la phrase (combat rouge, succes / gain or, chat / humour violet,
+        -- exploration / deplacement vert ; sinon le signal bleu)
+        local up = txt:upper()
+        local function has(...) for _, w in ipairs({ ... }) do if up:find(w, 1, true) then return true end end return false end
+        local SC = RED
+        if has('CIBLE', 'ENGAGE', 'HOSTILE', 'COMBAT', 'ATTAQU', 'REVANCHE', 'MENACE', 'ECHEC CRITIQUE', 'NEUTRALIS', 'CYBERPSYCHO', 'ALERTE') then SC = HOST
+        elseif has('SUCCES', 'PROGRES', 'RECOMPENSE', 'EDDIES', 'VENDU', 'BUTIN', 'IMPLANT', 'NIVEAU') then SC = GOLD
+        elseif has('CHAT', 'VOTE', 'MERCI', 'FETE', 'BACK', 'MVP', 'SUPER') then SC = VIOLET
+        elseif has('EXPLOR', 'EN ROUTE', 'VEHICULE', 'VOITURE', 'ASCENSEUR', 'VOYAGE') then SC = GREEN end
         local wFull = TW(txt, size * u)
         local bx0, bx1 = CX - wFull / 2 - 40 * u, CX + wFull / 2 + 64 * u
         R(bx0, NY, bx1, NY + 86 * u, SHADE)
-        L(bx0, NY, bx0 + 18 * u, NY, RED, 1.4); L(bx0, NY, bx0, NY + 18 * u, RED, 1.4)
-        L(bx1 - 18 * u, NY + 86 * u, bx1, NY + 86 * u, RED, 1.4); L(bx1, NY + 68 * u, bx1, NY + 86 * u, RED, 1.4)
+        L(bx0, NY, bx0 + 18 * u, NY, SC, 1.4); L(bx0, NY, bx0, NY + 18 * u, SC, 1.4)
+        L(bx1 - 18 * u, NY + 86 * u, bx1, NY + 86 * u, SC, 1.4); L(bx1, NY + 68 * u, bx1, NY + 86 * u, SC, 1.4)
         L(bx0 + 30 * u, NY, bx1, NY, RED_DIM, 1); L(bx0, NY + 86 * u, bx1 - 30 * u, NY + 86 * u, RED_DIM, 1)
         local shown = txt:sub(1, n)
-        T(CX - wFull / 2 - 12 * u, NY + 43 * u - size * u / 2, shown, size, RED)
+        T(CX - wFull / 2 - 12 * u, NY + 43 * u - size * u / 2, shown, size, SC)
         if n < #txt or blink then
             local cx = CX - wFull / 2 - 12 * u + TW(shown, size * u) + 4 * u
-            R(cx, NY + 26 * u, cx + 14 * u, NY + 60 * u, RED)
+            R(cx, NY + 26 * u, cx + 14 * u, NY + 60 * u, SC)
         end
         T(bx0, NY - 20 * u, 'NARRATEUR', 10, RED_DIM)
         T(bx1, NY - 20 * u, 'V-800 / VOIX 01', 10, RED_DIM, 'r')
@@ -5238,7 +5761,7 @@ function AgentV8Body(dl, W, H, e, d, kills)
             local env = math.sin(math.pi * i / (nb - 1)) ^ 0.7
             local amp = typing and (6 + 16 * math.abs(math.sin(i * 0.61 + clk * 9) * math.cos(i * 0.23 - clk * 5))) or 2
             local hh = 2 * u + env * amp * u
-            L(x, NY + 110 * u - hh / 2, x, NY + 110 * u + hh / 2, env > 0.35 and RED_MID or RED_DIM, 1.4)
+            L(x, NY + 110 * u - hh / 2, x, NY + 110 * u + hh / 2, env > 0.35 and SC or RED_DIM, 1.4)
         end
     elseif not stale and d.directive then
         local s = '> ' .. tostring(d.directive)
@@ -5253,15 +5776,15 @@ function AgentV8Body(dl, W, H, e, d, kills)
     T(LX, 92 * u, (stale and 'LIAISON PERDUE') or (d.paused and 'EN PAUSE') or 'SYS.ONLINE', 10, stale and AMBER or RED_DIM)
     T(LX, 108 * u, os.date('%H:%M:%S'), 10, RED_MID)
     T(LX, 168 * u, 'VIE', 13, RED_DIM)
-    local hpCol = (alert and hp < 30 and not blink) and BONE or RED
-    local xEnd = seg7(LX, 192 * u, 80 * u, string.format('%d', math.floor(hp + 0.5)), hpCol, 3)
-    T(xEnd + 2 * u, 252 * u, '%', 20, RED_MID)
+    local hpC = (alert and hp < 30 and not blink) and BONE or hpCol(hp)
+    local xEnd = seg7(LX, 192 * u, 80 * u, string.format('%d', math.floor(hp + 0.5)), hpC, 3)
+    T(xEnd + 2 * u, 252 * u, '%', 20, hpC)
     local lit = math.floor(hp / 2 + 0.5)
     for i = 0, 49 do
         local y = 330 * u + i * 7.2 * u
         local on = i >= 50 - lit
         local major = i % 5 == 0
-        local col = on and (major and RED or RED_MID) or RED_FAINT
+        local col = on and hpCol((50 - i) * 2) or RED_FAINT      -- 20/10 : degrade vert -> ambre -> rouge du haut vers le bas
         if on and alert and hp < 30 and blink then col = BONE end
         L(LX, y, LX + (major and 40 or 26) * u, y, col, major and 2 or 1.2)
     end
@@ -5269,13 +5792,13 @@ function AgentV8Body(dl, W, H, e, d, kills)
     T(LX + 56 * u, 330 * u + 49 * 7.2 * u - 8 * u, '0', 9, RED_DIM)
     local ry = 730 * u
     local ram, ramMax = tonumber(e.ram), tonumber(AgentV8.ramMax)
-    T(LX, ry, 'RAM', 13, RED_DIM)
+    T(LX, ry, 'RAM', 13, VIOLET)
     if ram then
         local nCells = math.max(1, math.min(16, ramMax or math.max(8, math.ceil(ram))))
         local step = math.min(26, 210 / nCells) * u
         for i = 0, nCells - 1 do
             local x = LX + i * step
-            if i < math.floor(ram + 0.001) then R(x, ry + 24 * u, x + step * 0.7, ry + 42 * u, RED)
+            if i < math.floor(ram + 0.001) then R(x, ry + 24 * u, x + step * 0.7, ry + 42 * u, VIOLET)
             else RO(x, ry + 24 * u, x + step * 0.7, ry + 42 * u, RED_DIM, 1) end
         end
     end
@@ -5283,7 +5806,7 @@ function AgentV8Body(dl, W, H, e, d, kills)
         T(LX, y, k, 13, RED_DIM); T(LX + 120 * u, y, v, 13, col or BONE)
     end
     kv(ry + 64 * u, 'NIVEAU', tostring(e.level or '?'))
-    kv(ry + 88 * u, 'EDDIES', AgentV8.money and tostring(math.floor(AgentV8.money)) or '?')
+    kv(ry + 88 * u, 'EDDIES', AgentV8.money and tostring(math.floor(AgentV8.money)) or '?', GOLD)
     L(LX, ry + 120 * u, LX + 210 * u, ry + 120 * u, RED_DIM, 1)
     local bd = e.bd or {}
     local mode
@@ -5295,21 +5818,24 @@ function AgentV8Body(dl, W, H, e, d, kills)
     elseif stale then mode = 'MANUEL'
     elseif d.paused then mode = 'PAUSE'
     else mode = tostring(d.mode or 'EN MISSION') end
-    kv(ry + 132 * u, 'MODE', mode:sub(1, 22), RED)
-    kv(ry + 156 * u, 'HOSTILES', tostring(#foes) .. (police > 0 and (' +' .. police .. ' POLICE') or ''), #foes > 0 and RED or BONE)
-    kv(ry + 180 * u, 'ELIMINES', tostring(kills or 0))
-    if clk - (AgentV8.killT or -99) < 1.5 then T(LX + 170 * u, ry + 180 * u, '+1', 13, BONE) end
+    local modeCol = ({ ['HORS SERVICE'] = HOST, ['ENGAGEMENT'] = HOST, ['CONDUITE'] = CYAN, ['DIALOGUE'] = VIOLET,
+        ['DANSE SENSORIELLE'] = VIOLET, ['MANUEL'] = AMBER, ['PAUSE'] = AMBER })[mode] or GREEN
+    kv(ry + 132 * u, 'MODE', mode:sub(1, 22), modeCol)
+    kv(ry + 156 * u, 'HOSTILES', tostring(#foes) .. (police > 0 and (' +' .. police .. ' POLICE') or ''), #foes > 0 and HOST or BONE)
+    kv(ry + 180 * u, 'ELIMINES', tostring(kills or 0), (tonumber(kills) or 0) > 0 and GOLD or BONE)
+    if clk - (AgentV8.killT or -99) < 1.5 then T(LX + 170 * u, ry + 180 * u, '+1', 15, GOLD) end
     if alert then
-        T(LX, ry + 212 * u, hp < 30 and 'INTEGRITE CRITIQUE' or 'MENACE CRITIQUE', 13, blink and BONE or RED)
+        T(LX, ry + 212 * u, hp < 30 and 'INTEGRITE CRITIQUE' or 'MENACE CRITIQUE', 13, blink and BONE or HOST)
     end
 
     end   -- boot >= 0.15
     if boot >= 0.45 then                               -- 19/10 : radar tactique, en bas a gauche (a cote de la colonne)
         local rr = 128 * u
-        local rcx, rcy = M + 262 * u + 40 * u + rr, H - 86 * u - 40 * u - rr
-        R(rcx - rr - 14 * u, rcy - rr - 34 * u, rcx + rr + 14 * u, rcy + rr + 30 * u, PLATE)
+        local rcx, rcy = M + 262 * u + 40 * u + rr, H - 86 * u - 56 * u - rr          -- 20/10 : remonte (legende)
+        R(rcx - rr - 14 * u, rcy - rr - 34 * u, rcx + rr + 14 * u, rcy + rr + 42 * u, PLATE)
         local okRad, errRad = pcall(AgentV8Radar, { u = u, dl = dl, L = L, T = T, R = R, RO = RO, arc = arc, MID = RED_MID,
-            DIM = RED_DIM, FAINT = RED_FAINT, BRIGHT = RED, BONE = BONE, AMBER = AMBER, HOSTILE = AgentV8Col(1, 0.2, 0.15, 1) }, e, d, rcx, rcy, rr, clk)
+            DIM = RED_DIM, FAINT = RED_FAINT, BRIGHT = RED, BONE = BONE, AMBER = AMBER, HOSTILE = HOST, GREY = AgentV8Col(0.62, 0.66, 0.7, 0.9),
+            CYAN = CYAN, CYAN_DIM = AgentV8Col(0.2, 0.65, 0.62, 1), GOLD = GOLD, blink = blink }, e, d, rcx, rcy, rr, clk)
         if not okRad and AgentV8.radarErr ~= tostring(errRad) then AgentV8.radarErr = tostring(errRad); pcall(journal, 'HUD radar : ' .. tostring(errRad)) end
     end
     -- ===== droite : registre des succes =====
@@ -5330,11 +5856,12 @@ function AgentV8Body(dl, W, H, e, d, kills)
         end
         if type(gv.top) == 'table' and #gv.top > 0 then hy = hy + 40 * u + math.min(3, #gv.top) * 24 * u end
         R(RX0 - 16 * u, 80 * u, RX1 + 16 * u, hy + 10 * u, PLATE)
+        AgentV8.regBottom = hy + 10 * u                   -- 20/10 : le mini-bilan se place dessous
         T(RX0, 92 * u, 'REGISTRE', 10, RED_DIM)
         T(RX1, 92 * u, 'STEAM', 10, RED_DIM, 'r')
         local st = gv.steam or {}
-        local xs = seg7(RX0, 118 * u, 56 * u, string.format('%02d', tonumber(st[1]) or 0), RED, 2.6)
-        T(xs + 4 * u, 160 * u, '/ ' .. tostring(st[2] or '?') .. ' SUCCES', 18, RED_MID)
+        local xs = seg7(RX0, 118 * u, 56 * u, string.format('%02d', tonumber(st[1]) or 0), GOLD, 2.6)
+        T(xs + 4 * u, 160 * u, '/ ' .. tostring(st[2] or '?') .. ' SUCCES', 18, GOLD)
         L(RX0, 200 * u, RX1, 200 * u, RED_DIM, 1)
         local y = 216 * u
         for _, it in ipairs(gv.items or {}) do
@@ -5342,7 +5869,7 @@ function AgentV8Body(dl, W, H, e, d, kills)
             local cur, tot = tonumber(it.cur), tonumber(it.tot)
             T(RX0, y, tostring(it.label or ''), 13, BONE)
             local val = (cur and tot) and string.format('%d / %d', cur, tot) or (cur and tostring(cur)) or tostring(it.note or '')
-            T(RX1, y, val, 12, RED, 'r')
+            T(RX1, y, val, 12, GOLD, 'r')
             y = y + 26 * u
             if cur and tot and tot > 20 then           -- grille dense : une cellule par lieu / element
                 local cols = 32
@@ -5351,13 +5878,13 @@ function AgentV8Body(dl, W, H, e, d, kills)
                 for i = 0, tot - 1 do
                     local r_, c_ = math.floor(i / cols), i % cols
                     local x, yy = RX0 + c_ * (cell + gap), y + r_ * (cell + gap)
-                    if i < cur then R(x, yy, x + cell, yy + cell, i == cur - 1 and BONE or RED)
+                    if i < cur then R(x, yy, x + cell, yy + cell, i == cur - 1 and BONE or GREEN)
                     else RO(x, yy, x + cell, yy + cell, RED_DIM, 1) end
                 end
                 y = y + math.ceil(tot / cols) * (cell + gap) + 18 * u
             elseif cur and tot and tot > 0 then
                 local step = (RX1 - RX0) / tot
-                for i = 0, tot - 1 do R(RX0 + i * step, y, RX0 + i * step + step * 0.8, y + 8 * u, i < cur and RED or RED_FAINT) end
+                for i = 0, tot - 1 do R(RX0 + i * step, y, RX0 + i * step + step * 0.8, y + 8 * u, i < cur and GREEN or RED_FAINT) end
                 y = y + 26 * u
             else
                 if it.note and cur then T(RX0, y - 4 * u, tostring(it.note), 11, RED_MID); y = y + 18 * u end
@@ -5366,23 +5893,131 @@ function AgentV8Body(dl, W, H, e, d, kills)
         end
         if type(gv.top) == 'table' and #gv.top > 0 then
             L(RX0, y, RX1, y, RED_DIM, 1)
-            T(RX0, y + 14 * u, 'TOP CHAT', 13, BONE)
+            T(RX0, y + 14 * u, 'TOP CHAT', 13, GOLD)
             local best = tonumber((gv.top[1] or {})[2]) or 1
             for i, row in ipairs(gv.top) do
                 if i > 3 then break end
                 local yy = y + 40 * u + (i - 1) * 24 * u
                 T(RX0, yy, string.format('%02d', i), 11, RED_DIM)
-                T(RX0 + 34 * u, yy, tostring(row[1] or ''):sub(1, 12), 12, i == 1 and RED or RED_MID)
+                local medal = (i == 1 and GOLD) or (i == 2 and SILVER) or BRONZE
+                T(RX0 + 34 * u, yy, tostring(row[1] or ''):sub(1, 12), 12, medal)
                 local pts = tonumber(row[2]) or 0
-                L(RX0 + 150 * u, yy + 8 * u, RX0 + 150 * u + 200 * u * pts / math.max(best, 1), yy + 8 * u, i == 1 and RED or RED_DIM, 3)
-                T(RX1, yy, tostring(pts), 11, RED_MID, 'r')
+                L(RX0 + 150 * u, yy + 8 * u, RX0 + 150 * u + 200 * u * pts / math.max(best, 1), yy + 8 * u, medal, 3)
+                T(RX1, yy, tostring(pts), 11, medal, 'r')
             end
         end
     elseif type(d.goals) == 'table' and #d.goals > 0 then   -- agent plus ancien : lignes deja formatees
         for i, line in ipairs(d.goals) do T(RX1, 92 * u + (i - 1) * 22 * u, tostring(line), 13, i == 1 and RED or RED_MID, 'r') end
+        AgentV8.regBottom = 92 * u + #d.goals * 22 * u
+    else
+        AgentV8.regBottom = nil
     end
 
     end   -- boot >= 0.35
+    -- ===== droite, sous le registre : mini-bilan de session + fil des evenements =====
+    -- 20/10 (Olivier : « 1 2 3 5 ») : tout est calcule ICI -- temps depuis le demarrage de l agent (d.t0), eliminations,
+    -- eddies gagnes depuis le debut, km parcourus (sauts > 60 m ignores : voyage rapide), courbe des eddies (1 point / 20 s) ;
+    -- fil : eddies / niveau / elimination detectes ici + evenements de l agent (d.events), colores par type, 7 s chacun
+    if boot >= 0.35 then
+        local SX1 = W - M - 8 * u
+        local SX0 = SX1 - 418 * u
+        local sy = (AgentV8.regBottom or 64 * u) + 16 * u
+        if AgentV8.sesT0 ~= d.t0 then                     -- nouvelle session de l agent : remise a zero
+            AgentV8.sesT0, AgentV8.money0, AgentV8.km, AgentV8.lastPos = d.t0, nil, 0, nil
+            AgentV8.spark, AgentV8.sparkT, AgentV8.ticker, AgentV8.evSeen = {}, -99, {}, now
+            AgentV8.tickMoney, AgentV8.tickLvl, AgentV8.tickKills = nil, nil, nil
+        end
+        if AgentV8.money and not AgentV8.money0 then AgentV8.money0 = AgentV8.money end
+        if tonumber(e.x) and tonumber(e.y) then
+            local lp = AgentV8.lastPos
+            if lp then
+                local dd = math.sqrt((e.x - lp[1]) ^ 2 + (e.y - lp[2]) ^ 2)
+                if dd < 60 then AgentV8.km = (AgentV8.km or 0) + dd / 1000 end
+            end
+            AgentV8.lastPos = { e.x, e.y }
+        end
+        local gain = (AgentV8.money and AgentV8.money0) and (AgentV8.money - AgentV8.money0) or 0
+        if clk - (AgentV8.sparkT or -99) > 20 then
+            AgentV8.sparkT = clk
+            local sp = AgentV8.spark
+            sp[#sp + 1] = gain
+            while #sp > 40 do table.remove(sp, 1) end
+        end
+        local el = tonumber(d.t0) and math.max(0, math.floor(now - tonumber(d.t0))) or 0
+        R(SX0 - 16 * u, sy, SX1 + 16 * u, sy + 122 * u, PLATE)
+        T(SX0, sy + 10 * u, 'SESSION', 11, RED_DIM)
+        T(SX1, sy + 6 * u, string.format('%02d:%02d:%02d', math.floor(el / 3600), math.floor(el / 60) % 60, el % 60), 18, BONE, 'r')
+        local cells = { { 'ELIMINES', tostring(tonumber(kills) or 0), HOST },
+                        { 'EDDIES', (gain >= 0 and '+' or '') .. tostring(math.floor(gain)), GOLD },
+                        { 'KM', string.format('%.1f', AgentV8.km or 0), CYAN } }
+        for i, c in ipairs(cells) do
+            local cx0 = SX0 + (i - 1) * 145 * u
+            T(cx0, sy + 34 * u, c[1], 10, RED_DIM)
+            T(cx0, sy + 48 * u, c[2], 22, c[3])
+        end
+        local sp = AgentV8.spark or {}
+        local gx0, gx1, gy0, gy1 = SX0, SX1, sy + 84 * u, sy + 112 * u
+        L(gx0, gy1, gx1, gy1, RED_FAINT, 1)
+        if #sp >= 2 then
+            local lo, hi = 0, 1
+            for _, v in ipairs(sp) do lo = math.min(lo, v); hi = math.max(hi, v) end
+            local px, py
+            for i, v in ipairs(sp) do
+                local x = gx0 + (gx1 - gx0) * (i - 1) / 39
+                local y = gy1 - (gy1 - gy0) * (v - lo) / (hi - lo)
+                if px then L(px, py, x, y, GOLD, 1.6) end
+                px, py = x, y
+            end
+            R(px - 2.5 * u, py - 2.5 * u, px + 2.5 * u, py + 2.5 * u, GOLD)
+        else
+            T(gx0, gy0 + 8 * u, 'COURBE DES EDDIES : PREMIER POINT DANS 20 S', 9, RED_DIM)
+        end
+
+        -- fil des evenements
+        local tk = AgentV8.ticker
+        local function push(s, rgb) tk[#tk + 1] = { t = clk, s = s, c = rgb }; while #tk > 6 do table.remove(tk, 1) end end
+        local m = AgentV8.money
+        if m and AgentV8.tickMoney and math.abs(m - AgentV8.tickMoney) >= 20 then
+            local dm = m - AgentV8.tickMoney
+            push(string.format('%s%d EDDIES', dm > 0 and '+' or '', math.floor(dm)), dm > 0 and { 1, 0.83, 0.28 } or { 1, 0.6, 0.2 })
+            AgentV8.tickMoney = m
+        elseif m and not AgentV8.tickMoney then AgentV8.tickMoney = m end
+        local lv = tonumber(e.level)
+        if lv and AgentV8.tickLvl and lv > AgentV8.tickLvl then push('NIVEAU ' .. lv .. ' ATTEINT', { 0.35, 1, 0.55 }) end
+        if lv then AgentV8.tickLvl = lv end
+        local kn = tonumber(kills) or 0
+        if AgentV8.tickKills and kn > AgentV8.tickKills then push('ENNEMI NEUTRALISE', { 1, 0.3, 0.25 }) end
+        AgentV8.tickKills = kn
+        for _, ev in ipairs(type(d.events) == 'table' and d.events or {}) do
+            local et = tonumber(ev[1])
+            if et and et > (AgentV8.evSeen or 0) then
+                AgentV8.evSeen = et
+                local s = tostring(ev[2] or '')
+                local rgb = { 0.86, 0.94, 1 }
+                if s:find('ENGAGEMENT') or s:find('HOSTILE') or s:find('MORT') then rgb = { 1, 0.3, 0.25 }
+                elseif s:find('SUCCES') or s:find('VENTE') or s:find('EDDIES') then rgb = { 1, 0.83, 0.28 }
+                elseif s:find('VOTE') or s:find('CHAT') or s:find('ORDRE') then rgb = { 0.78, 0.52, 1 }
+                elseif s:find('OBJECTIF') or s:find('VOITURE') or s:find('VOL') then rgb = { 0.32, 1, 0.94 }
+                elseif s:find('EXPLORATION') then rgb = { 0.35, 1, 0.55 } end
+                push(s:sub(1, 40), rgb)
+            end
+        end
+        local live = {}
+        for _, it in ipairs(tk) do if clk - it.t < 7 then live[#live + 1] = it end end
+        local base = (d.banner and (H - 132 * u)) or (H - 80 * u)
+        for k = #live, 1, -1 do
+            local it = live[k]
+            local age = clk - it.t
+            local a = math.max(0, math.min(1, (7 - age) / 1.5))
+            local slide = math.max(0, 1 - age / 0.25) * 90 * u      -- entre par la droite
+            local y = base - (#live - k) * 32 * u
+            local c = AgentV8Col(it.c[1], it.c[2], it.c[3], a)
+            local tw_ = TW(it.s, 18 * u)
+            R(SX1 - tw_ - 24 * u + slide, y - 5 * u, SX1 + 14 * u + slide, y + 25 * u, AgentV8Col(0.01, 0.02, 0.05, 0.55 * a))
+            R(SX1 + 9 * u + slide, y - 5 * u, SX1 + 14 * u + slide, y + 25 * u, c)
+            T(SX1 - tw_ - 8 * u + slide, y, it.s, 18, c)
+        end
+    end
     -- ===== bas centre : cap (+ objectif) =====
     if boot >= 0.75 then
     local yaw = tonumber(e.yaw)
@@ -5400,7 +6035,7 @@ function AgentV8Body(dl, W, H, e, d, kills)
                 if dm % 15 == 0 then
                     L(x, CYc - 12 * u, x, CYc, RED_MID, 1.2)
                     local lab = ({ [0] = 'N', [90] = 'E', [180] = 'S', [270] = 'O' })[dm] or string.format('%03d', dm)
-                    T(x, CYc - 30 * u, lab, 10, (#lab == 1) and RED or RED_DIM, 'c')
+                    T(x, CYc - 30 * u, lab, (#lab == 1) and 13 or 10, (lab == 'N') and HOST or ((#lab == 1) and CYAN or RED_DIM), 'c')
                 elseif dm % 5 == 0 then
                     L(x, CYc - 6 * u, x, CYc, RED_DIM, 1)
                 end
@@ -5419,53 +6054,117 @@ function AgentV8Body(dl, W, H, e, d, kills)
             local s = 2 * half / 120
             if math.abs(dd) <= 60 then
                 local xm, ym = CX + dd * s, CYc - 6 * u
-                ImGui.ImDrawListAddTriangleFilled(dl, xm, ym - 7 * u, xm - 6 * u, ym, xm + 6 * u, ym, BONE)
-                ImGui.ImDrawListAddTriangleFilled(dl, xm - 6 * u, ym, xm + 6 * u, ym, xm, ym + 7 * u, BONE)
+                ImGui.ImDrawListAddTriangleFilled(dl, xm, ym - 7 * u, xm - 6 * u, ym, xm + 6 * u, ym, GOLD)
+                ImGui.ImDrawListAddTriangleFilled(dl, xm - 6 * u, ym, xm + 6 * u, ym, xm, ym + 7 * u, GOLD)
             else
                 local sg = dd > 0 and 1 or -1
                 local xe = CX + sg * (half + 4 * u)
-                ImGui.ImDrawListAddTriangleFilled(dl, xe + sg * 10 * u, CYc - 6 * u, xe, CYc - 12 * u, xe, CYc, BONE)
+                ImGui.ImDrawListAddTriangleFilled(dl, xe + sg * 10 * u, CYc - 6 * u, xe, CYc - 12 * u, xe, CYc, GOLD)
             end
-            T(CX, CYc + 38 * u, '> ' .. string.upper(tostring(tl or 'OBJECTIF')):sub(1, 30) .. string.format('   %d M', math.floor(dist + 0.5)), 11, RED_MID, 'c')
+            T(CX, CYc + 38 * u, '> ' .. string.upper(tostring(tl or 'OBJECTIF')):sub(1, 30) .. string.format('   %d M', math.floor(dist + 0.5)), 13, GOLD, 'c')
         end
     end
     end   -- boot >= 0.75
 
     -- ===== bas : bandeau du chat (seulement en direct) =====
+    -- 20/10 (Olivier : « la liste des ordres est illisible, agrandis-la ; ameliore les votes : plus long, plus gros, plus
+    -- visible, compte a rebours ») : commandes sur 2 lignes en grand ; pendant un vote, panneau au centre avec compte a
+    -- rebours en chiffres 7 segments (calcule ici a chaque image, plus toutes les 4 s), barre de temps, barres des voix ;
+    -- resultat en grand 8 s.
     if d.banner then
-        local BY = H - 86 * u
-        R(M, BY, W - M, BY + 46 * u, SHADE)
-        L(M, BY, W - M, BY, RED_DIM, 1); L(M, BY + 46 * u, W - M, BY + 46 * u, RED_DIM, 1)
-        local vt = type(d.vote) == 'table' and d.vote or nil
-        local x = M + 8 * u
-        T(x, BY + 15 * u, 'VOTE', 14, BONE)
-        x = x + 62 * u
-        if vt and tonumber(vt.left) and tonumber(vt.tot) then
-            T(x, BY + 15 * u, string.format('%d S', math.floor(vt.left + 0.5)), 13, RED)
-            local nt = 30
-            for i = 0, nt - 1 do
-                local on = i < math.floor(nt * vt.left / vt.tot + 0.5)
-                L(x + 50 * u + i * 6 * u, BY + 15 * u, x + 50 * u + i * 6 * u, BY + 31 * u, on and RED or RED_FAINT, 1.6)
-            end
-            local tx = W - M - 8 * u
-            for k = math.min(#(vt.tally or {}), 3), 1, -1 do
-                local row = vt.tally[k]
-                local s = string.format('%s %d', tostring(row[1]), tonumber(row[2]) or 0)
-                local wv = TW(s, 12 * u)
-                T(tx, BY + 16 * u, s, 12, k == 1 and RED or RED_MID, 'r')
-                for b = 0, math.min(8, (tonumber(row[2]) or 0)) - 1 do
-                    R(tx - wv - 14 * u - b * 9 * u, BY + 18 * u, tx - wv - 8 * u - b * 9 * u, BY + 28 * u, k == 1 and RED or RED_MID)
+        local nrow = 2
+        local BH = 90 * u
+        local BY = H - BH - 4 * u
+        R(M, BY, W - M, BY + BH, SHADE)
+        L(M, BY, W - M, BY, RED, 1.5); L(M, BY + BH, W - M, BY + BH, RED_DIM, 1)
+        T(M + 12 * u, BY + 8 * u, 'CHAT : TAPEZ UNE COMMANDE POUR VOTER', 15, BONE)
+        T(W - M - 12 * u, BY + 8 * u, '1 VOIX PAR PERSONNE', 13, RED_DIM, 'r')
+        local cmds = type(d.cmds) == 'table' and d.cmds or nil
+        if cmds and #cmds > 0 then
+            local half = math.ceil(#cmds / nrow)
+            for row = 0, nrow - 1 do
+                -- 20/10 : chaque commande a la couleur de sa famille (combat rouge, deplacement cyan, achats / soins or,
+                -- ambiance violet) ; ligne centree mot par mot
+                local i0, i1 = row * half + 1, math.min(#cmds, (row + 1) * half)
+                local gap, tw = 26 * u, 0
+                for i = i0, i1 do tw = tw + TW(tostring(cmds[i]), 21 * u) + (i < i1 and gap or 0) end
+                local x = CX - tw / 2
+                for i = i0, i1 do
+                    local s = tostring(cmds[i])
+                    T(x, BY + (34 + row * 30) * u, s, 21, cmdCol(s))
+                    x = x + TW(s, 21 * u) + gap
                 end
-                tx = tx - wv - 30 * u - math.min(8, tonumber(row[2]) or 0) * 9 * u - 18 * u
             end
-            x = x + 50 * u + nt * 6 * u + 24 * u
+            -- 30/10 : legende sur la ligne du titre (la 2e ligne de commandes est pleine avec les evenements du monde)
+            local LX, LY = M + 440 * u, BY + 10 * u
+            T(LX, LY, 'COMBAT', 12, HOST); T(LX + 70 * u, LY, 'DEPLACEMENT', 12, CYAN); T(LX + 180 * u, LY, 'ACHATS / SOINS', 12, GOLD)
+            T(LX + 310 * u, LY, 'AMBIANCE', 12, VIOLET); T(LX + 400 * u, LY, 'LE CHAT CONTROLE LE MONDE', 12, GREEN)
         else
-            x = x + 10 * u
+            local btxt = (tostring(d.banner):gsub('^VOTE[^:]*:%s*', ''))
+            T(CX, BY + 44 * u, btxt:sub(1, 150), 16, RED_MID, 'c')
         end
-        local btxt = tostring(d.banner):gsub('^VOTE[^:]*:%s*', '')
-        T(x, BY + 16 * u, btxt:sub(1, 150), 12, RED_MID)
-        if not vt and d.banner_last and tonumber(d.banner_last_t) and now - tonumber(d.banner_last_t) < 20 then
-            T(W - M - 8 * u, BY + 16 * u, '> ' .. tostring(d.banner_last), 12, RED, 'r')
+
+        local vt = type(d.vote) == 'table' and d.vote or nil
+        local PW, PH = 640 * u, 210 * u
+        local PX, PY = CX - PW / 2, BY - PH - 120 * u        -- au-dessus du cap
+        if vt and tonumber(vt.endt) and tonumber(vt.tot) then
+            -- horloge locale : l agent n envoie qu une fin de vote (secondes Unix), le mod decompte a chaque image
+            if AgentV8.voteEnd ~= vt.endt then AgentV8.voteEnd, AgentV8.voteEndC = vt.endt, clk + (vt.endt - now) end
+            local left = math.max(0, AgentV8.voteEndC - clk)
+            local tot = math.max(1, tonumber(vt.tot))
+            local hot = left <= 10
+            local CC = hot and AMBER or RED
+            local flash = hot and blink
+            R(PX, PY, PX + PW, PY + PH, SHADE)
+            RO(PX, PY, PX + PW, PY + PH, flash and AMBER or RED, 2)
+            T(PX + 18 * u, PY + 14 * u, 'VOTE DU CHAT', 26, GOLD)
+            local nv = tonumber(vt.voters) or 0
+            T(PX + PW - 18 * u, PY + 18 * u, string.format('%d VOTANT%s', nv, nv > 1 and 'S' or ''), 18, RED_MID, 'r')
+            -- compte a rebours geant
+            local xs = seg7(PX + 24 * u, PY + 60 * u, 84 * u, string.format('%02d', math.ceil(left)), CC, 6)
+            T(xs + 6 * u, PY + 118 * u, 'S', 22, CC)
+            -- barre de temps
+            local bx0, bx1, by0 = PX + 18 * u, PX + PW - 18 * u, PY + PH - 26 * u
+            R(bx0, by0, bx1, by0 + 12 * u, RED_FAINT)
+            R(bx0, by0, bx0 + (bx1 - bx0) * math.min(1, left / tot), by0 + 12 * u, CC)
+            -- barres des voix (3 premieres)
+            local tally = type(vt.tally) == 'table' and vt.tally or {}
+            local top = math.max(1, tonumber((tally[1] or {})[2]) or 1)
+            local rx0, rw = PX + 205 * u, PW - 222 * u
+            for k = 1, math.min(3, #tally) do
+                local row = tally[k]
+                local n = tonumber(row[2]) or 0
+                local ry = PY + (62 + (k - 1) * 36) * u
+                local col = cmdCol(row[1])                     -- 20/10 : couleur de famille de la commande
+                T(rx0, ry, '!' .. tostring(row[1]), k == 1 and 24 or 20, col)
+                local bxs = rx0 + 165 * u
+                R(bxs, ry + 6 * u, bxs + (rw - 210 * u) * n / top, ry + 24 * u, col)
+                T(rx0 + rw, ry, tostring(n), k == 1 and 24 or 20, col, 'r')
+            end
+            if #tally == 0 then T(rx0, PY + 90 * u, 'EN ATTENTE DES PREMIERES VOIX...', 18, RED_MID) end
+            if hot and left > 0 then                      -- 20/10 : 10 dernieres secondes annoncees
+                T(CX, PY - 34 * u, 'DERNIERES SECONDES POUR VOTER !', blink and 24 or 22, AMBER, 'c')
+            end
+        elseif type(d.vote_win) == 'table' and tonumber(d.vote_win_t) and now - tonumber(d.vote_win_t) < 8 then
+            -- 20/10 (Olivier : « 3 ») : le gagnant TAMPONNE l ecran -- texte geant qui s ecrase en 0,25 s, flash blanc,
+            -- secousse du cadre
+            if AgentV8.winT ~= d.vote_win_t then AgentV8.winT, AgentV8.winC = d.vote_win_t, clk end
+            local ageW = clk - (AgentV8.winC or clk)
+            local shake = math.sin(ageW * 70) * 7 * u * math.max(0, 1 - ageW / 0.45)
+            local PH2 = 120 * u
+            local PY2 = BY - PH2 - 120 * u
+            local PXs = PX + shake
+            R(PXs, PY2, PXs + PW, PY2 + PH2, SHADE)
+            local fl = math.max(0, 1 - ageW / 0.4)
+            if fl > 0 then R(PXs, PY2, PXs + PW, PY2 + PH2, AgentV8Col(1, 1, 1, 0.45 * fl)) end
+            RO(PXs, PY2, PXs + PW, PY2 + PH2, blink and BONE or cmdCol(d.vote_win.cmd), 2.5)
+            T(CX + shake, PY2 + 14 * u, 'LE CHAT A VOTE', 22, BONE, 'c')
+            local vw = d.vote_win
+            local sz = 40 * (1 + 1.8 * math.max(0, 1 - ageW / 0.25))
+            T(CX + shake, PY2 + 68 * u - sz * u / 2, '!' .. tostring(vw.cmd), sz, cmdCol(vw.cmd), 'c')
+            T(CX + shake, PY2 + 96 * u, string.format('%d VOIX SUR %d VOTANT(S)', tonumber(vw.n) or 0, tonumber(vw.voters) or 0), 15, RED_MID, 'c')
+        elseif d.banner_last and tonumber(d.banner_last_t) and now - tonumber(d.banner_last_t) < 20 then
+            T(CX, BY - 30 * u, '> ' .. tostring(d.banner_last), 18, RED, 'c')
         end
     end
 
@@ -5473,7 +6172,7 @@ function AgentV8Body(dl, W, H, e, d, kills)
     for _, k in ipairs({ { 18 * u, 18 * u, 1, 1 }, { W - 18 * u, 18 * u, -1, 1 }, { 18 * u, H - 18 * u, 1, -1 }, { W - 18 * u, H - 18 * u, -1, -1 } }) do
         L(k[1], k[2], k[1] + k[3] * 16 * u, k[2], RED_DIM, 1); L(k[1], k[2], k[1], k[2] + k[4] * 16 * u, RED_DIM, 1)
     end
-    T(CX, H - 30 * u, 'V-800  /  ANATOMIE DU SIGNAL  /  HUD REV. 02', 9, RED_DIM, 'c')
+    if not d.banner then T(CX, H - 30 * u, 'V-800  /  ANATOMIE DU SIGNAL  /  HUD REV. 02', 9, RED_DIM, 'c') end   -- 20/10 : place au bandeau
 end
 -- 19/10 V COMMENTE (Olivier : « V commente sur son HUD en gros ») : phrase du narrateur Python en grand en haut de l ecran,
 -- machine a ecrire, 7 s, style T-800. Globale : pas d upvalue de plus.
@@ -5548,7 +6247,12 @@ function AgentDrawBanner(d)
     ImGui.PushStyleColor(ImGuiCol.Border, 0.95, 0.12, 0.08, 0.85)
     ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.17, 0.10, 1.0)
     if ImGui.Begin('##agentbanner', flags) then
+        pcall(function() ImGui.SetWindowFontScale(1.6) end)   -- 20/10 (Olivier : « illisible ») : HUD classique aussi
         ImGui.Text(tostring(d.banner))
+        local vt = type(d.vote) == 'table' and d.vote or nil
+        if vt and tonumber(vt.endt) then
+            ImGui.Text(string.format('VOTE EN COURS : %d S', math.max(0, tonumber(vt.endt) - os.time())))
+        end
         if d.banner_last and d.banner_last_t and os.time() - d.banner_last_t < 20 then
             ImGui.Text('> ' .. tostring(d.banner_last))
         end
@@ -5557,8 +6261,19 @@ function AgentDrawBanner(d)
     ImGui.End()
     ImGui.PopStyleColor(3)
 end
+-- 30/10 (Olivier : « en vr enleve tout le hud de v800 ») : aucun HUD de V quand le VR port est actif (VR-ON) : le mod Stereo
+-- n existe qu en mode VR, et GetMod le voit des le 1er affichage (tous les mods sont charges). Globale (limite d upvalues).
+function AgentIsVR()
+    if AgentVRMode == nil then
+        local ok, m = pcall(GetMod, 'CyberpunkVRPort_Stereo')
+        AgentVRMode = (ok and m ~= nil)
+        journal('HUD de V : ' .. (AgentVRMode and 'masque (mode VR)' or 'actif (jeu a plat)'))
+    end
+    return AgentVRMode
+end
 local function drawHud()
     if not hudShow or not lastExport then return end
+    if AgentIsVR() then return end
     hudRead()
     if lastExport.menu or ((lastExport.breach or {}).state == 1) then return end   -- menus plein ecran, Breach Protocol (clics)
     if AgentHudStyle == 'v800' and not AgentV8Failed then   -- 19/10 : HUD « Anatomie du Signal » (repli auto sur l ancien)

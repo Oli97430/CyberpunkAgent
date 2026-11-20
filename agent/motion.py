@@ -196,6 +196,23 @@ DOOR_WORDS = ('ouvrir', 'activer', 'utiliser', 'forcer', 'open', 'use', 'appeler
 NO_DOOR = ('saisir', 'porter', 'contr', 'enfourcher', 'pirater')
 
 
+LAST_DOOR = {'open': None}       # 21/10 : resultat du dernier door_open (None = inconnu / pas de script)
+CHARGE_JUMP_S = 0.9              # 22/10 (Olivier : « maintenir et relacher espace lui permet de sauter plus haut ») : saut charge
+
+
+def big_jump(forward: bool = True, charge: float | None = None) -> None:
+    """22/10 : saut CHARGE pour franchir un obstacle -- espace MAINTENU puis relache (plus haut qu un appui bref), en
+    avancant (W) avant, pendant et apres le saut ; le 2e appui en l air (double saut) est tente aussi."""
+    if forward:
+        kbm.hold('W'); time.sleep(0.12)
+    kbm.act('jump', CHARGE_JUMP_S if charge is None else charge)    # maintenu : la charge ; relache : le saut
+    time.sleep(0.25)
+    kbm.act('jump', 0.08)                                           # double saut si V l a (sans effet sinon)
+    time.sleep(0.6)
+    if forward:
+        kbm.release('W')
+
+
 def try_door(st: dict) -> bool:
     """V est bloque : s il regarde une invite « Ouvrir / Activer » (hub ACTIF), il appuie dessus ; sinon, si
     une porte est a moins de 3,5 m (mod : `doors`), il se tourne vers elle, appuie, et demande au mod
@@ -216,7 +233,8 @@ def try_door(st: dict) -> bool:
             turn_to(bearing_to(st['x'], st['y'], ds[0]['x'], ds[0]['y']), timeout=1.5)
             time.sleep(0.3)
             kbm.act('interact', 0.15); time.sleep(0.8)
-            nav._wait(nav._send({'cmd': 'door_open', 'x': ds[0]['i']}), timeout=3.0)
+            rd = nav._wait(nav._send({'cmd': 'door_open', 'x': ds[0]['i']}), timeout=3.0) or {}
+            LAST_DOOR['open'] = rd.get('open')               # 21/10 : False = porte restee fermee (verrouillee)
             time.sleep(0.8)
             return True
     except Exception:
@@ -283,12 +301,55 @@ def unstick() -> None:
     k = _unstick_n[0] % 3
     _unstick_n[0] += 1
     if k == 0:
-        kbm.hold('W'); time.sleep(0.15); kbm.act('jump', 0.1); time.sleep(0.7); kbm.release('W')
+        big_jump()                                                   # 22/10 : saut charge
     else:
         kbm.hold('S'); time.sleep(0.5); kbm.release('S')
         side = 'A' if k == 1 else 'D'
         kbm.hold(side); time.sleep(0.7); kbm.release(side)
     time.sleep(0.2)
+
+
+def diagnose_block(x: float, y: float) -> dict | None:
+    """19/10 : demande au mod CE QUI bloque V en marchant vers (x, y) (commande probe_block : rayons physiques,
+    mur du navmesh, cote libre, point de recul). None si le mod ne repond pas."""
+    try:
+        from . import nav
+        return nav._wait(nav._send({'cmd': 'probe_block', 'x': x, 'y': y}), timeout=2.0)
+    except Exception:
+        return None
+
+
+def unstick_smart(x: float, y: float) -> str:
+    """19/10 (reference PATHFINDING_CP2077 §4.3) : manoeuvre ADAPTEE a l obstacle au lieu de l alternance a
+    l aveugle. Renvoie la manoeuvre faite (pour le journal). Repli sur unstick() si pas de diagnostic."""
+    r = diagnose_block(x, y)
+    if not r or not r.get('ok'):
+        unstick()
+        return 'aveugle (pas de diagnostic)'
+    kind, side, cls = r.get('kind'), r.get('side'), r.get('cls')
+    st = read_state() or {}
+    if kind == 'porte' and st:
+        LAST_DOOR['open'] = None
+        if try_door(st):
+            # 21/10 (session 19:38 : ~40 s perdues par objet derriere une porte verrouillee) : porte restee fermee
+            if LAST_DOOR['open'] is False or str(LAST_DOOR['open']).lower() == 'no':
+                return 'porte verrouillee'
+            return f'porte ({cls})'
+    if kind == 'bas':
+        big_jump()                                                   # 22/10 : saut charge
+        return 'saut (obstacle bas)'
+    if kind == 'pnj':
+        time.sleep(1.0)                    # un passant s ecarte souvent de lui-meme ; sinon on contourne ci-dessous
+    if kind in ('rien', 'mur_navmesh') and r.get('back'):
+        b = r['back']
+        walk_to(b['x'], b['y'], timeout=3.0)
+        return f'recul vers le navmesh ({kind})'
+    if side in ('A', 'D'):
+        kbm.hold('S'); time.sleep(0.35); kbm.release('S')
+        kbm.hold(side); time.sleep(0.8); kbm.release(side)
+        return f"contournement {'gauche' if side == 'A' else 'droite'} ({kind}{', ' + cls if cls else ''})"
+    unstick()
+    return f'aveugle ({kind}, aucun cote libre)'
 
 
 def follow_path(points, stop=None, skip_closer_than: float = 2.0, interrupt=None) -> dict:
@@ -300,6 +361,7 @@ def follow_path(points, stop=None, skip_closer_than: float = 2.0, interrupt=None
     """
     t0 = time.perf_counter()
     done, failed = 0, 0
+    unsticks = []                          # 19/10 : manoeuvres de deblocage faites (remontees au journal par nav.goto)
     for i, (x, y) in enumerate(points):
         if stop is not None and stop.is_set():
             return {'ok': False, 'reason': 'arret d urgence', 'waypoints_done': done, 'seconds': time.perf_counter() - t0}
@@ -315,7 +377,11 @@ def follow_path(points, stop=None, skip_closer_than: float = 2.0, interrupt=None
         if not r['ok'] and r.get('reason') == 'interrompu':
             return {'ok': False, 'reason': 'interrompu', 'waypoints_done': done, 'seconds': time.perf_counter() - t0}
         if not r['ok'] and r.get('reason') == 'bloque':
-            unstick()
+            unsticks.append(unstick_smart(x, y))
+            if unsticks[-1] == 'porte verrouillee':
+                # 21/10 : inutile d insister (nav.goto ne redemande pas de troncon sur cette raison)
+                return {'ok': False, 'reason': 'porte verrouillee', 'waypoint': i, 'waypoints_done': done,
+                        'seconds': time.perf_counter() - t0, 'unsticks': unsticks}
             r = walk_to(x, y, timeout=10.0, stop=stop, interrupt=interrupt)
         if r['ok']:
             done += 1; failed = 0
@@ -323,5 +389,5 @@ def follow_path(points, stop=None, skip_closer_than: float = 2.0, interrupt=None
             failed += 1
             if failed >= 2 or is_last:
                 return {'ok': False, 'reason': r.get('reason'), 'waypoint': i, 'waypoints_done': done,
-                        'seconds': time.perf_counter() - t0}
-    return {'ok': True, 'waypoints_done': done, 'seconds': time.perf_counter() - t0}
+                        'seconds': time.perf_counter() - t0, 'unsticks': unsticks}
+    return {'ok': True, 'waypoints_done': done, 'seconds': time.perf_counter() - t0, 'unsticks': unsticks}

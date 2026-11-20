@@ -180,11 +180,19 @@ def answer_once(stop=None, log=print) -> dict | None:
     # un choix qui OUVRE UN EDITEUR (apparence chez le charcudoc, personnalisation) : Echap n en sort pas sans confirmation
     # (17/09 05:57 : 3 min bloque chez Chiyo Omoto) -> ecarte tant qu il reste autre chose
     SCREEN_WORDS = ('apparence', 'appearance', 'changer de look', 'personnaliser', 'customize')
-    _no_screen = [i for i in allowed if not any(w in choices[i].lower() for w in SCREEN_WORDS)]
+    # 20/11 (10:42:42 : « [Louer appartement.] » pris comme « seul choix possible », ~110 000 eddies depenses sans prix dans le
+    # texte, donc invisible pour la regle ARGENT) : V n achete ni ne loue jamais un logement de lui-meme
+    # et, plus largement, aucun achat ni location dont le prix n est pas ecrit dans le choix (prix inconnu = pas d achat)
+    def _buys_home(c: str) -> bool:
+        lc = c.lower()
+        deal = re.search(r"\b(louer|acheter|j'ach[eè]te|je loue|rent|buy|purchase)\b", lc) is not None
+        home = any(w in lc for w in ('appartement', 'apartment', 'logement', 'planque'))
+        return deal and (home or not re.search(r'\d{2,}', lc))
+    _no_screen = [i for i in allowed if not any(w in choices[i].lower() for w in SCREEN_WORDS) and not _buys_home(choices[i])]
     if allowed and not _no_screen:
         # 19/10 (16:11:49, Rony Lafleur : « J ai envie de changer d apparence » pris comme « seul choix possible ») :
-        # ne reste que l editeur d apparence -> V quitte le dialogue au lieu de l ouvrir
-        log('  [dialog] seul choix restant : editeur d apparence -> V quitte le dialogue (Retour arriere)')
+        # ne reste que l editeur d apparence (ou l achat d un logement) -> V quitte le dialogue au lieu de l ouvrir
+        log('  [dialog] seul choix restant : editeur d apparence ou achat de logement -> V quitte le dialogue (Retour arriere)')
         kbm.tap('BACKSPACE', 0.08)
         return None
     allowed = _no_screen or allowed

@@ -5,7 +5,8 @@ epave) : aucun chemin, meme partiel, et la ligne droite est bloquee. Dans l ordr
      E long ; puis ouverture par script (`door_open`) ; on verifie qu un chemin redevient possible.
   2. balayage a 360 deg a la recherche d une invite (Ouvrir / Activer / Utiliser / Forcer) -> E.
   3. sondes de mouvement : 8 directions, sprint + saut 2,5 s chacune ; on garde la direction qui a
-     fait avancer V le plus, et on la pousse 6 s de plus.
+     fait avancer V le plus, et on la pousse 6 s de plus. Jamais vers un vide : ni sonde ni poussee
+     (mod : `edge_ahead`), et la poussee s arrete des que V approche d un bord ou touche l eau.
 Renvoie {'ok': bool, 'moyen': str}. Journal detaille.
 """
 from __future__ import annotations
@@ -22,6 +23,31 @@ BAD_WORDS = ('saisir', 'porter', 'prendre le contr', 'enfourcher')
 def _path_possible(tx, ty, tz) -> bool:
     r = nav._wait(nav._send({'cmd': 'path_to', 'x': tx, 'y': ty, 'z': tz}), timeout=5.0)
     return bool(r and r.get('ok'))
+
+
+def _edge(max_m: int = 8):
+    """Distance du premier vide devant V (plus de 5 m de chute), None s il n y en a pas ou si le mod ne sait pas."""
+    return (nav._wait(nav._send({'cmd': 'edge_ahead', 'x': max_m}), timeout=1.5) or {}).get('edge')
+
+
+def _push(seconds: float, stop=None) -> str | None:
+    """01/11 (journal : V pousse 6 s droit devant et tombe a l eau, 2 fois sur 2 ; 6 min de nage la 2e fois) : sprint devant
+    soi, controle en continu. Renvoie la raison de l arret anticipe, None si la duree a ete tenue."""
+    t0 = time.perf_counter()
+    kbm.hold('W'); kbm.act_hold('sprint')
+    try:
+        while time.perf_counter() - t0 < seconds:
+            if stop is not None and stop.is_set():
+                return 'arret'
+            if (motion.read_state() or {}).get('swim'):
+                return 'eau'
+            e = _edge()
+            if e:
+                return f'vide a {e} m'
+            time.sleep(0.1)
+    finally:
+        kbm.act_release('sprint'); kbm.release('W')
+    return None
 
 
 _pressed: dict[str, int] = {}
@@ -89,6 +115,9 @@ def escape(target_xy: tuple | None, stop=None, log=print) -> dict:
             return {'ok': True, 'moyen': f"porte « {d.get('name', '?')} »", 'seconds': time.perf_counter() - t0}
 
     # 2. balayage d invites
+    # 20/11 : les deux dernieres sessions ont ete arretees a la main pendant ce balayage muet (19 s et 28 s apres « ilot
+    # ferme ») : chaque etape s annonce, pour qu on voie que V cherche et non qu il tourne en rond
+    log(f"  [sortie] {'portes sans effet' if doors else 'aucune porte'} : tour complet a la recherche d une invite (~20 s)")
     for k in range(12):
         if stop is not None and stop.is_set():
             break
@@ -102,6 +131,7 @@ def escape(target_xy: tuple | None, stop=None, log=print) -> dict:
                 return {'ok': True, 'moyen': 'invite', 'seconds': time.perf_counter() - t0}
 
     # 3. sondes de mouvement (8 directions)
+    log('  [sortie] aucune invite utile : sprint + saut dans 8 directions (~25 s)')
     best, best_gain = None, 0.0
     for k in range(8):
         if stop is not None and stop.is_set():
@@ -113,10 +143,16 @@ def escape(target_xy: tuple | None, stop=None, log=print) -> dict:
         motion.turn_to(heading, timeout=1.5, stop=stop)
         if _halt():
             return halted
+        e = _edge()
+        if e:
+            log(f'  [sortie] direction {heading:.0f} deg ecartee : vide a {e} m')
+            continue
         sx, sy = s['x'], s['y']
-        kbm.hold('W'); kbm.act_hold('sprint'); time.sleep(0.3); kbm.act('jump', 0.1); time.sleep(2.2)
+        kbm.hold('W'); kbm.act_hold('sprint'); time.sleep(0.3); motion.big_jump(forward=False); time.sleep(1.2)   # 22/10 : saut charge
         kbm.act_release('sprint'); kbm.release('W')
         s2 = motion.read_state() or s
+        if s2.get('swim'):
+            return {'ok': False, 'moyen': 'eau', 'seconds': time.perf_counter() - t0}
         gain = math.hypot(s2['x'] - sx, s2['y'] - sy)
         if gain > best_gain:
             best, best_gain = heading, gain
@@ -129,7 +165,11 @@ def escape(target_xy: tuple | None, stop=None, log=print) -> dict:
         motion.turn_to(best, timeout=1.5, stop=stop)
         if _halt():
             return halted
-        kbm.hold('W'); kbm.act_hold('sprint'); time.sleep(6.0); kbm.act_release('sprint'); kbm.release('W')
+        why = _edge() and 'vide devant' or _push(6.0, stop=stop)
+        if why == 'arret':
+            return halted
+        if why:
+            log(f'  [sortie] poussee arretee : {why}')
         if target_xy and _path_possible(target_xy[0], target_xy[1], tz):
             return {'ok': True, 'moyen': 'poussee', 'seconds': time.perf_counter() - t0}
     s3 = motion.read_state() or st0

@@ -4,6 +4,8 @@
 
 An autonomous agent that plays **Cyberpunk 2077** for you, driven by a **local language model** (Ollama, nothing leaves your PC) or, if you prefer, an OpenAI or Anthropic API key: it follows quests, moves around, drives, talks, fights, heals, loots everything, manages inventory, crafts, sells, buys, answers the phone, listens to the radio, and hands control back whenever you ask.
 
+> **Current release: 0.1.3 (20 November 2026).** This page still describes 0.1.0 in detail; the [French README](README.md) is the up-to-date one. New in 0.1.3: V speaks its narrator lines aloud (local Piper voice), the YouTube chat can vote on weather, time of day and police, an HTML trip log is written after each session, V scans clues, and a spending guard refuses any purchase or rental whose price is not written in the dialogue choice and reports large unexplained losses of money in the log and on Telegram. Several of these have not been seen working in game yet; the table in the French README says which.
+>
 > **Status: version 0.1.0, experimental.** The agent genuinely plays for tens of minutes at a stretch, but it is not perfect: it sometimes dies (and reloads the last save by itself), gets stuck in some interiors, and does not race. Every session is logged so behaviours can be improved.
 
 ---

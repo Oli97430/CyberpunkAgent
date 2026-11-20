@@ -196,7 +196,11 @@ def vendor_stock() -> dict | None:
 
 
 def buy(index: int, qty: int = 1) -> dict | None:
-    return nav._wait(nav._send({'cmd': 'buy', 'x': index, 'y': qty}), timeout=6.0)
+    r = nav._wait(nav._send({'cmd': 'buy', 'x': index, 'y': qty}), timeout=6.0)
+    if r and r.get('ok'):
+        from . import wallet
+        wallet.planned(r.get('total'))               # 20/11 : achat prevu, pas une depense inexpliquee
+    return r
 
 
 def buy_heals(have: int, log=print, want: int = HEAL_WANT) -> dict:
@@ -248,6 +252,50 @@ def _cyber_score(it: dict) -> tuple:
     return (QR.get(str(it.get('quality')), 0), prio, -(int(it.get('price') or 0)))
 
 
+POSE_FAIL_S = 7 * 86400.0       # 23/10 : apres un implant achete qui ne se pose pas, plus d achat de cyberware 7 jours
+
+
+def _pose_fail_file():
+    from .config import DATA_DIR
+    return DATA_DIR / 'ripper_pose_fail.json'
+
+
+def _pose_fail_age() -> float | None:
+    try:
+        return time.time() - float(json.loads(_pose_fail_file().read_text(encoding='utf-8')).get('t') or 0)
+    except Exception:
+        return None
+
+
+def _pose_fail_set(on: bool, why: str = '') -> None:
+    try:
+        if on:
+            _pose_fail_file().write_text(json.dumps({'t': time.time(), 'why': why}, ensure_ascii=False), encoding='utf-8')
+        elif _pose_fail_file().exists():
+            _pose_fail_file().unlink()
+    except Exception:
+        pass
+
+
+def _is_cyber(it: dict) -> bool:
+    return str(it.get('type') or '').startswith('Cyb') or 'cyberware' in str(it.get('type') or '').lower()
+
+
+def _pose_owned(log=print) -> int:
+    """23/10 : implants DEJA achetes mais non poses (session 23/10 20:14 : 3 implants, 204 500 eddies, aucun pose) ->
+    on essaie de les poser avant tout achat. Renvoie le nombre pose."""
+    from . import inventory
+    inv = inventory.fetch() or {}
+    owned = [x for x in (inv.get('items') or []) if _is_cyber(x) and not x.get('equipped')]
+    n = 0
+    for x in owned[:4]:
+        er = inventory.equip_full(x['i'], 0)                 # 25/10 : pose verifiee (patch 2.5)
+        ok = bool(er and er.get('ok') and er.get('worn'))
+        n += ok
+        log(f"  [charcudoc] implant deja achete « {x.get('name')} » : {'POSE' if ok else 'ne se pose toujours pas'} [{(er or {}).get('method')}]")
+    return n
+
+
 def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
     """Chez le charcudoc present (< 6 m) : achete et POSE le meilleur cyberware abordable (qualite d abord,
     puis priorite du build melee), en gardant CYBER_RESERVE eddies. Un implant qui ne se pose pas
@@ -256,6 +304,15 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
     stock = vendor_stock()
     if not stock or not stock.get('ok'):
         return {'ok': False, 'reason': (stock or {}).get('reason', 'stock illisible')}
+    # 23/10 : d abord les implants deja achetes et pas poses ; si la pose echoue encore (ou a echoue il y a moins de
+    # 7 jours), AUCUN achat : on ne paie pas des implants qu on ne sait pas poser
+    pre = _pose_owned(log=log)
+    if pre:
+        _pose_fail_set(False)
+    age = _pose_fail_age()
+    if age is not None and age < POSE_FAIL_S:
+        log(f"  [charcudoc] pose d implant en echec il y a {age / 3600:.0f} h : pas d achat (attente {POSE_FAIL_S / 86400:.0f} jours ou une pose reussie)")
+        return {'ok': True, 'poses': pre, 'eddies': 0, 'reason': 'pose impossible recemment : pas d achat'}
     money = int(stock.get('money') or 0)
     cyber = [it for it in (stock.get('items') or [])
              if (str(it.get('type') or '').startswith('Cyb') or 'cyberware' in str(it.get('type') or '').lower())]
@@ -324,7 +381,7 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
         mine = next((x for x in (inv.get('items') or []) if str(x.get('name')) == str(it.get('name')) and not x.get('equipped')), None)
         if not mine:
             log(f"  [charcudoc] « {it.get('name')} » achete mais introuvable dans l inventaire"); continue
-        er = nav._wait(nav._send({'cmd': 'equip', 'x': mine['i'], 'y': 0}), timeout=6.0)
+        er = inventory.equip_full(mine['i'], 0)              # 25/10 : pose verifiee (patch 2.5)
         if er and er.get('ok') and er.get('worn'):
             posed += 1; spent += int(r.get('total') or price)
             if it.get('area') and it['area'] in free:
@@ -341,7 +398,14 @@ def ripperdoc_shop(log=print, max_buys: int = 3) -> dict:
             # une fraction du prix : la revente immediate perdait ~80 %), il servira plus tard
             spent += int(r.get('total') or price)
             log(f"  [charcudoc] « {it.get('name')} » ne se pose pas ({(er or {}).get('method')}) : conserve dans l inventaire")
-    return {'ok': True, 'poses': posed, 'eddies': spent, 'reste': money, 'stock_cyber': len(cyber)}
+            # 23/10 (session 20:14 : 3 achats de suite, 204 500 eddies, aucun pose) : on arrete au PREMIER echec et on
+            # memorise (7 jours) -- la pose elle-meme est en cause (ex. patch du jeu), pas cet implant
+            _pose_fail_set(True, f"{it.get('name')} : {(er or {}).get('method')}")
+            log('  [charcudoc] pose impossible : plus d achat de cyberware (7 jours ou jusqu a une pose reussie)')
+            break
+    if posed:
+        _pose_fail_set(False)
+    return {'ok': True, 'poses': posed + pre, 'eddies': spent, 'reste': money, 'stock_cyber': len(cyber)}
 
 
 def buy_supplies(items: list[dict], log=print) -> dict:

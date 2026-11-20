@@ -272,8 +272,15 @@ PREFIX_V3 = {
     'kill': lambda: _seq(_relay(), _mix(_beep(196, 0.14, 0.45), _env(_tone(70, 40, 0.18, 'sine', 0.5), 0.002, 0.12))),
     'hack': lambda: _mix(_seq(*[_relay(0.6, 50 + k) + _silence(0.03 + 0.012 * (k % 3)) for k in range(7)]), _hum(0.45, 60, 60, 0.2)),
     'drive': lambda: _mix(_servo(0.8, 150, 600, 0.9, 61), _hum(0.8, 40, 75, 0.4)),
+    # 20/10 (Olivier : « 3 ») : vote du chat -- 10 dernieres secondes (3 bips sourds qui montent) et gagnant (tampon :
+    # relais + coup grave + bip)
+    'vote10': lambda: _seq(_beep(392, 0.07, 0.45), _silence(0.12), _beep(440, 0.07, 0.45), _silence(0.12), _beep(523, 0.14, 0.5)),
+    'votewin': lambda: _seq(_relay(0.7, 71), _mix(_env(_tone(80, 38, 0.32, 'sine', 0.9), 0.001, 0.25),
+                                                 _gain(_env(_lp(_noise(0.2, 1.0, 72), 700), 0.001, 0.14), 1.3)),
+                            _silence(0.04), _beep(330, 0.16, 0.45)),
 }
-PRIO = {'death': 5, 'boot': 4, 'success': 4, 'alarm': 3, 'hit': 3, 'kill': 3, 'lock': 2, 'hack': 2, 'drive': 1, 'scan': 1, 'say': 1}
+PRIO = {'death': 5, 'boot': 4, 'success': 4, 'alarm': 3, 'hit': 3, 'kill': 3, 'lock': 2, 'hack': 2, 'drive': 1, 'scan': 1, 'say': 1,
+        'vote10': 3, 'votewin': 4, 'voice': 3}
 _dur: dict[str, float] = {}
 FEED: list[tuple[str, str]] = [            # lignes INTERNES du journal -> son (debut de ligne, sans indentation)
     (r'^\[combat\] quickhack « [^»]+ » \(', 'hack'),
@@ -337,6 +344,31 @@ def play(kind: str, n_chars: int = 0) -> bool:
             path = build(kind, n_chars, float(c.get('volume', 0.5)))
             winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
         _last.update(t=now, kind=kind, end=now + _dur.get(path, 0.5))
+        STATUS['played'] += 1
+        return True
+    except Exception as e:
+        STATUS['error'] = str(e)[:120]
+        return False
+
+
+def play_path(path: str, kind: str = 'voice') -> bool:
+    """30/10 : joue un WAV deja pret (voix du narrateur, voice.py), avec la meme regle de priorite que play()."""
+    c = cfg()
+    if c.get('enabled') is False:
+        return False
+    try:
+        import winsound
+    except ImportError:
+        return False
+    now = time.time()
+    if now < _last.get('end', 0.0) and PRIO.get(kind, 1) < PRIO.get(_last.get('kind') or 'say', 1):
+        return False
+    try:
+        with wave.open(str(path), 'rb') as w:
+            dur = w.getnframes() / float(w.getframerate() or RATE)
+        with _lock:
+            winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        _last.update(t=now, kind=kind, end=now + dur)
         STATUS['played'] += 1
         return True
     except Exception as e:

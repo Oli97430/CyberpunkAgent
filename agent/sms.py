@@ -17,6 +17,59 @@ _LOGGED: dict = {}               # contact -> dernier message deja journalise (p
 _REFUSED: set = set()            # contacts dont la reponse est refusee par le jeu (ChangeEntryState) : plus d essai
 
 
+def _refused_file():
+    from .config import DATA_DIR
+    return DATA_DIR / 'sms_refused.json'
+
+
+def _load_refused() -> dict:
+    """19/10 : refus MEMORISES entre les sessions (contact -> dernier message refuse). Avant, _REFUSED etait perdu a
+    chaque relance et le meme refus revenait sans fin (~1500 lignes dans le journal du 19/10)."""
+    try:
+        import json
+        return json.loads(_refused_file().read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+def _save_refused(d: dict) -> None:
+    try:
+        import json
+        _refused_file().write_text(json.dumps(d, ensure_ascii=False), encoding='utf-8')
+    except Exception:
+        pass
+
+
+_REFUSED_MSG: dict = _load_refused()
+
+
+def _done_file():
+    from .config import DATA_DIR
+    return DATA_DIR / 'sms_done.json'
+
+
+def _load_done() -> dict:
+    """19/10 soir : messages DEJA traites (contact -> dernier message auquel V a repondu, ou deja repondu par le joueur).
+    La session de test repondait aux 7 memes messages toutes les 3 min."""
+    try:
+        import json
+        return json.loads(_done_file().read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+_DONE_MSG: dict = _load_done()
+
+
+def _mark_done(name, last_txt: str) -> None:
+    _DONE_MSG[name] = last_txt[:120]
+    try:
+        import json
+        _done_file().write_text(json.dumps(_DONE_MSG, ensure_ascii=False), encoding='utf-8')
+    except Exception:
+        pass
+
+
 def check_and_reply(st: dict, log=print, force: bool = False) -> int:
     ph = st.get('phone') or {}
     now = time.perf_counter()
@@ -45,6 +98,10 @@ def check_and_reply(st: dict, log=print, force: bool = False) -> int:
             log(f"  [sms] « {c.get('name')} » : {len(msgs)} message(s), dernier : « {last_txt[:90]} »")
         if not choices or c.get('name') in _REFUSED:
             continue
+        if _REFUSED_MSG.get(c.get('name')) == last_txt[:120]:
+            continue                                              # deja refuse pour CE message (session precedente) : on attend un nouveau message
+        if _DONE_MSG.get(c.get('name')) == last_txt[:120]:
+            continue                                              # 19/10 soir : deja repondu a CE message : on attend un nouveau message
         from . import dialog
         texts = [ch.get('text') or '?' for ch in choices]
         k = dialog.llm_choice(f"SMS de {c.get('name')} : {last_txt[:160]}", texts, timeout=8.0)
@@ -53,9 +110,14 @@ def check_and_reply(st: dict, log=print, force: bool = False) -> int:
         rr = nav._wait(nav._send({'cmd': 'sms_reply', 'x': choices[k]['i']}), timeout=6.0)
         if rr and rr.get('ok'):
             replied += 1
-            log(f"  [sms] V repond a « {c.get('name')} » : « {texts[k][:90]} »")
+            _mark_done(c.get('name'), last_txt)
+            log(f"  [sms] V repond a « {c.get('name')} » : « {texts[k][:90]} » ({rr.get('how')} : {rr.get('state_before')} -> {rr.get('state_after')})")
             time.sleep(1.0)
+        elif rr and rr.get('already'):
+            _mark_done(c.get('name'), last_txt)                  # deja repondu (par le joueur ou avant) : on n y touche plus
+            log(f"  [sms] « {c.get('name')} » : deja repondu, on attend un nouveau message")
         else:
             _REFUSED.add(c.get('name'))                         # le jeu refuse : on n insiste plus ce contact-ci
-            log(f"  [sms] reponse refusee a « {c.get('name')} » : {(rr or {}).get('reason')} (on n insiste plus)")
+            _REFUSED_MSG[c.get('name')] = last_txt[:120]; _save_refused(_REFUSED_MSG)
+            log(f"  [sms] reponse refusee a « {c.get('name')} » : {(rr or {}).get('reason')} (on n insiste plus, memorise)")
     return replied

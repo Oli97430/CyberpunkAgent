@@ -54,8 +54,24 @@ def fetch() -> dict | None:
     return r
 
 
+def equip_full(index: int, slot: int = 0, timeout: float = 6.0) -> dict | None:
+    """25/10 (patch 2.5) : pose avec verification. Le mod essaie les appels directs puis, en dernier recours, la requete
+    EquipRequest du jeu, traitee en differe (`queued`) -> on revérifie jusqu a 3 s (`equip_check`)."""
+    r = nav._wait(nav._send({'cmd': 'equip', 'x': index, 'y': slot}), timeout=timeout)
+    if r and r.get('ok') and not r.get('worn') and r.get('queued'):
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < 3.0:
+            time.sleep(0.5)
+            c = nav._wait(nav._send({'cmd': 'equip_check', 'x': -1}), timeout=2.0) or {}
+            if c.get('worn'):
+                r['worn'] = True
+                r['method'] = str(r.get('method') or '') + ' (verifie apres coup)'
+                break
+    return r
+
+
 def equip(index: int, slot: int) -> bool:
-    r = nav._wait(nav._send({'cmd': 'equip', 'x': index, 'y': slot}), timeout=4.0)
+    r = equip_full(index, slot, timeout=4.0)
     return bool(r and r.get('ok'))
 
 

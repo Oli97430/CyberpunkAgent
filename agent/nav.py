@@ -261,9 +261,17 @@ def goto(request, arrive_m: float = 3.0, max_legs: int = 10, timeout: float = 18
         if st is None:
             return {'ok': False, 'reason': 'etat illisible', 'legs': legs, 'seconds': time.perf_counter() - t0}
         d = math.hypot(st['x'] - target['x'], st['y'] - target['y'])
-        log(f"    -> {'ok' if r['ok'] else r.get('reason')}, reste {d:.1f} m")
+        log(f"    -> {'ok' if r['ok'] else r.get('reason')}, reste {d:.1f} m"
+            + (f" | deblocages : {', '.join(r['unsticks'])}" if r.get('unsticks') else ''))
         if d < arrive_m:
             return {'ok': True, 'legs': legs, 'real_legs': real_legs, 'final_dist': d, 'seconds': time.perf_counter() - t0}
+        # 22/10 (session 21/10 20:22 : cible hors navmesh a 9 m, chemin COMPLET suivi jusqu au bout a 8,7 m, puis 20 nouvelles
+        # demandes et 20 « zones bloquantes ») : bout d un chemin complet atteint, cible proche mais pas joignable a pied ->
+        # c est le point le plus proche, pas un echec
+        if r.get('ok') and not resp.get('partial') and pts and d < 25.0 \
+                and math.hypot(st['x'] - pts[-1][0], st['y'] - pts[-1][1]) < 2.0:
+            return {'ok': False, 'reason': 'point le plus proche atteint', 'closest': True, 'legs': legs, 'real_legs': real_legs,
+                    'final_dist': d, 'seconds': time.perf_counter() - t0}
         if not r['ok'] and r.get('reason') not in ('bloque',):
             return {'ok': False, 'reason': r.get('reason'), 'legs': legs, 'real_legs': real_legs, 'final_dist': d, 'seconds': time.perf_counter() - t0}
         # bloque ou troncon partiel : on redemande un chemin depuis ici

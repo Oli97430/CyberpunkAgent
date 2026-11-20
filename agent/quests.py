@@ -105,7 +105,9 @@ LEVEL_MARGIN = 2                # une quete est « de son niveau » si niveau re
 # ~283 min de revisites sur le journal). Exclusion croissante a chaque visite sterile de suite ; une visite utile remet
 # a zero.
 MEMORY_FILE = CFG.log_file.parent / 'markers_memory.json'
-BACKOFF_S = (900.0, 3600.0, 4 * 3600.0, 16 * 3600.0, 72 * 3600.0)
+# 22/10 (Olivier : « V fait constamment les memes trajets ») : apres 5 visites steriles de suite, 7 puis 30 jours (avant :
+# 72 h au plus -- 128 sessions, le meme marqueur choisi 45 fois)
+BACKOFF_S = (900.0, 3600.0, 4 * 3600.0, 16 * 3600.0, 72 * 3600.0, 7 * 86400.0, 30 * 86400.0)
 _mem: dict | None = None
 
 
@@ -130,18 +132,21 @@ def _find(text, x: float, y: float, z=None) -> str:
     (bord de cellule ; des marqueurs distincts a 3-10 m l un de l autre ne doivent pas se confondre)."""
     m = _mem_load()
     k = _mkey(text, x, y, z)
-    if k in m:
-        return k
+    # 22/10 : plusieurs entrees pour le MEME marqueur (cellules voisines) -> on prend la plus chargee (serie la plus longue),
+    # cellule exacte comprise ; le rayon reste 2,5 m (des marqueurs distincts peuvent etre a 3 m)
+    best, best_n = (k, int((m.get(k) or {}).get('streak') or 0)) if isinstance(m.get(k), dict) else (None, -1)
     for kk, e in m.items():
         try:
             if not (isinstance(e, dict) and e.get('text') == text and math.hypot(float(e['x']) - x, float(e['y']) - y) < 2.5):
                 continue
             if isinstance(z, (int, float)) and isinstance(e.get('z'), (int, float)) and abs(e['z'] - z) >= 3.0:
                 continue
-            return kk
+            n = int(e.get('streak') or 0)
+            if n > best_n:
+                best, best_n = kk, n
         except (KeyError, TypeError, ValueError):
             continue
-    return k
+    return best or k
 
 
 def marker_wait(q: dict, now: float | None = None) -> float:
@@ -170,7 +175,12 @@ def marker_result(text, x: float, y: float, useful: bool, why: str = '', z=None,
     now = time.time()
     e['visits'] = int(e.get('visits') or 0) + 1 if str(e.get('visits') or 0).isdigit() else 1
     e['t'] = now
-    if useful:
+    if useful and why == 'combat':
+        # 22/10 : un combat pres du marqueur n est pas une avancee de la quete (V se battait ici et revenait sans fin) :
+        # la serie d echecs baisse d un cran seulement, l exclusion en cours reste
+        e['streak'] = max(0, int(e.get('streak') or 0) - 1); e['last'] = 'combat'
+        log(f'  [quetes] marqueur « {text} » ({x:.0f},{y:.0f}) : combat sur place (serie {e["streak"]}, pas une avancee)')
+    elif useful:
         e['streak'] = 0; e['until'] = 0; e['last'] = 'utile'
         log(f'  [quetes] marqueur « {text} » ({x:.0f},{y:.0f}) : visite utile ({why})')
     else:

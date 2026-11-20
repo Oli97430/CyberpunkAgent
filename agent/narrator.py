@@ -75,11 +75,18 @@ def say(text: str, key: str | None = None, force: bool = False) -> bool:
     if len(_last['by_key']) > 200:
         _last['by_key'].clear()
     hud.update(say=hud.ascii_up(text)[:90], say_t=int(now))
+    spoke = False
     try:
-        from . import sounds                       # 19/10 : sons du HUD T-800 (bips + crepitement de l ecriture)
-        sounds.for_text(hud.ascii_up(text)[:90])
+        from . import voice                        # 30/10 (Olivier : « commentateur vocal de V ») : V le DIT a voix haute
+        spoke = voice.speak(text)
     except Exception:
-        pass
+        spoke = False
+    if not spoke:
+        try:
+            from . import sounds                   # 19/10 : sons du HUD T-800 (bips + crepitement de l ecriture)
+            sounds.for_text(hud.ascii_up(text)[:90])
+        except Exception:
+            pass
     LAST.update(text=hud.ascii_up(text)[:90], t=now)
     return True
 
@@ -102,7 +109,12 @@ CHAT_PHRASES = {'attaque': 'J ATTAQUE !', 'objectif': 'RETOUR A LA MISSION.', 'e
                 'reprendre': 'JE REPRENDS.', 'mission': 'A VOUS DE CHOISIR MA MISSION.',
                 'vole': 'JE ME TROUVE UN VEHICULE.', 'voiture': 'J APPELLE MA VOITURE.', 'fete': 'ON FETE CA !',
                 'loot': 'FOUILLE DE LA ZONE.', 'radio': 'UN PEU DE MUSIQUE.', 'cyberpsycho': 'CHASSE AU CYBERPSYCHO.',
-                'etat': 'ANALYSE DE MON ETAT.', 'style': 'CHANGEMENT DE STYLE DE COMBAT.', 'courage': 'NOUVEAU PROTOCOLE.'}
+                'etat': 'ANALYSE DE MON ETAT.', 'style': 'CHANGEMENT DE STYLE DE COMBAT.', 'courage': 'NOUVEAU PROTOCOLE.',
+                # 30/10 : le chat controle le monde
+                'pluie': 'METEO PIRATEE. QU IL PLEUVE SUR NIGHT CITY.', 'soleil': 'METEO PIRATEE. SOLEIL SUR NIGHT CITY.',
+                'brouillard': 'BROUILLARD ACTIVE. VISIBILITE NULLE.', 'tempete': 'TEMPETE DE SABLE. ACCROCHEZ-VOUS.',
+                'nuit': 'HORLOGE PIRATEE. LA NUIT TOMBE.', 'jour': 'HORLOGE PIRATEE. PLEIN JOUR.',
+                'police': 'LE CHAT A APPELE LE NCPD. ILS ARRIVENT.'}
 
 
 def thank(who: str, cmd: str, votes: int | None = None) -> None:
@@ -113,3 +125,12 @@ def thank(who: str, cmd: str, votes: int | None = None) -> None:
     else:
         who_c = clean(who, 20) or 'LE CHAT'
         say(f'MERCI {who_c}, {act}', force=True)
+
+
+def prewarm_voice() -> None:
+    """30/10 : prepare la voix des phrases fixes (regles sans {0}, reponses au chat) des le demarrage."""
+    try:
+        from . import voice
+        voice.prewarm([tpl for _, tpl in RULES] + list(CHAT_PHRASES.values()))
+    except Exception:
+        pass

@@ -535,6 +535,13 @@ def autodrive_to(tx: float, ty: float, stop=None, log=print, stolen: dict | None
     if not st or not st.get('vehicle'):
         return {'ok': False, 'reason': 'pas en vehicule'}
     dx0 = st.get('dx') or {}
+    t_dx = time.perf_counter()
+    while 'on' not in dx0 and time.perf_counter() - t_dx < 2.5:
+        # 19/10 soir : juste apres la montee, le tableau de bord de l autodrive n est pas encore rempli -> sans « on »
+        # l agent prenait G (110 trajets) au lieu de la commande du mod : 38 voitures restees a 0 m
+        time.sleep(0.3)
+        st = motion.read_state() or st
+        dx0 = st.get('dx') or {}
     if stolen is None and dx0.get('pv') is False and dx0.get('av') is False:
         stolen = {'name': dx0.get('rid') or 'vehicule'}   # revue : V est dans un vehicule qui n est pas a lui (reprise apres F11)
     if stolen is not None:
@@ -558,12 +565,45 @@ def autodrive_to(tx: float, ty: float, stop=None, log=print, stolen: dict | None
     elif modd and _own_start(log=log, stop=stop):
         log('  [conduite] autodrive enclenche (commande du mod)')
     else:
-        autodrive_toggle()
-        log('  [conduite] autodrive enclenche (G maintenu 1,5 s)')
+        g_ok = _g_start_checked(log=log, stop=stop)      # 20/10 (revue) : None = arret d urgence pendant la verification
+        log('  [conduite] autodrive enclenche (G maintenu 1,5 s)' if g_ok
+            else '  [conduite] arret d urgence pendant le demarrage de l autodrive' if g_ok is None
+            else '  [conduite] autodrive : aucun depart constate apres G ni commande du mod')
     _AUTODRIVE_ON['left_on'] = True
     if modd:
         return _watch_drive(tx, ty, st, t0, stop=stop, log=log, relaunch=lambda: _own_relaunch(log=log, stop=stop), relaunches=3, own_cmd=True)
-    return _watch_drive(tx, ty, st, t0, stop=stop, log=log, relaunch=autodrive_toggle, relaunches=1)
+    return _watch_drive(tx, ty, st, t0, stop=stop, log=log, relaunch=lambda: _own_relaunch(log=log, stop=stop), relaunches=1)
+
+
+def _g_start_checked(log=print, stop=None) -> bool | None:
+    """19/10 soir : G seul laissait la voiture a 0 m dans 38 trajets sur 110 (journal) -> depart VERIFIE en 5 s
+    (autodrive actif, vitesse ou 3 m parcourus) ; sinon commande du mod (pas une bascule, sans risque) ; un 2e G
+    seulement si le jeu dit clairement que l autodrive est coupe."""
+    s0 = motion.read_state() or {}
+    x0, y0 = s0.get('x'), s0.get('y')
+    autodrive_toggle()
+
+    def _started(s):
+        if (s.get('dx') or {}).get('on') or _current_speed(s) > 2.0:
+            return True
+        return x0 is not None and s.get('x') is not None and math.hypot(s['x'] - x0, s['y'] - y0) > 3.0
+
+    t = time.perf_counter()
+    while time.perf_counter() - t < 5.0:
+        if stop is not None and stop.is_set():
+            return None                                   # le joueur a la main : on n insiste pas (rien de verifie)
+        if _started(motion.read_state() or {}):
+            return True
+        time.sleep(0.4)
+    log('  [conduite] G sans effet apres 5 s : commande du mod')
+    if _own_start(log=log, stop=stop):
+        return True
+    s1 = motion.read_state() or {}
+    if (s1.get('dx') or {}).get('on') is False and kbm.ACTIONS.get('autodrive'):
+        autodrive_toggle()
+        time.sleep(2.0)
+        return _started(motion.read_state() or {})
+    return False
 
 
 def _own_relaunch(log=print, stop=None) -> bool:
@@ -592,6 +632,19 @@ def _own_start(log=print, stop=None, _road_tried: bool = False) -> bool:
             return True
         time.sleep(0.3)
     log(f"  [conduite] autodrive refuse par le jeu (voie {r.get('lane')}, disponible {r.get('avail')})")
+    if r.get('avail') is False and not _road_tried:
+        # 20/10 (session 18:49 : « disponible False » 98 s, 3 relances pour rien, puis disponible et 1 335 m en 75 s) :
+        # indisponible = etat passager du jeu (appel en cours, verrou de quete...) -> on ATTEND sans touche, 20 s au plus
+        t_av = time.perf_counter()
+        while time.perf_counter() - t_av < 20.0:
+            if stop is not None and stop.is_set():
+                return False
+            if ((motion.read_state() or {}).get('dx') or {}).get('av'):
+                log(f'  [conduite] autodrive de nouveau disponible apres {time.perf_counter() - t_av:.0f} s : on relance')
+                return _own_start(log=log, stop=stop, _road_tried=True)
+            time.sleep(0.5)
+        log('  [conduite] autodrive toujours indisponible apres 20 s d attente')
+        return False
     if r.get('lane') == 2 and not _road_tried and _seek_road(log=log, stop=stop):   # 19/10 : hors route -> rejoindre une voie
         return _own_start(log=log, stop=stop, _road_tried=True)
     return False
@@ -682,14 +735,17 @@ def _watch_drive(tx, ty, st, t0, stop=None, log=print, relaunch=None, relaunches
             if d < 250.0:
                 log(f'  [conduite] autodrive arrete a {d:.0f} m de l objectif ({traveled:.0f} m parcourus) : fin du trajet routier')
                 return {'ok': True, 'seconds': time.perf_counter() - t0, 'dist': d}
-            if relaunched < relaunches:
+            if relaunched < relaunches and not (dxr.get('av') is False and relaunched >= 1):   # 20/10 : indisponible -> 1 relance
                 relaunched += 1; last_move_t = time.perf_counter()
                 log(f'  [conduite] immobile depuis 20 s a {d:.0f} m ({traveled:.0f} m parcourus) : relance autodrive ({relaunched}/{relaunches})')
                 if relaunch is not None:
                     relaunch()
                 continue
             ok = False
-            log(f"  [conduite] autodrive arrete a {d:.0f} m de l objectif ({traveled:.0f} m parcourus) : {'fin du trajet routier' if ok else 'bloque'}")
+            # 19/10 soir : disponibilite lue a l echec (le jeu coupe l autodrive sur verrou de quete, vehicule abime,
+            # piratage, freinage force -- UpdateAutodriveStateAfter* dans final.redscripts)
+            log(f"  [conduite] autodrive arrete a {d:.0f} m de l objectif ({traveled:.0f} m parcourus) : {'fin du trajet routier' if ok else 'bloque'}"
+                f" (autodrive dispo={dxr.get('av')} actif={dxr.get('on')} voiture de V={dxr.get('pv')})")
             return {'ok': ok, 'reason': None if ok else 'autodrive bloque', 'seconds': time.perf_counter() - t0, 'dist': d}
         time.sleep(0.5)
     s2 = motion.read_state() or st
@@ -709,13 +765,67 @@ def _current_speed(st: dict) -> float:
     return 0.0
 
 
+_EXIT_LOCK = {'n': 0, 'until': 0.0, 'since': 0.0, 'last': 0.0, 'force_t': 0.0, 'told': False}   # 19/10 soir : sortie refusee par le jeu (V passager d un trajet de quete)
+EXIT_STUCK_S = 300.0                  # 01/11 : au-dela, V force la sortie (un trajet de quete normal dure 2-4 min)
+EXIT_FORCE_EVERY_S = 120.0
+
+
+def _exit_failed() -> None:
+    now = time.perf_counter()
+    if not _EXIT_LOCK['since'] or now - _EXIT_LOCK['last'] > 150.0:      # echec isole d il y a longtemps : nouveau decompte
+        _EXIT_LOCK['since'] = now
+    _EXIT_LOCK['last'] = now
+
+
+def _exit_ok() -> None:
+    _EXIT_LOCK.update(n=0, xl_n=0, since=0.0, last=0.0, told=False)
+
+
+def exit_watchdog(log=print) -> bool:
+    """01/11 (journal 25/10 : 41 min a bord, 59 « impossible de descendre », fin juste apres la sequence Retour arriere /
+    Echap / recul / saut de 20:28) : sortie impossible depuis 5 min -> meme sequence toutes les 2 min, quels que soient
+    les tags de verrou. Vrai la premiere fois (le joueur est prevenu)."""
+    now = time.perf_counter()
+    if not _EXIT_LOCK['since'] or now - _EXIT_LOCK['last'] > 150.0 or now - _EXIT_LOCK['since'] < EXIT_STUCK_S \
+            or now - _EXIT_LOCK['force_t'] < EXIT_FORCE_EVERY_S:
+        return False
+    _EXIT_LOCK['force_t'] = now
+    log(f"  [conduite] coince a bord depuis {(now - _EXIT_LOCK['since']) / 60.0:.0f} min : sortie forcee (Retour arriere, Echap, recul, saut)")
+    kbm.release_all(); kbm.tap('BACKSPACE', 0.09); time.sleep(0.8)
+    s = motion.read_state() or {}
+    if not s.get('menu'):
+        kbm.tap('ESC', 0.09); time.sleep(0.8)
+        s = motion.read_state() or {}
+    if s.get('menu'):
+        kbm.tap('ESC', 0.09); time.sleep(0.6)
+    kbm.hold('S'); time.sleep(1.5); kbm.release('S')
+    kbm.act('jump', 0.1); time.sleep(0.8)
+    first, _EXIT_LOCK['told'] = not _EXIT_LOCK['told'], True
+    return first
+
+
 def exit_vehicle(log=print, stop=None) -> bool:
     def _h():                                            # 12/10 : F11/F12 -> le joueur garde le vehicule
         return stop is not None and stop.is_set()
     st = motion.read_state()
     if not st or not st.get('vehicle'):
+        _exit_ok()
         return True
     if _h():
+        return False
+    if time.perf_counter() < _EXIT_LOCK['until']:
+        # 19/10 soir (journal : 52 « impossible de descendre », jusqu a 6 par minute -- « [Monter.] Merci. », V passager
+        # d une scene) : sortie verrouillee par le jeu -> on n appuie plus pendant 60 s, la scene continue
+        return False
+    xl = (st.get('dx') or {}).get('xl')
+    if xl and _EXIT_LOCK.get('xl_n', 0) < 3:
+        # 19/10 soir : le mod lit les tags de verrou de sortie du jeu (VehicleBlockExit, VehicleScene...) -> on sait AVANT.
+        # 20/10 (revue) : ces tags sont deduits de l exe, pas verifies en jeu -> 3 attentes de 30 s au plus, puis V essaie
+        # quand meme (un tag present en conduite normale ne doit pas le garder a bord pour toujours)
+        _EXIT_LOCK['xl_n'] = _EXIT_LOCK.get('xl_n', 0) + 1
+        _EXIT_LOCK['until'] = time.perf_counter() + 30.0
+        _exit_failed()
+        log(f"  [conduite] sortie verrouillee par le jeu ({', '.join(xl)}) : V reste a bord 30 s ({_EXIT_LOCK['xl_n']}/3)")
         return False
     sp = _current_speed(st)
     dxs = st.get('dx') or {}
@@ -754,7 +864,14 @@ def exit_vehicle(log=print, stop=None) -> bool:
         s2 = motion.read_state() or {}
         if not s2.get('vehicle'):
             _AUTODRIVE_ON['left_on'] = False
+            _exit_ok()
             log('  [conduite] descendu du vehicule'); return True
+    _EXIT_LOCK['n'] += 1
+    _exit_failed()
+    if _EXIT_LOCK['n'] >= 2:
+        _EXIT_LOCK['until'] = time.perf_counter() + 60.0; _EXIT_LOCK['n'] = 0
+        log('  [conduite] impossible de descendre (2 fois de suite) : sortie verrouillee par le jeu (trajet de quete ?), V reste a bord 60 s')
+        return False
     log('  [conduite] impossible de descendre'); return False
 
 
